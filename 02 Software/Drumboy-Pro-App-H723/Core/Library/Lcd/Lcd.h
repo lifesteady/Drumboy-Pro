@@ -71,9 +71,9 @@ class Lcd {
 
     uint16_t getWidth() const { return width; }
     uint16_t getHeight() const { return height; }
-    void setForeColor(RGB16Color color_) { foreColor = color_; }
+    void setForeColor(RGB16Color color_) { foreColor = themeMap(color_); }  // custom theme hook
     RGB16Color getForeColor() const { return foreColor; }
-    void setBackColor(RGB16Color color_) { backColor = color_; }
+    void setBackColor(RGB16Color color_) { backColor = themeMap(color_); }  // custom theme hook
     RGB16Color getBackColor() const { return backColor; }
     void setRotation(LcdRotation rotation_);
     LcdRotation getRotation() const { return rotation; }

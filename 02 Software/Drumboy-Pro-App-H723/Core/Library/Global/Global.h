@@ -609,11 +609,66 @@ const RGB16Color GRAY_90                            = 0xE73C;
 const RGB16Color GRAY_95                            = 0xF79E;
 
 /*----------------------------------------------------------------------------*/
+// CUSTOM THEME (dark "MPC + modern"): every color the stock UI asks for is
+// translated here as it is set on the LCD, so the whole interface changes in one
+// place. Set kThemeDark = false to get the stock Randomwaves colors back.
+
+const bool kThemeDark                               = true;
+
+const RGB16Color kThemeInk                          = 0xCF17;  // #CFE0B8 values, main text
+const RGB16Color kThemeHeader                       = 0x9D90;  // #9DB386 labels / headers
+const RGB16Color kThemeAccent                       = 0xFBC5;  // #FF7A2F selection, playhead, curves
+const RGB16Color kThemeAmber                        = 0xF5A8;  // #F2B544 secondary highlight
+const RGB16Color kThemeGood                         = 0x8E8D;  // #8FD16A "ok" status
+const RGB16Color kThemeLight                        = 0xADD3;  // #A9B898 (stock GRAY_75)
+const RGB16Color kThemeLine                         = 0x5B4A;  // #5E6B52 (stock GRAY_50) frame lines
+const RGB16Color kThemeMid                          = 0x7C4D;  // #7C8A6C (stock GRAY_60)
+const RGB16Color kThemePale                         = 0xBE34;  // #B9C7A5 (stock GRAY_80)
+
+inline RGB16Color themeMap(RGB16Color c) {
+    if (!kThemeDark) return c;
+    switch (c) {
+        case 0xFFFF: return kThemeInk;     // WHITE
+        case 0x07FF: return kThemeHeader;  // CYAN
+        case 0xF81F: return kThemeAccent;  // MAGENTA / PINK
+        case 0xFD20: return kThemeAccent;  // ORANGE
+        case 0xFFE0: return kThemeAmber;   // YELLOW
+        case 0x07E0: return kThemeGood;    // GREEN
+        case 0xBDF7: return kThemeLight;   // GRAY_75
+        case 0x9CD3: return kThemeMid;     // GRAY_60
+        case 0x8410: return kThemeLine;    // GRAY_50
+        case 0xCE79: return kThemePale;    // GRAY_80
+        default: return c;                 // BLACK, RED, gradients etc. unchanged
+    }
+}
+
+inline RGB16Color themeMapImage(RGB16Color c) {
+    // For palettes of the UI images on the SD card: known colors as above, other greys
+    // tinted toward the theme ink by brightness, cyan-ish strokes become the accent.
+    if (!kThemeDark) return c;
+    RGB16Color m = themeMap(c);
+    if (m != c) return m;
+    uint8_t r = (c >> 11) & 0x1F, g6 = (c >> 5) & 0x3F, b = c & 0x1F;
+    uint8_t g = g6 >> 1;  // to 5 bits for comparison
+    if ((r < 6) && (g > 20) && (b > 20)) return kThemeAccent;  // cyan family
+    int maxc = (r > g) ? ((r > b) ? r : b) : ((g > b) ? g : b);
+    int minc = (r < g) ? ((r < b) ? r : b) : ((g < b) ? g : b);
+    if ((maxc - minc) <= 3) {  // grey
+        uint32_t L = maxc;     // 0..31
+        uint16_t tr = (((kThemeInk >> 11) & 0x1F) * L) / 31;
+        uint16_t tg = (((kThemeInk >> 5) & 0x3F) * L) / 31;
+        uint16_t tb = ((kThemeInk & 0x1F) * L) / 31;
+        return (RGB16Color)((tr << 11) | (tg << 5) | tb);
+    }
+    return c;
+}
+
+/*----------------------------------------------------------------------------*/
 
 const RGB16Color kLayerColorPalette[]               = {WHITE, GRAY_75, WHITE, GRAY_75, WHITE, GRAY_75, WHITE, GRAY_75, WHITE, GRAY_75};
 
-const RGB16Color kBeatSelectedColor                 = MAGENTA;
-const RGB16Color kLayerSelectedColor                = CYAN;
+const RGB16Color kBeatSelectedColor                 = kThemeDark ? YELLOW : MAGENTA;    // theme: amber
+const RGB16Color kLayerSelectedColor                = kThemeDark ? MAGENTA : CYAN;      // theme: accent
 
 const RGB16Color kMenuHLineColor                    = GRAY_50;
 const RGB16Color kMenuVLineColor                    = GRAY_50;
@@ -657,7 +712,7 @@ const uint16_t kPlayX                               = 305;
 const uint16_t kPlayY                               = 115;
 
 const RGB16Color kPlayColor0                        = BLACK;
-const RGB16Color kPlayColor1                        = CYAN;
+const RGB16Color kPlayColor1                        = kThemeDark ? ORANGE : CYAN;       // theme: accent
 
 const uint16_t kImageLogoWidth                      = 170;
 const uint16_t kImageLogoHeight                     = 170;
@@ -2096,7 +2151,7 @@ const uint8_t kQuantizeOrderSize                    = sizeof(kQuantizeOrder) / s
 // SWING (MPC-style): percent of each note pair given to the first note.
 // 50 = straight, 54 = light, 58-62 = classic MPC/Dilla range, 66 = triplet feel, 75 = max.
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.08 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.09 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;

@@ -460,6 +460,7 @@ class Controller {
     SdResult sd_checkFolderExist(const char* folderAddress);
     SdResult sd_loadImage(char* fileAddress, uint32_t paletteAddress, uint32_t dataAddress, uint16_t paletteSize, uint16_t width, uint16_t height, RGBMode mode);
     bool sd_showPreviews();
+    void theme_applyToImages();
     void sd_getLibraries();
     SdResult sd_getFileLibrary();
     SdResult sd_getDrumkitLibrary();

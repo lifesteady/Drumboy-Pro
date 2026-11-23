@@ -4779,6 +4779,7 @@ SdResult Controller::sd_initialize() {
                                                 (sd_loadImage("System/Image/Image_Layer_B.rwi", RAM_IMAGE_LAYER_B_PALETTE_ADDRESS, RAM_IMAGE_LAYER_B_DATA_ADDRESS, kImageLayerPalette, kImageLayerWidth, kImageLayerHeight, RGB16) == SD_OK) &&
                                                 (sd_loadImage("System/Image/Icon_Select.rwi", RAM_ICON_SELECT_PALETTE_ADDRESS, RAM_ICON_SELECT_DATA_ADDRESS, kIconPalette, kIconSelectWidth, kIconSelectHeight * 2, RGB16) == SD_OK) &&
                                                 (sd_loadImage("System/Image/Icon_Play.rwi", RAM_ICON_PLAY_PALETTE_ADDRESS, RAM_ICON_PLAY_DATA_ADDRESS, kIconPalette, kIconPlayWidth, kIconPlayHeight * 8, RGB16) == SD_OK)) {
+                                                theme_applyToImages();  // custom: recolor UI image palettes for the theme
                                                 sd.ready = true;
                                                 sd.getLibrary = true;  // Signal that we can now index the sample libraries
                                                 sdResult = SD_OK;
@@ -5105,6 +5106,22 @@ SdResult Controller::sd_loadImage(char* fileAddress, uint32_t paletteAddress, ui
     // Re-enable keyboard interrupts once SD transaction flow is complete.
     keyboard_enable();
     return result;
+}
+
+void Controller::theme_applyToImages() {
+    /// @brief Recolors the palettes of the UI images (already loaded in RAM) for the custom theme.
+    /// The logo keeps its original colors. The "selected" square in Icon_Select becomes the accent.
+
+    if (!kThemeDark) return;
+    const uint32_t palettes[] = {RAM_IMAGE_MENU_A_PALETTE_ADDRESS, RAM_IMAGE_MENU_B_PALETTE_ADDRESS,
+                                 RAM_IMAGE_LAYER_A_PALETTE_ADDRESS, RAM_IMAGE_LAYER_B_PALETTE_ADDRESS,
+                                 RAM_ICON_PLAY_PALETTE_ADDRESS};
+    for (uint8_t p = 0; p < 5; p++) {
+        RGB16Color* pal = reinterpret_cast<RGB16Color*>(palettes[p]);
+        for (uint8_t i = 0; i < 64; i++) pal[i] = themeMapImage(pal[i]);
+    }
+    RGB16Color* sel = reinterpret_cast<RGB16Color*>(RAM_ICON_SELECT_PALETTE_ADDRESS);
+    for (uint8_t i = 0; i < 64; i++) sel[i] = (sel[i] == WHITE) ? kThemeAccent : themeMapImage(sel[i]);
 }
 
 bool Controller::sd_showPreviews() {
