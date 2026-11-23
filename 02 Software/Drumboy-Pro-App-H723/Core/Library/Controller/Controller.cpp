@@ -14601,6 +14601,15 @@ uint16_t Controller::rhythm_snapToGrid(uint16_t interval_, int8_t stepOffset_) {
     /// then optionally moves it a number of grid steps forward/back.
 
     const uint8_t q = (rhythm.quantize <= kMaxQuantize) ? rhythm.quantize : kInitialQuantize;
+
+    // Quantize OFF: keep the exact tick; nudges move by a few ticks so they're audible.
+    if (q == kQuantizeOff) {
+        int32_t moved = (int32_t)interval_ + ((int32_t)stepOffset_ * kQuantizeOffNudge);
+        if (moved < 0) moved = 0;
+        if (moved > 65535) moved = 65535;
+        return (uint16_t)moved;
+    }
+
     const float step = kQuantizeInterval[q];
     int32_t index = (int32_t)(((float)interval_ / step) + 0.5f) + stepOffset_;
     if (index < 0) index = 0;
@@ -21161,6 +21170,9 @@ void Controller::layerSong_resetAllBeats(uint8_t layerNum_, uint8_t bankTab_) {
 
 void Controller::layerSong_quantizeActiveBeats(uint8_t layerNum_, uint8_t bankTab_) {
     /// @brief Quantizes active beats to current rhythm grid and rebuilds beat ordering.
+
+    // Quantize OFF: leave every hit exactly where it was played.
+    if (rhythm.quantize == kQuantizeOff) return;
 
     // 1. ACTIVE BEAT QUANTIZATION
     // Snap start/end intervals to quantize grid for active beats.
