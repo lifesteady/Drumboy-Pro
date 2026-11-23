@@ -1646,7 +1646,13 @@ void Controller::keyboard_action() {
                         switch (i) {
                             case KEY_RESET:
                                 if (!alertFlag) {
-                                    (playActive) ? triggerReset() : reset();
+                                    // MPC-style: the Reset (stop) key stops right away and returns to the
+                                    // start. (Stock firmware waited for the end of the bar via triggerReset().)
+                                    // The sequencer interrupt is paused so it can't run halfway through the reset.
+                                    HAL_NVIC_DisableIRQ(TIM15_IRQn);
+                                    reset();
+                                    swing_updateTimerPeriod();  // back to a straight clock while stopped
+                                    HAL_NVIC_EnableIRQ(TIM15_IRQn);
                                 }
                                 break;
 
@@ -1655,7 +1661,9 @@ void Controller::keyboard_action() {
                                     if (playActive) {
                                         // MPC-style: stop right away. (Stock firmware armed a stop that
                                         // waited for the end of the bar via triggerStop().)
+                                        HAL_NVIC_DisableIRQ(TIM15_IRQn);
                                         stop();
+                                        HAL_NVIC_EnableIRQ(TIM15_IRQn);
                                     } else if (io.sync.slaveMode && (io.syncIn == 2)) {
                                         playArmed = !playArmed;
                                         playIcon.flag = true;
