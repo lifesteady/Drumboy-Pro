@@ -2586,7 +2586,8 @@ void Controller::keyboard_action() {
                                 break;
 
                             case KEY_EQ:
-                                if (!alertFlag) eq_select();
+                                // Custom: pressing EQ again while in its menu toggles the EQ page.
+                                if (!alertFlag) (menu == EQ_MENU) ? page_toggle(PAGE_EQ) : eq_select();
                                 break;
 
                             case KEY_EFFECT_0:
@@ -5232,6 +5233,9 @@ void Controller::page_draw() {
         case PAGE_FILTER_1:
             page_drawFilter(1);
             break;
+        case PAGE_EQ:
+            page_drawEq();
+            break;
         default:
             break;
     }
@@ -5540,6 +5544,149 @@ void Controller::page_drawFilter(uint8_t filterNum_) {
         const uint16_t cx = freqToX(cutoff);
         lcd.setForeColor(kThemeAmber);
         for (int16_t yy = gTop; yy <= gBot; yy += 3) lcd.drawPixel(cx, yy);
+    }
+}
+
+void Controller::page_drawEq() {
+    /// @brief EQ page: the combined response of the 6 bands (low shelf, 4 peaks, high shelf) in
+    /// series, computed from the live coefficients the audio path uses. 20 Hz - 20 kHz (log),
+    /// -24..+24 dB. A marker per band sits at its frequency and gain.
+
+    const bool on = eq.active;
+    const RGB16Color ink = on ? kThemeInk : kThemeMid;
+    const RGB16Color accent = on ? kThemeAccent : kThemeLine;
+    const RGB16Color label = kThemeHeader;
+
+    const uint16_t gx = 80, gw = 790;
+    const uint16_t gTop = 180, gBot = 400;
+    const float dbTop = 24.0f, dbBot = -24.0f;
+    const float pxPerDb = (gBot - gTop) / (dbTop - dbBot);
+    auto dbToY = [&](float db) -> int16_t {
+        if (db > dbTop) db = dbTop;
+        if (db < dbBot) db = dbBot;
+        return (int16_t)(gTop + (dbTop - db) * pxPerDb + 0.5f);
+    };
+    auto freqToX = [&](float hz) -> uint16_t {
+        if (hz < 20.0f) hz = 20.0f;
+        if (hz > 20000.0f) hz = 20000.0f;
+        return gx + (uint16_t)(gw * log10f(hz / 20.0f) / 3.0f + 0.5f);
+    };
+    const int16_t y0 = dbToY(0.0f);
+    const int16_t gridDb[] = {12, -12};
+    const float gridHz[] = {50, 100, 200, 500, 1000, 2000, 5000, 10000};
+
+    // ---- static parts
+    if (pageFullRedraw) {
+        lcd.setBackColor(BLACK);
+        lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
+        lcd.setForeColor(kThemeLine);
+        lcd.drawHLine(30, 162, 900);
+        lcd.setFont(FONT_07x09);
+        lcd.setForeColor(label);
+        lcd.setAlignment(RIGHT);
+        const char* dbl[] = {"+24", "+12", "0", "-12", "-24"};
+        const int16_t dbv[] = {24, 12, 0, -12, -24};
+        for (uint8_t i = 0; i < 5; i++) lcd.drawText(dbl[i], strlen(dbl[i]), gx - 8, dbToY(dbv[i]) - 4);
+        lcd.setAlignment(CENTER);
+        const char* hzl[] = {"20", "100", "1K", "10K", "20K"};
+        const float hzv[] = {20, 100, 1000, 10000, 20000};
+        for (uint8_t i = 0; i < 5; i++) lcd.drawText(hzl[i], strlen(hzl[i]), (i == 4) ? gx + gw : freqToX(hzv[i]), gBot + 8);
+        lcd.setAlignment(LEFT);
+        lcd.setForeColor(kThemeLine);
+        const char hint[] = "PRESS EQ AGAIN: BACK TO SONG";
+        lcd.drawText(hint, strlen(hint), 30, 436);
+        lcd.setAlignment(RIGHT);
+        const char hint2[] = "KNOBS: BOXES ABOVE / BELOW";
+        lcd.drawText(hint2, strlen(hint2), 930, 436);
+        pageFullRedraw = false;
+    }
+
+    // ---- header
+    lcd.setFont(FONT_14x18);
+    lcd.setAlignment(LEFT);
+    lcd.setBackColor(BLACK);
+    lcd.setForeColor(on ? kThemeAccent : kThemeMid);
+    lcd.drawText(on ? "EQ    " : "EQ OFF", 6, 30, 139);
+    char info[48];
+    snprintf(info, sizeof(info), "Q %u   LOW SHELF %+3d   HIGH SHELF %+3d", (unsigned)kEqQDataLibrary[eq.q].data,
+             (int)kEqGainDataLibrary[eq.gainLowShelf].data, (int)kEqGainDataLibrary[eq.gainHighShelf].data);
+    lcd.setFont(FONT_07x09);
+    lcd.setAlignment(RIGHT);
+    lcd.setForeColor(label);
+    lcd.drawText(info, strlen(info), 930, 144);
+
+    // ---- combined response, column by column
+    const EqFilter* bands[6] = {&eq.filterLowShelf, &eq.filterPeak[0], &eq.filterPeak[1],
+                                &eq.filterPeak[2], &eq.filterPeak[3], &eq.filterHighShelf};
+    const RGB16Color fillUp = page_mix(BLACK, accent, 0.32f);
+    const RGB16Color fillDown = page_mix(BLACK, kThemeHeader, 0.22f);
+    int16_t prevY = -1;
+    for (uint16_t i = 0; i < gw; i++) {
+        const uint16_t x = gx + i;
+        const float hz = 20.0f * powf(10.0f, 3.0f * i / gw);
+        const float w = 2.0f * 3.14159265f * hz / AUDIO_SAMPLE_RATE;
+        const float c1 = cosf(w), s1 = sinf(w), c2 = cosf(2 * w), s2 = sinf(2 * w);
+        float magSq = 1.0f;
+        if (on) {
+            for (uint8_t b = 0; b < 6; b++) {
+                const EqFilter& f = *bands[b];
+                const float nr = f.b0 + f.b1 * c1 + f.b2 * c2, ni = -(f.b1 * s1 + f.b2 * s2);
+                const float dr = 1 + f.a1 * c1 + f.a2 * c2, di = -(f.a1 * s1 + f.a2 * s2);
+                magSq *= (nr * nr + ni * ni) / (dr * dr + di * di);
+            }
+        }
+        if (magSq < 1.0e-12f) magSq = 1.0e-12f;
+        const int16_t y = dbToY(10.0f * log10f(magSq));
+
+        // Fill between the curve and 0 dB: boost in accent above the line, cut in green below.
+        lcd.setForeColor(BLACK);
+        if (y < y0) {
+            if (y > gTop) lcd.drawVLine(x, gTop, y - gTop);
+            lcd.setForeColor(fillUp); lcd.drawVLine(x, y, y0 - y);
+            lcd.setForeColor(BLACK); lcd.drawVLine(x, y0 + 1, gBot - y0);
+        } else {
+            lcd.drawVLine(x, gTop, y0 - gTop);
+            if (y > y0) { lcd.setForeColor(fillDown); lcd.drawVLine(x, y0 + 1, y - y0); }
+            lcd.setForeColor(BLACK);
+            if (gBot - y > 0) lcd.drawVLine(x, y + 1, gBot - y);
+        }
+
+        bool gridCol = false;
+        for (uint8_t g = 0; g < 8; g++) if (x == freqToX(gridHz[g])) gridCol = true;
+        if (gridCol) { lcd.setForeColor(kThemeLine); for (int16_t yy = gTop; yy <= gBot; yy += 4) lcd.drawPixel(x, yy); }
+        if ((x % 4) == 0) { lcd.setForeColor(kThemeLine); for (uint8_t g = 0; g < 2; g++) lcd.drawPixel(x, dbToY(gridDb[g])); }
+        lcd.setForeColor(ink);
+        lcd.drawPixel(x, y0);
+
+        lcd.setForeColor(accent);
+        if (prevY >= 0) {
+            const int16_t lo = (y < prevY) ? y : prevY, hi = (y < prevY) ? prevY : y;
+            if (hi - lo > 1) lcd.drawVLine(x, lo, hi - lo);
+        }
+        lcd.drawPixel(x, y);
+        lcd.drawPixel(x, y + 1);
+        prevY = y;
+    }
+
+    // ---- band markers: dot at (frequency, gain) + short label
+    const uint8_t freqIdx[6] = {eq.freqLowShelf, eq.freqPeak[0], eq.freqPeak[1], eq.freqPeak[2], eq.freqPeak[3], eq.freqHighShelf};
+    const uint8_t gainIdx[6] = {eq.gainLowShelf, eq.gainPeak[0], eq.gainPeak[1], eq.gainPeak[2], eq.gainPeak[3], eq.gainHighShelf};
+    const char* names[6] = {"LS", "1", "2", "3", "4", "HS"};
+    lcd.setFont(FONT_05x07);
+    lcd.setAlignment(CENTER);
+    for (uint8_t b = 0; b < 6; b++) {
+        const uint16_t mx = freqToX((float)kEqFreqDataLibrary[freqIdx[b]].data);
+        int16_t my = dbToY((float)kEqGainDataLibrary[gainIdx[b]].data);
+        if (my < gTop + 3) my = gTop + 3;            // keep marks inside the graph, which is
+        if (my > gBot - 3) my = gBot - 3;            // fully redrawn each time (no stale pixels)
+        lcd.setForeColor(on ? kThemeAmber : kThemeMid);
+        lcd.fillRect(mx - 3, my - 3, 7, 7);
+        lcd.setBackColor(BLACK);
+        lcd.setForeColor(on ? kThemeAmber : kThemeMid);
+        int16_t ly = (my > y0) ? my + 7 : my - 14;   // label away from the 0 dB line
+        if (ly < gTop) ly = my + 7;
+        if (ly > gBot - 8) ly = my - 14;
+        lcd.drawText(names[b], strlen(names[b]), mx, ly);
     }
 }
 
@@ -16168,7 +16315,7 @@ void Controller::eq_setActive(bool active_) {
 
             // 4. UI & GLOBAL REFRESH
             // Refresh EQ tab data (if visible) and global summary field.
-            if (menu == EQ_MENU) lcd_drawEq_ActiveData();
+            if (menu == EQ_MENU) lcd_drawEq_ActiveData(); page_markDirty(PAGE_EQ);
             lcd_updateGlobalMenuData(ENC_EQ_ACTIVE);
         }
     }
@@ -16189,7 +16336,7 @@ void Controller::eq_setQ(uint8_t q_) {
 
         // 3. UI REFRESH
         // Refresh EQ tab field when EQ menu is visible.
-        if (menu == EQ_MENU) lcd_drawEq_QData();
+        if (menu == EQ_MENU) lcd_drawEq_QData(); page_markDirty(PAGE_EQ);
     }
 }
 
@@ -16206,7 +16353,7 @@ void Controller::eq_setFreqLowShelf(uint8_t freq_) {
 
         // 3. UI REFRESH
         // Refresh EQ tab field when EQ menu is visible.
-        if (menu == EQ_MENU) lcd_drawEq_LowShelfData();
+        if (menu == EQ_MENU) lcd_drawEq_LowShelfData(); page_markDirty(PAGE_EQ);
     }
 }
 
@@ -16223,7 +16370,7 @@ void Controller::eq_setGainLowShelf(uint8_t gain_) {
 
         // 3. UI & GLOBAL REFRESH
         // Refresh EQ tab field (if visible) and global summary field.
-        if (menu == EQ_MENU) lcd_drawEq_LowShelfData();
+        if (menu == EQ_MENU) lcd_drawEq_LowShelfData(); page_markDirty(PAGE_EQ);
         lcd_updateGlobalMenuData(ENC_EQ_LOWSHELF);
     }
 }
@@ -16241,7 +16388,7 @@ void Controller::eq_setFreqHighShelf(uint8_t freq_) {
 
         // 3. UI REFRESH
         // Refresh EQ tab field when EQ menu is visible.
-        if (menu == EQ_MENU) lcd_drawEq_HighShelfData();
+        if (menu == EQ_MENU) lcd_drawEq_HighShelfData(); page_markDirty(PAGE_EQ);
     }
 }
 
@@ -16258,7 +16405,7 @@ void Controller::eq_setGainHighShelf(uint8_t gain_) {
 
         // 3. UI & GLOBAL REFRESH
         // Refresh EQ tab field (if visible) and global summary field.
-        if (menu == EQ_MENU) lcd_drawEq_HighShelfData();
+        if (menu == EQ_MENU) lcd_drawEq_HighShelfData(); page_markDirty(PAGE_EQ);
         lcd_updateGlobalMenuData(ENC_EQ_HIGHSHELF);
     }
 }
@@ -16276,7 +16423,7 @@ void Controller::eq_setFreqPeak(uint8_t peakNum_, uint8_t freq_) {
 
         // 3. UI REFRESH
         // Refresh peak-band field when EQ menu is visible.
-        if (menu == EQ_MENU) lcd_drawEq_PeakData(peakNum_);
+        if (menu == EQ_MENU) lcd_drawEq_PeakData(peakNum_); page_markDirty(PAGE_EQ);
     }
 }
 
@@ -16293,7 +16440,7 @@ void Controller::eq_setGainPeak(uint8_t peakNum_, uint8_t gain_) {
 
         // 3. UI & GLOBAL REFRESH
         // Refresh peak-band field (if visible) and global summary field.
-        if (menu == EQ_MENU) lcd_drawEq_PeakData(peakNum_);
+        if (menu == EQ_MENU) lcd_drawEq_PeakData(peakNum_); page_markDirty(PAGE_EQ);
         lcd_updateGlobalMenuData((EncoderFunc)(ENC_EQ_PEAK0 + peakNum_));
     }
 }
