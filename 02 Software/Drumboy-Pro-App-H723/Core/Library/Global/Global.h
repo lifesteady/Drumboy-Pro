@@ -892,6 +892,8 @@ const char kHeaderReverb[]                          = "REVERB    ";
 const char kHeaderProbability[]                     = "PROB      ";
 const char kHeaderQfactor[]                         = "Q-FACTOR  ";
 const char kHeaderQuantize[]                        = "QUANTIZE  ";
+const char kHeaderSwing[]                           = "SWING     ";
+const char kHeaderSwingGrid[]                       = "SWING-GRID";
 const char kHeaderSample[]                          = "SAMPLE    ";
 const char kHeaderSave[]                            = "SAVE      ";
 const char kHeaderSize[]                            = "SIZE      ";
@@ -1202,7 +1204,10 @@ typedef enum {
     ENC_SONG_TIMING                                 = 0x5F,
     ENC_SONG_VELOCITY                               = 0x60,
 
-    ENC_FNC_NONE                                    = 0x61
+    ENC_FNC_NONE                                    = 0x61,
+
+    ENC_RHYTHM_SWING                                = 0x62,
+    ENC_RHYTHM_SWINGGRID                            = 0x63
 } EncoderFunc;
 
 const EncoderFunc encoderLocalFunction[][8] = {
@@ -1217,7 +1222,7 @@ const EncoderFunc encoderLocalFunction[][8] = {
     // MIXER_MENU = 0x04
     {ENC_MIXER_MASTERVOLUME, ENC_MIXER_HPVOLUME, ENC_MIXER_LOVOLUME, ENC_MIXER_LIVOLUME, ENC_MIXER_LIMIXERIN, ENC_MIXER_PAN, ENC_MIXER_LIMITER, ENC_MIXER_NORMALIZE},
     // RHYTHM_MENU = 0x05
-    {ENC_RHYTHM_TEMPO, ENC_RHYTHM_MEASURE, ENC_RHYTHM_BAR, ENC_RHYTHM_QUANTIZE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE},
+    {ENC_RHYTHM_TEMPO, ENC_RHYTHM_MEASURE, ENC_RHYTHM_BAR, ENC_RHYTHM_QUANTIZE, ENC_RHYTHM_SWING, ENC_RHYTHM_SWINGGRID, ENC_FNC_NONE, ENC_FNC_NONE},
     // METRO_MENU = 0x06
     {ENC_METRO_ACTIVE, ENC_METRO_PRECOUNT, ENC_METRO_SAMPLE, ENC_METRO_VOLUME, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE},
     // IO_MENU = 0x07
@@ -1368,8 +1373,18 @@ const EncoderFuncData kEncoderFuncDataLibrary[] = {
     {ENC_SONG_FILL,           ENC_RES_M, "FILL      ", "SONG  ", "   ", false},
     {ENC_SONG_PATTERN,        ENC_RES_M, "PATTERN   ", "SONG  ", "   ", false},
     {ENC_SONG_TIMING,         ENC_RES_M, "TIMING    ", "SONG  ", "   ", false},
-    {ENC_SONG_VELOCITY,       ENC_RES_M, "VELOCITY  ", "SONG  ", "   ", false}
+    {ENC_SONG_VELOCITY,       ENC_RES_M, "VELOCITY  ", "SONG  ", "   ", false},
+
+    // Index 0x61 = ENC_FNC_NONE (entry added so the table can be indexed by every enum value)
+    {ENC_FNC_NONE,            ENC_RES_F, "----------", "      ", "   ", false},
+
+    {ENC_RHYTHM_SWING,        ENC_RES_M, "SWING     ", "RHY   ", "  %", false},
+    {ENC_RHYTHM_SWINGGRID,    ENC_RES_S, "SWING-GRID", "RHY   ", "   ", false}
 };
+
+// The table above is indexed by EncoderFunc value, so every entry must sit at its own enum number.
+static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_RHYTHM_SWINGGRID + 1,
+              "kEncoderFuncDataLibrary must have one entry per EncoderFunc value");
 
 typedef enum {
     ENC_MODE_GLOBAL                                 = 0x00,
@@ -2068,6 +2083,28 @@ const uint16_t kMinSongInterval                     = 800;
 const uint16_t kMaxSongInterval                     = 64000;
 const float kQuantizeInterval[]                     = {50, 100, 200, 400, 800, 1600, 3200};
 
+// SWING (MPC-style): percent of each note pair given to the first note.
+// 50 = straight, 54 = light, 58-62 = classic MPC/Dilla range, 66 = triplet feel, 75 = max.
+const uint8_t kMinSwing                             = 50;
+const uint8_t kMaxSwing                             = 75;
+const uint8_t kInitialSwing                         = 50;
+
+// Swing grid: which notes get pushed late. 0 = 8th notes, 1 = 16th notes.
+const uint8_t kMinSwingGrid                         = 0;
+const uint8_t kMaxSwingGrid                         = 1;
+const uint8_t kInitialSwingGrid                     = 1;
+const uint16_t kSwingPairInterval[]                 = {kMeasureInterval, kMeasureHalfInterval};  // ticks per swung pair
+const char kSwingGridName[][11]                     = {"       1:8", "      1:16"};
+
+// Rhythm menu now has 6 tabs (tempo, measure, bar, quantize, swing, swing grid).
+const uint8_t kMinRhythmTab                         = 0;
+const uint8_t kMaxRhythmTab                         = 5;
+
+// Song file bytes used to store swing (these bytes were written but never read by stock firmware).
+const uint8_t kFileSwingByte                        = 11;
+const uint8_t kFileSwingGridByte                    = 12;
+const uint8_t kFileSwingGridMarker                  = 0xA0;  // marks byte 12 as swing data, not an old mute flag
+
 const uint16_t kSecondsinOneMinute                  = 60;
 const uint32_t kMicroSecondsinOneSecond             = 1000000;
 const uint32_t kMicroSecondsinOneMinute             = 60000000;
@@ -2094,6 +2131,8 @@ struct Rhythm {
     uint8_t measure                                 = kInitialMeasure;
     uint8_t bar                                     = kInitialBar;
     uint8_t quantize                                = kInitialQuantize;
+    uint8_t swing                                   = kInitialSwing;
+    uint8_t swingGrid                               = kInitialSwingGrid;
     uint8_t measureTotal                            = kInitialMeasure * kInitialBar;
 
     bool measureLock                                = true;

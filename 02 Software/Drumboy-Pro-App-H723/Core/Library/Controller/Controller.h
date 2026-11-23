@@ -184,6 +184,7 @@ class Controller {
     bool ignoreNextMidiStopAfterSpecialCmd;
 
     uint32_t playTimerPeriod;                                           // Calculated period for hardware Play Timer
+    uint32_t swingTimerPeriod;                                          // Period currently loaded into TIM15 (straight or swung)
     uint32_t measureTimerPeriod;                                        // Calculated period for hardware Measure Pulse
 
     uint32_t midiClockPeriod;                                           // Calculated period for Midi Clock Timer
@@ -340,6 +341,7 @@ class Controller {
     uint16_t calculateTriggerInterval();
     void adjustMeasureBarTiming();
     void updatePlayTimerPeriod();
+    void swing_updateTimerPeriod();
 
     /* Keyboard Functions ---------------------------------------- */
 
@@ -561,6 +563,8 @@ class Controller {
     void lcd_drawRhythm_MeasureData();
     void lcd_drawRhythm_BarData();
     void lcd_drawRhythm_QuantizeData();
+    void lcd_drawRhythm_SwingData();
+    void lcd_drawRhythm_SwingGridData();
     // Metronome menu functions
     void lcd_drawMetroMenu();
     void lcd_drawMetro_ActiveData();
@@ -738,6 +742,8 @@ class Controller {
     void rhythm_setMeasure(uint8_t measure_);
     void rhythm_setBar(uint8_t bar_);
     void rhythm_setQuantize(uint8_t quantize_);
+    void rhythm_setSwing(uint8_t swing_);
+    void rhythm_setSwingGrid(uint8_t swingGrid_);
 
     /* Mixer Functions ------------------------------------------- */
 

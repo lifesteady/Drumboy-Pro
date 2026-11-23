@@ -93,6 +93,7 @@ Controller::Controller()
     ignoreNextMidiStopAfterSpecialCmd(false),
       triggerMode(TRIG_BAR),
       playTimerPeriod(0),
+      swingTimerPeriod(0),
       measureTimerPeriod(0),
       midiClockPeriod(0),
 
@@ -1348,11 +1349,44 @@ void Controller::updatePlayTimerPeriod() {
     midiClockPeriod = 2500000 / rhythm.tempo;
 
     // 4. HARDWARE REGISTER UPDATES
-    // Write new period to TIM15 auto-reload register for the sequencer.
-    __HAL_TIM_SET_AUTORELOAD(&htim15, playTimerPeriod - 1);
+    // Write new period to TIM15 auto-reload register for the sequencer (swing-aware).
+    swingTimerPeriod = 0;  // force a rewrite
+    swing_updateTimerPeriod();
 
     // Write new period to TIM4 auto-reload register for external MIDI sync.
     __HAL_TIM_SET_AUTORELOAD(&htim4, midiClockPeriod - 1);
+}
+
+void Controller::swing_updateTimerPeriod() {
+    /// @brief MPC-style swing. Stretches the first half of every note pair and squeezes the second half,
+    /// so off-beat notes land late while every pair still ends exactly on the grid.
+    /// Works by changing the sequencer clock speed, so all beats, fills and recorded hits swing
+    /// without changing any stored pattern data. MIDI clock and sync out (separate timers) stay straight.
+
+    uint32_t period = playTimerPeriod;
+
+    // Only swing during normal playback (not while stopped or counting in).
+    if ((rhythm.swing > kMinSwing) && playActive && (!metronome.precountState)) {
+        const uint8_t grid = (rhythm.swingGrid <= kMaxSwingGrid) ? rhythm.swingGrid : kInitialSwingGrid;
+        const uint16_t pairInterval = kSwingPairInterval[grid];
+        const uint16_t halfInterval = pairInterval / 2;
+
+        // Long step = 2 * P * swing%, short step = 2 * P - long step (keeps each pair exactly in time).
+        const uint32_t longPeriod = (2UL * playTimerPeriod * rhythm.swing + 50UL) / 100UL;
+        const uint32_t shortPeriod = (2UL * playTimerPeriod) - longPeriod;
+
+        period = ((playInterval % pairInterval) < halfInterval) ? longPeriod : shortPeriod;
+    }
+
+    // Only touch the hardware when the value actually changes.
+    if ((period != swingTimerPeriod) && (period > 2)) {
+        swingTimerPeriod = period;
+        __HAL_TIM_SET_AUTORELOAD(&htim15, period - 1);
+
+        // TIM15 is 16-bit with no preload: if the counter is already past the new end value
+        // it would run on to 65535 (~65 ms hiccup). Pull it back so the tick fires right away.
+        if (__HAL_TIM_GET_COUNTER(&htim15) >= (period - 1)) __HAL_TIM_SET_COUNTER(&htim15, period - 2);
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -3415,6 +3449,15 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
                 rhythm_setQuantize(rhythm.quantize + 1);
             break;
 
+        case ENC_RHYTHM_SWING:
+            if (rhythm.swing < kMaxSwing)
+                rhythm_setSwing(rhythm.swing + 1);
+            break;
+
+        case ENC_RHYTHM_SWINGGRID:
+            rhythm_setSwingGrid((rhythm.swingGrid < kMaxSwingGrid) ? rhythm.swingGrid + 1 : kMinSwingGrid);
+            break;
+
             // Io functions
 
         case ENC_IO_SYNCIN:
@@ -3984,6 +4027,15 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
         case ENC_RHYTHM_QUANTIZE:
             if ((!rhythm.quantizeLock) && (rhythm.quantize > kMinQuantize))
                 rhythm_setQuantize(rhythm.quantize - 1);
+            break;
+
+        case ENC_RHYTHM_SWING:
+            if (rhythm.swing > kMinSwing)
+                rhythm_setSwing(rhythm.swing - 1);
+            break;
+
+        case ENC_RHYTHM_SWINGGRID:
+            rhythm_setSwingGrid((rhythm.swingGrid > kMinSwingGrid) ? rhythm.swingGrid - 1 : kMaxSwingGrid);
             break;
 
             // Io functions
@@ -5525,6 +5577,11 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
                     rhythm_setBar(data[15]);
                     rhythm_setQuantize(data[16]);
 
+                    // Swing (custom firmware). Files saved by stock firmware have 0/1 here,
+                    // which fails these checks, so they load as straight 1:16.
+                    rhythm_setSwing(((data[kFileSwingByte] >= kMinSwing) && (data[kFileSwingByte] <= kMaxSwing)) ? data[kFileSwingByte] : kInitialSwing);
+                    rhythm_setSwingGrid(((data[kFileSwingGridByte] & 0xF0) == kFileSwingGridMarker) ? (data[kFileSwingGridByte] & 0x0F) : kInitialSwingGrid);
+
                     // Metronome settings
 
                     // IO settings
@@ -5870,8 +5927,10 @@ SdResult Controller::sd_saveFile(uint8_t fileNum_) {
     data[8] = mixer.normalize;
     data[9] = mixer.masterMute;
     data[10] = mixer.hpMute;
-    data[11] = mixer.loMute;
-    data[12] = mixer.liMute;
+    // Bytes 11-12 held line-out/line-in mute flags that stock firmware never reads back.
+    // Custom firmware stores swing here instead (stock firmware ignores these bytes when loading).
+    data[kFileSwingByte] = rhythm.swing;
+    data[kFileSwingGridByte] = kFileSwingGridMarker | (rhythm.swingGrid & 0x0F);
 
     // 2.3 RHYTHM SETTINGS
     data[13] = rhythm.tempo;
@@ -8304,7 +8363,7 @@ void Controller::lcd_transitionMenu() {
             break;
 
         case RHYTHM_MENU:
-            for (uint8_t i = 0; i <= kMaxMenu4Tab; i++) {
+            for (uint8_t i = 0; i <= kMaxRhythmTab; i++) {
                 lcd_clearTextBox(i);
             }
             rhythm.measureLock = true;
@@ -9849,6 +9908,8 @@ void Controller::lcd_drawRhythmMenu() {
     lcd.drawText(kHeaderMeasure, kMenuHeaderTextSize, kMenuHeaderX[1], kMenuHeaderY[1]);
     lcd.drawText(kHeaderBar, kMenuHeaderTextSize, kMenuHeaderX[2], kMenuHeaderY[2]);
     lcd.drawText(kHeaderQuantize, kMenuHeaderTextSize, kMenuHeaderX[3], kMenuHeaderY[3]);
+    lcd.drawText(kHeaderSwing, kMenuHeaderTextSize, kMenuHeaderX[4], kMenuHeaderY[4]);
+    lcd.drawText(kHeaderSwingGrid, kMenuHeaderTextSize, kMenuHeaderX[5], kMenuHeaderY[5]);
 
     // 4. SIGN/UNIT DRAW
     // Draw unit/sign text for each parameter slot.
@@ -9857,6 +9918,8 @@ void Controller::lcd_drawRhythmMenu() {
     lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[1], kMenuSignBoxY[1]);
     lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[2], kMenuSignBoxY[2]);
     lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[3], kMenuSignBoxY[3]);
+    lcd.drawText("  %", kMenuSignTextSize, kMenuSignBoxX[4], kMenuSignBoxY[4]);
+    lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[5], kMenuSignBoxY[5]);
 
     // 5. DATA DRAW
     // Draw rhythm parameter values.
@@ -9864,6 +9927,8 @@ void Controller::lcd_drawRhythmMenu() {
     lcd_drawRhythm_MeasureData();
     lcd_drawRhythm_BarData();
     lcd_drawRhythm_QuantizeData();
+    lcd_drawRhythm_SwingData();
+    lcd_drawRhythm_SwingGridData();
 }
 
 void Controller::lcd_drawRhythm_TempoData() {
@@ -9946,6 +10011,31 @@ void Controller::lcd_drawRhythm_QuantizeData() {
     // Draw LOCK status with active/inactive color.
     (rhythm.quantizeLock) ? lcd_setMenuTextState(MAGENTA) : lcd_setMenuTextState(BLACK);
     lcd.drawText("    LOCK", kMenuTextBoxTextSize, kMenuTextBoxX[3], kMenuTextBoxY[3]);
+}
+
+void Controller::lcd_drawRhythm_SwingData() {
+    /// @brief Draws swing amount (50 = straight) and a STRAIGHT/SWING hint.
+
+    lcd_setMenuDataState(WHITE);
+    char kData[kMenuDataTextSize + 1];
+    sprintf(kData, "        %02d", rhythm.swing);
+    lcd.drawText(kData, kMenuDataTextSize, kMenuDataX[4], kMenuDataY[4]);
+
+    if (rhythm.swing > kMinSwing) {
+        lcd_setMenuTextState(YELLOW);
+        lcd.drawText("      ON", kMenuTextBoxTextSize, kMenuTextBoxX[4], kMenuTextBoxY[4]);
+    } else {
+        lcd_setMenuTextState(BLACK);
+        lcd.drawText("        ", kMenuTextBoxTextSize, kMenuTextBoxX[4], kMenuTextBoxY[4]);
+    }
+}
+
+void Controller::lcd_drawRhythm_SwingGridData() {
+    /// @brief Draws which notes get swung (1:8 or 1:16).
+
+    lcd_setMenuDataState(WHITE);
+    const uint8_t grid = (rhythm.swingGrid <= kMaxSwingGrid) ? rhythm.swingGrid : kInitialSwingGrid;
+    lcd.drawText(kSwingGridName[grid], kMenuDataTextSize, kMenuDataX[5], kMenuDataY[5]);
 }
 
 /* Lcd Metronome Menu Functions ----------------------------------------------*/
@@ -14208,6 +14298,8 @@ void Controller::rhythm_reset() {
     rhythm_setMeasure(kInitialMeasure);
     rhythm_setBar(kInitialBar);
     rhythm_setQuantize(kInitialQuantize);
+    rhythm_setSwing(kInitialSwing);
+    rhythm_setSwingGrid(kInitialSwingGrid);
 }
 
 void Controller::rhythm_menuRight() {
@@ -14216,7 +14308,7 @@ void Controller::rhythm_menuRight() {
     // 1. TAB STATE UPDATE
     // Advance tab index and wrap to first tab at upper boundary.
     preMenuTab = menuTab;
-    (menuTab < kMaxMenu4Tab) ? menuTab += 1 : menuTab = kMinMenu4Tab;
+    (menuTab < kMaxRhythmTab) ? menuTab += 1 : menuTab = kMinRhythmTab;
 
     // 2. UI TRANSITION
     // Trigger selection transition animation for tab change.
@@ -14229,7 +14321,7 @@ void Controller::rhythm_menuLeft() {
     // 1. TAB STATE UPDATE
     // Decrement tab index and wrap to last tab at lower boundary.
     preMenuTab = menuTab;
-    (menuTab > kMinMenu4Tab) ? menuTab -= 1 : menuTab = kMaxMenu4Tab;
+    (menuTab > kMinRhythmTab) ? menuTab -= 1 : menuTab = kMaxRhythmTab;
 
     // 2. UI TRANSITION
     // Trigger selection transition animation for tab change.
@@ -14300,6 +14392,16 @@ void Controller::rhythm_menuUp() {
                 }
             }
             break;
+
+        case 4:
+
+            // Swing can be changed live, even while playing.
+            if (rhythm.swing < kMaxSwing) rhythm_setSwing(rhythm.swing + 1);
+            break;
+
+        case 5:
+            rhythm_setSwingGrid((rhythm.swingGrid < kMaxSwingGrid) ? rhythm.swingGrid + 1 : kMinSwingGrid);
+            break;
     }
 }
 
@@ -14366,6 +14468,14 @@ void Controller::rhythm_menuDown() {
                     }
                 }
             }
+            break;
+
+        case 4:
+            if (rhythm.swing > kMinSwing) rhythm_setSwing(rhythm.swing - 1);
+            break;
+
+        case 5:
+            rhythm_setSwingGrid((rhythm.swingGrid > kMinSwingGrid) ? rhythm.swingGrid - 1 : kMaxSwingGrid);
             break;
     }
 }
@@ -14452,6 +14562,24 @@ void Controller::rhythm_setBar(uint8_t bar_) {
         // 5. TRANSPORT RESET
         // Restart playback state to apply new bar structure safely.
         reset();
+    }
+}
+
+void Controller::rhythm_setSwing(uint8_t swing_) {
+    /// @brief Sets swing amount (50-75). Takes effect on the next sequencer tick; patterns are not changed.
+
+    if ((swing_ >= kMinSwing) && (swing_ <= kMaxSwing)) {
+        rhythm.swing = swing_;
+        if (menu == RHYTHM_MENU) lcd_drawRhythm_SwingData();
+    }
+}
+
+void Controller::rhythm_setSwingGrid(uint8_t swingGrid_) {
+    /// @brief Sets which notes swing: 0 = 8th notes, 1 = 16th notes.
+
+    if ((swingGrid_ >= kMinSwingGrid) && (swingGrid_ <= kMaxSwingGrid)) {
+        rhythm.swingGrid = swingGrid_;
+        if (menu == RHYTHM_MENU) lcd_drawRhythm_SwingGridData();
     }
 }
 
@@ -21517,6 +21645,7 @@ void Controller::play() {
     stopFlag = false;
     resetFlag = false;
     playActive = true;
+    swing_updateTimerPeriod();  // load straight/swung step length for the first tick
     resetIcon.flag = true;
     resetIcon.mode = false;
     playIcon.flag = true;
@@ -21570,6 +21699,7 @@ void Controller::stop() {
     resetFlag = false;
     playActive = false;
     recordActive = false;
+    swing_updateTimerPeriod();  // back to a straight clock while stopped
     io.midi.txStartPending = false;
     io.sync.txPulseCounter = 0;
     io.sync.txTrsTickCounter = 0;
@@ -23323,6 +23453,10 @@ void Controller::interruptPlay() {
     /// @brief The central heartbeat of the sequencer. Manages metronome pre-counts, real-time beat triggering for all layers (simple and complex fills), hardware sync pulses, and LFO phase synchronization.
 
     if (playActive) {
+        // 0. SWING CLOCK
+        // Set how long until the next tick: long in the first half of a note pair, short in the second.
+        swing_updateTimerPeriod();
+
         // 1. METRONOME PRE-COUNT PHASE
         // Handle the "get ready" timeline before normal song playback starts.
 
