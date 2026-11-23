@@ -472,6 +472,7 @@ class Controller {
     void page_update();
     void page_draw();
     void page_drawReverb();
+    void page_drawFilter(uint8_t filterNum_);
     void sd_getLibraries();
     SdResult sd_getFileLibrary();
     SdResult sd_getDrumkitLibrary();

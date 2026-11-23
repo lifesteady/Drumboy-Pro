@@ -2577,11 +2577,12 @@ void Controller::keyboard_action() {
                                 break;
 
                             case KEY_FILTER_0:
-                                if (!alertFlag) filter_select(0);
+                                // Custom: pressing FILTER 1 again while in its menu toggles the Filter page.
+                                if (!alertFlag) (menu == FILTER_0_MENU) ? page_toggle(PAGE_FILTER_0) : filter_select(0);
                                 break;
 
                             case KEY_FILTER_1:
-                                if (!alertFlag) filter_select(1);
+                                if (!alertFlag) (menu == FILTER_1_MENU) ? page_toggle(PAGE_FILTER_1) : filter_select(1);
                                 break;
 
                             case KEY_EQ:
@@ -5225,6 +5226,12 @@ void Controller::page_draw() {
         case PAGE_REVERB:
             page_drawReverb();
             break;
+        case PAGE_FILTER_0:
+            page_drawFilter(0);
+            break;
+        case PAGE_FILTER_1:
+            page_drawFilter(1);
+            break;
         default:
             break;
     }
@@ -5379,6 +5386,161 @@ void Controller::page_drawReverb() {
     lcd.setAlignment(RIGHT);
     lcd.setForeColor((tail + preSec > axis) ? accent : BLACK);
     lcd.drawText(">>", 2, gx + gw, base - hh - 2);
+}
+
+void Controller::page_drawFilter(uint8_t filterNum_) {
+    /// @brief Filter page: the filter's real frequency response, 20 Hz - 20 kHz (log) by -36..+24 dB.
+    /// Uses the same RBJ biquad formulas as Filter::calculateCoef() and the same output path as
+    /// the audio code: drive gain -> biquad -> slope blend (6 dB = half filtered + half input) ->
+    /// wet, plus the undriven dry signal. The soft clipping added by drive is not drawn.
+
+    Filter& f = filter[filterNum_];
+    const bool on = f.active && (f.type >= kMinFilterType) && (f.type <= kMaxFilterType);
+    const RGB16Color ink = on ? kThemeInk : kThemeMid;
+    const RGB16Color accent = on ? kThemeAccent : kThemeLine;
+    const RGB16Color label = kThemeHeader;
+
+    // ---- 1. coefficients (exact RBJ cookbook, as in calculateCoef)
+    const float cutoff = (float)kFilterFrequencyDataLibrary[f.frequency].data;
+    const float Q = kFilterResonanceDataLibrary[f.resonance].data;
+    const float w0 = 2.0f * 3.14159265f * cutoff / AUDIO_SAMPLE_RATE;
+    const float cw = cosf(w0), sw = sinf(w0), alpha = sw / (2.0f * Q);
+    float b0 = 1, b1 = 0, b2 = 0, a0 = 1, a1 = 0, a2 = 0;
+    switch (f.type) {
+        case FIL_LPF: b0 = (1 - cw) * 0.5f; b1 = 1 - cw; b2 = (1 - cw) * 0.5f; a0 = 1 + alpha; a1 = -2 * cw; a2 = 1 - alpha; break;
+        case FIL_HPF: b0 = (1 + cw) * 0.5f; b1 = -(1 + cw); b2 = (1 + cw) * 0.5f; a0 = 1 + alpha; a1 = -2 * cw; a2 = 1 - alpha; break;
+        case FIL_BPF: b0 = alpha; b1 = 0; b2 = -alpha; a0 = 1 + alpha; a1 = -2 * cw; a2 = 1 - alpha; break;
+        case FIL_BSF: b0 = 1; b1 = -2 * cw; b2 = 1; a0 = 1 + alpha; a1 = -2 * cw; a2 = 1 - alpha; break;
+        default: break;
+    }
+    b0 /= a0; b1 /= a0; b2 /= a0; a1 /= a0; a2 /= a0;
+    const float drive = 1.0f + (f.drive * 0.04f);
+    const float wet = f.wet / 100.0f, dry = f.dry / 100.0f;
+
+    // ---- 2. layout: log frequency across, dB up
+    const uint16_t gx = 80, gw = 790;
+    const uint16_t gTop = 180, gBot = 400;          // +24 dB .. -36 dB
+    const float dbTop = 24.0f, dbBot = -36.0f;
+    const float pxPerDb = (gBot - gTop) / (dbTop - dbBot);
+    auto dbToY = [&](float db) -> int16_t {
+        if (db > dbTop) db = dbTop;
+        if (db < dbBot) db = dbBot;
+        return (int16_t)(gTop + (dbTop - db) * pxPerDb + 0.5f);
+    };
+    auto freqToX = [&](float hz) -> uint16_t { return gx + (uint16_t)(gw * log10f(hz / 20.0f) / 3.0f + 0.5f); };
+    const int16_t y0dB = dbToY(0.0f);
+    const int16_t gridDb[] = {12, -12, -24};
+    const float gridHz[] = {50, 100, 200, 500, 1000, 2000, 5000, 10000};
+
+    // ---- 3. static parts on first draw
+    if (pageFullRedraw) {
+        lcd.setBackColor(BLACK);
+        lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
+        lcd.setForeColor(kThemeLine);
+        lcd.drawHLine(30, 162, 900);
+        lcd.setFont(FONT_07x09);
+        lcd.setForeColor(label);
+        lcd.setAlignment(RIGHT);
+        const char* dbl[] = {"+12", "0", "-12", "-24"};
+        const int16_t dbv[] = {12, 0, -12, -24};
+        for (uint8_t i = 0; i < 4; i++) lcd.drawText(dbl[i], strlen(dbl[i]), gx - 8, dbToY(dbv[i]) - 4);
+        lcd.setAlignment(CENTER);
+        const char* hzl[] = {"20", "100", "1K", "10K", "20K"};
+        const float hzv[] = {20, 100, 1000, 10000, 20000};
+        for (uint8_t i = 0; i < 5; i++) lcd.drawText(hzl[i], strlen(hzl[i]), (i == 4) ? gx + gw : freqToX(hzv[i]), gBot + 8);
+        lcd.setAlignment(LEFT);
+        lcd.setForeColor(kThemeLine);
+        const char hint[] = "PRESS FILTER AGAIN: BACK TO SONG";
+        lcd.drawText(hint, strlen(hint), 30, 436);
+        lcd.setAlignment(RIGHT);
+        const char hint2[] = "KNOBS: BOXES ABOVE / BELOW";
+        lcd.drawText(hint2, strlen(hint2), 930, 436);
+        pageFullRedraw = false;
+    }
+
+    // ---- 4. header
+    lcd.setFont(FONT_14x18);
+    lcd.setAlignment(LEFT);
+    lcd.setBackColor(BLACK);
+    lcd.setForeColor(on ? kThemeAccent : kThemeMid);
+    char title[16];
+    snprintf(title, sizeof(title), on ? "FILTER %u    " : "FILTER %u OFF", filterNum_ + 1);
+    lcd.drawText(title, 12, 30, 139);
+
+    const char* typeName[] = {"OFF", "LOWPASS", "HIGHPASS", "BANDPASS", "BANDSTOP"};
+    char cut[10];
+    (cutoff >= 1000.0f) ? snprintf(cut, sizeof(cut), "%u.%uK", (unsigned)(cutoff / 1000), (unsigned)((uint32_t)cutoff % 1000) / 100)
+                        : snprintf(cut, sizeof(cut), "%u", (unsigned)cutoff);
+    char info[64];
+    snprintf(info, sizeof(info), "%8s %2udB  CUT %6sHZ  RES %u.%02u  DRIVE %3u", typeName[(f.type <= 4) ? f.type : 0],
+             f.slope ? 12 : 6, cut, (unsigned)Q, (unsigned)(Q * 100) % 100, f.drive);
+    lcd.setFont(FONT_07x09);
+    lcd.setAlignment(RIGHT);
+    lcd.setForeColor(label);
+    lcd.drawText(info, strlen(info), 930, 144);
+
+    // ---- 5. response, column by column (no full clear => no flicker)
+    const RGB16Color fill = page_mix(BLACK, accent, 0.28f);
+    const RGB16Color fillGrid = page_mix(BLACK, accent, 0.40f);
+    int16_t prevY = -1;
+    for (uint16_t i = 0; i < gw; i++) {
+        const uint16_t x = gx + i;
+        const float hz = 20.0f * powf(10.0f, 3.0f * i / gw);
+        const float w = 2.0f * 3.14159265f * hz / AUDIO_SAMPLE_RATE;
+        const float c1 = cosf(w), s1 = sinf(w), c2 = cosf(2 * w), s2 = sinf(2 * w);
+        // H = (b0 + b1 z^-1 + b2 z^-2) / (1 + a1 z^-1 + a2 z^-2), z^-1 = cos w - j sin w
+        const float nr = b0 + b1 * c1 + b2 * c2, ni = -(b1 * s1 + b2 * s2);
+        const float dr = 1 + a1 * c1 + a2 * c2, di = -(a1 * s1 + a2 * s2);
+        const float dd = dr * dr + di * di;
+        float hr = (nr * dr + ni * di) / dd, hi = (ni * dr - nr * di) / dd;
+        if (!f.slope) { hr = 0.5f * hr + 0.5f; hi = 0.5f * hi; }            // 6 dB mode
+        if (!on) { hr = 1.0f; hi = 0.0f; }                                  // bypass draws flat
+        const float outR = on ? (drive * wet * hr + dry) : 1.0f;
+        const float outI = on ? (drive * wet * hi) : 0.0f;
+        float mag = sqrtf(outR * outR + outI * outI);
+        if (mag < 1.0e-6f) mag = 1.0e-6f;
+        const int16_t y = dbToY(20.0f * log10f(mag));
+
+        // Above the curve: black with dotted grid; below: fill with brighter grid dots.
+        lcd.setForeColor(BLACK);
+        if (y > gTop) lcd.drawVLine(x, gTop, y - gTop);
+        lcd.setForeColor(fill);
+        if (gBot - y > 0) lcd.drawVLine(x, y, gBot - y + 1);
+
+        bool gridCol = false;
+        for (uint8_t g = 0; g < 8; g++) if (x == freqToX(gridHz[g])) gridCol = true;
+        if (gridCol) {
+            for (int16_t yy = gTop; yy <= gBot; yy += 4) {
+                lcd.setForeColor((yy < y) ? kThemeLine : fillGrid);
+                lcd.drawPixel(x, yy);
+            }
+        }
+        if ((x % 4) == 0) {
+            for (uint8_t g = 0; g < 3; g++) {
+                const int16_t gy = dbToY(gridDb[g]);
+                lcd.setForeColor((gy < y) ? kThemeLine : fillGrid);
+                lcd.drawPixel(x, gy);
+            }
+        }
+        if ((x % 2) == 0) { lcd.setForeColor(ink); lcd.drawPixel(x, y0dB); }
+
+        // Curve edge: 2 px, joined vertically to the previous column so steep slopes stay solid.
+        lcd.setForeColor(accent);
+        if (prevY >= 0) {
+            const int16_t lo = (y < prevY) ? y : prevY, hi2 = (y < prevY) ? prevY : y;
+            if (hi2 - lo > 1) lcd.drawVLine(x, lo, hi2 - lo);
+        }
+        lcd.drawPixel(x, y);
+        if (y + 1 <= gBot) lcd.drawPixel(x, y + 1);
+        prevY = y;
+    }
+
+    // ---- 6. cutoff marker
+    if (on) {
+        const uint16_t cx = freqToX(cutoff);
+        lcd.setForeColor(kThemeAmber);
+        for (int16_t yy = gTop; yy <= gBot; yy += 3) lcd.drawPixel(cx, yy);
+    }
 }
 
 bool Controller::sd_showPreviews() {
@@ -16423,7 +16585,7 @@ void Controller::filter_setActive(uint8_t filterNum_, bool active_) {
             // 4. UI & GLOBAL REFRESH
             // Refresh Filter tab data (if visible) and global summary field.
             if ((((menu == FILTER_0_MENU) && (filterNum_ == 0)) || ((menu == FILTER_1_MENU) && (filterNum_ == 1))))
-                lcd_drawFilter_ActiveData(filterNum_);
+                lcd_drawFilter_ActiveData(filterNum_); page_markDirty(filterNum_ ? PAGE_FILTER_1 : PAGE_FILTER_0);
             EncoderFunc function;
             (filterNum_ == 0) ? function = ENC_FILTER_0_ACTIVE : function = ENC_FILTER_1_ACTIVE;
             lcd_updateGlobalMenuData(function);
@@ -16458,7 +16620,7 @@ void Controller::filter_setType(uint8_t filterNum_, uint8_t type_) {
             // 4. UI & GLOBAL REFRESH
             // Refresh Filter tab data (if visible) and global summary field.
             if ((((menu == FILTER_0_MENU) && (filterNum_ == 0)) || ((menu == FILTER_1_MENU) && (filterNum_ == 1))))
-                lcd_drawFilter_TypeData(filterNum_);
+                lcd_drawFilter_TypeData(filterNum_); page_markDirty(filterNum_ ? PAGE_FILTER_1 : PAGE_FILTER_0);
             EncoderFunc function;
             (filterNum_ == 0) ? function = ENC_FILTER_0_TYPE : function = ENC_FILTER_1_TYPE;
             lcd_updateGlobalMenuData(function);
@@ -16480,7 +16642,7 @@ void Controller::filter_setSlope(uint8_t filterNum_, uint8_t slope_) {
         // 3. UI & GLOBAL REFRESH
         // Refresh Filter tab data (if visible) and global summary field.
         if (((menu == FILTER_0_MENU) && (filterNum_ == 0)) || ((menu == FILTER_1_MENU) && (filterNum_ == 1)))
-            lcd_drawFilter_SlopeData(filterNum_);
+            lcd_drawFilter_SlopeData(filterNum_); page_markDirty(filterNum_ ? PAGE_FILTER_1 : PAGE_FILTER_0);
         EncoderFunc function;
         (filterNum_ == 0) ? function = ENC_FILTER_0_RESON : function = ENC_FILTER_1_RESON;
         lcd_updateGlobalMenuData(function);
@@ -16501,7 +16663,7 @@ void Controller::filter_setFrequency(uint8_t filterNum_, uint8_t freq_) {
         // 3. UI & GLOBAL REFRESH
         // Refresh Filter tab data (if visible) and global summary field.
         if (((menu == FILTER_0_MENU) && (filterNum_ == 0)) || ((menu == FILTER_1_MENU) && (filterNum_ == 1)))
-            lcd_drawFilter_FrequencyData(filterNum_);
+            lcd_drawFilter_FrequencyData(filterNum_); page_markDirty(filterNum_ ? PAGE_FILTER_1 : PAGE_FILTER_0);
         EncoderFunc function;
         (filterNum_ == 0) ? function = ENC_FILTER_0_FREQ : function = ENC_FILTER_1_FREQ;
         lcd_updateGlobalMenuData(function);
@@ -16522,7 +16684,7 @@ void Controller::filter_setResonance(uint8_t filterNum_, uint8_t res_) {
         // 3. UI & GLOBAL REFRESH
         // Refresh Filter tab data (if visible) and global summary field.
         if (((menu == FILTER_0_MENU) && (filterNum_ == 0)) || ((menu == FILTER_1_MENU) && (filterNum_ == 1)))
-            lcd_drawFilter_ResonanceData(filterNum_);
+            lcd_drawFilter_ResonanceData(filterNum_); page_markDirty(filterNum_ ? PAGE_FILTER_1 : PAGE_FILTER_0);
         EncoderFunc function;
         (filterNum_ == 0) ? function = ENC_FILTER_0_RESON : function = ENC_FILTER_1_RESON;
         lcd_updateGlobalMenuData(function);
@@ -16543,7 +16705,7 @@ void Controller::filter_setDrive(uint8_t filterNum_, uint8_t drive_) {
         // 3. UI & GLOBAL REFRESH
         // Refresh Filter tab data (if visible) and global summary field.
         if (((menu == FILTER_0_MENU) && (filterNum_ == 0)) || ((menu == FILTER_1_MENU) && (filterNum_ == 1)))
-            lcd_drawFilter_DriveData(filterNum_);
+            lcd_drawFilter_DriveData(filterNum_); page_markDirty(filterNum_ ? PAGE_FILTER_1 : PAGE_FILTER_0);
         EncoderFunc function;
         (filterNum_ == 0) ? function = ENC_FILTER_0_DRIVE : function = ENC_FILTER_1_DRIVE;
         lcd_updateGlobalMenuData(function);
@@ -16582,8 +16744,8 @@ void Controller::filter_setDry(uint8_t filterNum_, uint8_t dry_) {
         // 4. UI & GLOBAL REFRESH
         // Refresh Filter tab data (if visible) and global summary fields.
         if (((menu == FILTER_0_MENU) && (filterNum_ == 0)) || ((menu == FILTER_1_MENU) && (filterNum_ == 1))) {
-            lcd_drawFilter_DryData(filterNum_);
-            lcd_drawFilter_WetData(filterNum_);
+            lcd_drawFilter_DryData(filterNum_); page_markDirty(filterNum_ ? PAGE_FILTER_1 : PAGE_FILTER_0);
+            lcd_drawFilter_WetData(filterNum_); page_markDirty(filterNum_ ? PAGE_FILTER_1 : PAGE_FILTER_0);
         }
         EncoderFunc functionA;
         EncoderFunc functionB;
@@ -16626,8 +16788,8 @@ void Controller::filter_setWet(uint8_t filterNum_, uint8_t wet_) {
         // 4. UI & GLOBAL REFRESH
         // Refresh Filter tab data (if visible) and global summary fields.
         if (((menu == FILTER_0_MENU) && (filterNum_ == 0)) || ((menu == FILTER_1_MENU) && (filterNum_ == 1))) {
-            lcd_drawFilter_DryData(filterNum_);
-            lcd_drawFilter_WetData(filterNum_);
+            lcd_drawFilter_DryData(filterNum_); page_markDirty(filterNum_ ? PAGE_FILTER_1 : PAGE_FILTER_0);
+            lcd_drawFilter_WetData(filterNum_); page_markDirty(filterNum_ ? PAGE_FILTER_1 : PAGE_FILTER_0);
         }
         EncoderFunc functionA;
         EncoderFunc functionB;
