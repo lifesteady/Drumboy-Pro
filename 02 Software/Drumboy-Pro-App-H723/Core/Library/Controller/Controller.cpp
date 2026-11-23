@@ -1670,6 +1670,18 @@ void Controller::keyboard_action() {
 
                             case KEY_PLAYSTOP:
                                 if (!alertFlag) {
+                                    // MPC-style stutter start: while STOP (the Reset key) is held, every
+                                    // PLAY press restarts the song from the top, so the first beat can be
+                                    // tapped in rhythm before letting it run. (Keys are active-low.)
+                                    const bool stopHeld = (((keyboard.keyLeft.previousState >> KEY_RESET) & 0x01) == 0);
+                                    if (stopHeld && !io.sync.slaveMode) {
+                                        HAL_NVIC_DisableIRQ(TIM15_IRQn);
+                                        if (playActive) reset();   // stop + back to the top
+                                        play();                    // and go again immediately
+                                        HAL_NVIC_EnableIRQ(TIM15_IRQn);
+                                        break;
+                                    }
+
                                     if (playActive) {
                                         // MPC-style: stop right away. (Stock firmware armed a stop that
                                         // waited for the end of the bar via triggerStop().)
