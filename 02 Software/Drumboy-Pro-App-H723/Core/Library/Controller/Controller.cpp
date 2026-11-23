@@ -1652,8 +1652,10 @@ void Controller::keyboard_action() {
 
                             case KEY_PLAYSTOP:
                                 if (!alertFlag) {
-                                    if ((playActive) && (!stopFlag)) {
-                                        triggerStop();
+                                    if (playActive) {
+                                        // MPC-style: stop right away. (Stock firmware armed a stop that
+                                        // waited for the end of the bar via triggerStop().)
+                                        stop();
                                     } else if (io.sync.slaveMode && (io.syncIn == 2)) {
                                         playArmed = !playArmed;
                                         playIcon.flag = true;
