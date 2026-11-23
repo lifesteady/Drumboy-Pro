@@ -185,6 +185,9 @@ class Controller {
 
     uint32_t playTimerPeriod;                                           // Calculated period for hardware Play Timer
     uint32_t swingTimerPeriod;                                          // Period currently loaded into TIM15 (straight or swung)
+    PageView page = PAGE_NONE;                                          // Custom full-screen page currently shown
+    bool pageDirty = false;                                             // Page needs a redraw
+    uint32_t pageLastDrawTick = 0;                                      // Rate limit for page redraws
     uint32_t measureTimerPeriod;                                        // Calculated period for hardware Measure Pulse
 
     uint32_t midiClockPeriod;                                           // Calculated period for Midi Clock Timer
@@ -461,6 +464,13 @@ class Controller {
     SdResult sd_loadImage(char* fileAddress, uint32_t paletteAddress, uint32_t dataAddress, uint16_t paletteSize, uint16_t width, uint16_t height, RGBMode mode);
     bool sd_showPreviews();
     void theme_applyToImages();
+    void page_open(PageView page_);
+    void page_close();
+    void page_toggle(PageView page_);
+    void page_markDirty(PageView page_);
+    void page_update();
+    void page_draw();
+    void page_drawReverb();
     void sd_getLibraries();
     SdResult sd_getFileLibrary();
     SdResult sd_getDrumkitLibrary();

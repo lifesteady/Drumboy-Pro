@@ -379,6 +379,9 @@ void Controller::update() {
         // Push buffered graphical changes to the LCD.
         lcd_update();
 
+        // Custom: redraw an open full-screen page when its settings changed (rate limited).
+        page_update();
+
         // 4. FILESYSTEM MAINTENANCE
         // Recover SD subsystem if media access is lost.
         if (!sd.ready) {
@@ -2582,7 +2585,11 @@ void Controller::keyboard_action() {
                                 break;
 
                             case KEY_REVERB:
-                                if (!alertFlag) reverb_select();
+                                if (!alertFlag) {
+                                    // Custom: first press opens the Reverb menu; pressing it again
+                                    // swaps the song grid for the Reverb page (and back).
+                                    (menu == REVERB_MENU) ? page_toggle(PAGE_REVERB) : reverb_select();
+                                }
                                 break;
 
                             case KEY_LFO:
@@ -5122,6 +5129,228 @@ void Controller::theme_applyToImages() {
     }
     RGB16Color* sel = reinterpret_cast<RGB16Color*>(RAM_ICON_SELECT_PALETTE_ADDRESS);
     for (uint8_t i = 0; i < 64; i++) sel[i] = (sel[i] == WHITE) ? kThemeAccent : themeMapImage(sel[i]);
+}
+
+/* Custom Full-Screen Pages -------------------------------------------------*/
+
+static RGB16Color page_mix(RGB16Color a_, RGB16Color b_, float f_) {
+    /// @brief Blend two RGB565 colors: f_ = 0 gives a_, f_ = 1 gives b_.
+    if (f_ <= 0.0f) return a_;
+    if (f_ >= 1.0f) return b_;
+    int ar = (a_ >> 11) & 0x1F, ag = (a_ >> 5) & 0x3F, ab = a_ & 0x1F;
+    int br = (b_ >> 11) & 0x1F, bg = (b_ >> 5) & 0x3F, bb = b_ & 0x1F;
+    int r = ar + (int)((br - ar) * f_), g = ag + (int)((bg - ag) * f_), b = ab + (int)((bb - ab) * f_);
+    return (RGB16Color)((r << 11) | (g << 5) | b);
+}
+
+void Controller::page_open(PageView page_) {
+    /// @brief Shows a full-screen page over the song grid and protects it from background drawing.
+    if (page_ == PAGE_NONE) return;
+    page = page_;
+    lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
+    page_draw();
+}
+
+void Controller::page_close() {
+    /// @brief Removes the page and redraws the 10 layer lanes exactly as the stock main page does.
+    if (page == PAGE_NONE) return;
+    page = PAGE_NONE;
+    pageDirty = false;
+    lcd.setProtect(false);
+
+    const LcdFont font = lcd.getFont();
+    const LcdAlign align = lcd.getAlignment();
+    for (uint8_t i = 0; i < kLayerLibrarySize; i++) {
+        const RGB16Color* indexPtr = (const RGB16Color*)((i % 2) ? RAM_IMAGE_LAYER_B_PALETTE_ADDRESS : RAM_IMAGE_LAYER_A_PALETTE_ADDRESS);
+        const uint8_t* dataPtr = (const uint8_t*)((i % 2) ? RAM_IMAGE_LAYER_B_DATA_ADDRESS : RAM_IMAGE_LAYER_A_DATA_ADDRESS);
+        lcd.drawRGB16Image(indexPtr, dataPtr, 64, kImageLayerX, kImageLayerY[i], kImageLayerWidth, kImageLayerHeight);
+        lcd_drawLayerTab(i);
+    }
+    // Clear the strip under the last lane (part of the page area, not covered by lane images).
+    lcd.setBackColor(BLACK);
+    const uint16_t lanesEnd = kImageLayerY[kLayerLibrarySize - 1] + kImageLayerHeight;
+    if (lanesEnd < kPageY + kPageHeight) lcd.clearRect(kPageX, lanesEnd, kPageWidth, (kPageY + kPageHeight) - lanesEnd);
+    lcd.setFont(font);
+    lcd.setAlignment(align);
+}
+
+void Controller::page_toggle(PageView page_) {
+    (page == page_) ? page_close() : page_open(page_);
+}
+
+void Controller::page_markDirty(PageView page_) {
+    if (page == page_) pageDirty = true;
+}
+
+void Controller::page_update() {
+    /// @brief Main-loop hook: redraw the page after setting changes, at most every kPageRedrawIntervalMs.
+    if ((page != PAGE_NONE) && pageDirty && ((HAL_GetTick() - pageLastDrawTick) >= kPageRedrawIntervalMs)) {
+        page_draw();
+    }
+}
+
+void Controller::page_draw() {
+    /// @brief Draws the current page with protection lifted, then restores protection and text state.
+    pageDirty = false;
+    pageLastDrawTick = HAL_GetTick();
+    const LcdFont font = lcd.getFont();
+    const LcdAlign align = lcd.getAlignment();
+    lcd.setProtect(false);
+
+    switch (page) {
+        case PAGE_REVERB:
+            page_drawReverb();
+            break;
+        default:
+            break;
+    }
+
+    lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
+    lcd.setFont(font);
+    lcd.setAlignment(align);
+}
+
+void Controller::page_drawReverb() {
+    /// @brief Reverb page: stereo decay tail computed from the real reverb settings.
+    /// The tail time is the reverb's actual 60 dB decay: 8 Freeverb-style combs averaging
+    /// ~1378 samples (31 ms) with feedback g = 0.70 + 0.15*size + 0.13*decay.
+
+    const bool on = reverb.active;
+    const RGB16Color ink = on ? kThemeInk : kThemeMid;
+    const RGB16Color accent = on ? kThemeAccent : kThemeLine;
+    const RGB16Color label = kThemeHeader;
+
+    // ---- 1. numbers from the real settings
+    const float g = 0.70f + (0.15f * reverb.size / 100.0f) + (0.13f * reverb.decay / 100.0f);
+    const float combSeconds = 1378.0f / 44100.0f;
+    const float tail = (-3.0f / log10f(g)) * combSeconds;                   // seconds to -60 dB
+    const float preSec = kReverbPreDelayDataLibrary[reverb.preDelay].data;   // 0 .. 0.1 s
+    const float widthSec = kReverbSurroundDataLibrary[reverb.surround].data; // 0 .. 0.02 s
+    const float axisChoices[] = {0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 6.0f, 8.0f, 12.0f};
+    float axis = 12.0f;
+    for (uint8_t i = 0; i < 9; i++) {
+        if (axisChoices[i] >= (tail + preSec) * 1.05f) { axis = axisChoices[i]; break; }
+    }
+
+    // ---- 2. layout
+    const uint16_t gx = 70, gw = 800;          // graph x, width
+    const uint16_t base = 290;                 // centre line (L above, R below)
+    const uint16_t hh = 98;                    // max height each side
+    const float wetScale = 0.25f + (0.75f * reverb.wet / 100.0f);
+    const float level0 = hh * wetScale;
+    const float damp = reverb.damping / 100.0f;
+    int16_t prePx = (int16_t)((preSec / axis) * gw);
+    if ((reverb.preDelay > 0) && (prePx < 3)) prePx = 3;
+    int16_t widthPx = (int16_t)((widthSec / axis) * gw);
+    if ((reverb.surround > 0) && (widthPx < 2)) widthPx = 2;
+
+    lcd.setBackColor(BLACK);
+    lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
+
+    // ---- 3. header: REVERB tag + summary
+    lcd.setFont(FONT_14x18);
+    lcd.setAlignment(LEFT);
+    const char* title = on ? " REVERB " : " REVERB OFF ";
+    lcd.setForeColor(BLACK);
+    lcd.setBackColor(on ? kThemeAccent : kThemeLine);
+    lcd.drawText(title, strlen(title), 30, 138);
+    lcd.setBackColor(BLACK);
+
+    char info[64];
+    const uint16_t tailTenths = (uint16_t)(tail * 10.0f + 0.5f);
+    sprintf(info, "TAIL %u.%us  PRE %ums  WIDTH %ums  WET %u", tailTenths / 10, tailTenths % 10,
+            (unsigned)(preSec * 1000.0f + 0.5f), (unsigned)(widthSec * 1000.0f + 0.5f), reverb.wet);
+    lcd.setFont(FONT_07x09);
+    lcd.setAlignment(RIGHT);
+    lcd.setForeColor(label);
+    lcd.drawText(info, strlen(info), 930, 144);
+    lcd.setForeColor(kThemeLine);
+    lcd.drawHLine(30, 162, 900);
+
+    // ---- 4. dotted time grid (quarters of the axis)
+    for (uint8_t q = 0; q <= 4; q++) {
+        const uint16_t x = gx + (gw * q) / 4;
+        for (int16_t y = base - hh; y <= base + hh; y += 4) lcd.drawPixel(x, y);
+    }
+
+    // ---- 5. tails: filled columns, brightness fades faster with more damping
+    for (uint16_t i = 0; i < gw; i++) {
+        const float t = (axis * i) / gw;
+        const uint16_t x = gx + i;
+        // Left channel (above the line)
+        const float tl = t - preSec;
+        if (tl >= 0.0f) {
+            const float a = level0 * powf(g, tl / combSeconds);
+            const int16_t h = (int16_t)(a + 0.5f);
+            if (h >= 1) {
+                const float bright = expf(-damp * 3.0f * tl / tail);
+                lcd.setForeColor(page_mix(BLACK, accent, 0.22f + 0.30f * bright));
+                lcd.drawVLine(x, base - h, h);
+                lcd.setForeColor(page_mix(BLACK, accent, 0.55f + 0.45f * bright));
+                lcd.drawPixel(x, base - h);
+                lcd.drawPixel(x, base - h + 1);
+            }
+        }
+        // Right channel (below the line), offset by the surround (stereo width) delay
+        const float tr = t - preSec - widthSec;
+        if (tr >= 0.0f) {
+            const float a = level0 * powf(g, tr / combSeconds);
+            const int16_t h = (int16_t)(a + 0.5f);
+            if (h >= 1) {
+                const float bright = expf(-damp * 3.0f * tr / tail);
+                lcd.setForeColor(page_mix(BLACK, accent, 0.15f + 0.22f * bright));
+                lcd.drawVLine(x, base + 1, h);
+                lcd.setForeColor(page_mix(BLACK, accent, 0.40f + 0.35f * bright));
+                lcd.drawPixel(x, base + h);
+                lcd.drawPixel(x, base + h - 1);
+            }
+        }
+    }
+
+    // ---- 6. early reflections: spacing grows with room size
+    const uint8_t spacing = 3 + (reverb.size * 12) / 100;
+    for (uint8_t i = 0; i < 6; i++) {
+        const uint16_t x = gx + prePx + 4 + (i * spacing);
+        const int16_t hL = (int16_t)(level0 * (0.95f - 0.11f * i));
+        lcd.setForeColor(ink);
+        lcd.drawVLine(x, base - hL, hL);
+        lcd.drawVLine(x + 1, base - hL, hL);
+        lcd.setForeColor(label);
+        lcd.drawVLine(x + widthPx, base + 1, (int16_t)(hL * 0.85f));
+    }
+
+    // ---- 7. centre line, pre-delay marker, labels
+    lcd.setForeColor(ink);
+    lcd.drawHLine(gx, base, gw);
+    if (prePx > 0) {
+        lcd.setForeColor(accent);
+        lcd.drawHLine(gx, base + 3, prePx);
+        lcd.drawHLine(gx, base + 4, prePx);
+    }
+
+    lcd.setFont(FONT_07x09);
+    lcd.setForeColor(label);
+    lcd.setAlignment(LEFT);
+    lcd.drawText("L", 1, gx + gw + 14, base - 40);
+    lcd.drawText("R", 1, gx + gw + 14, base + 32);
+    lcd.setAlignment(CENTER);
+    for (uint8_t q = 0; q <= 4; q++) {
+        char lbl[8];
+        const uint16_t tenths = (uint16_t)((axis * q * 10.0f) / 4.0f + 0.5f);
+        if (q == 0) strcpy(lbl, "0");
+        else if (tenths % 10 == 0) sprintf(lbl, "%us", tenths / 10);
+        else sprintf(lbl, "%u.%us", tenths / 10, tenths % 10);
+        lcd.drawText(lbl, strlen(lbl), gx + (gw * q) / 4, base + hh + 8);
+    }
+
+    // ---- 8. footer hint
+    lcd.setAlignment(LEFT);
+    lcd.setForeColor(kThemeLine);
+    const char hint[] = "PRESS REVERB AGAIN: BACK TO SONG";
+    lcd.drawText(hint, strlen(hint), 30, 436);
+    lcd.setAlignment(RIGHT);
+    const char hint2[] = "KNOBS = BOXES ABOVE / BELOW";
+    lcd.drawText(hint2, strlen(hint2), 930, 436);
 }
 
 bool Controller::sd_showPreviews() {
@@ -7718,6 +7947,9 @@ void Controller::lcd_drawPage(bool animate_) {
 void Controller::lcd_drawAlert() {
     /// @brief Draws alert notification box and message based on current alert type.
 
+    // Custom: alerts sit in the song-grid area; close any page so the alert can be seen.
+    if (page != PAGE_NONE) page_close();
+
     // 1. STYLE SETUP
     // Configure text alignment, font, and colors for alert rendering.
     lcd.setAlignment(CENTER);
@@ -8421,6 +8653,9 @@ void Controller::lcd_clearSignBox(uint8_t menuTab_) {
 
 void Controller::lcd_transitionMenu() {
     /// @brief Applies menu transition cleanup and prepares target menu layout.
+
+    // Custom: leaving a menu closes its full-screen page and brings the song grid back.
+    if (page != PAGE_NONE) page_close();
 
     // 1. PREVIOUS MENU CLEANUP
     // Clear UI artifacts based on previous menu type.
@@ -18043,7 +18278,7 @@ void Controller::reverb_setActive(bool active_) {
 
             // 4. UI & GLOBAL REFRESH
             // Refresh Reverb tab data (if visible) and global summary field.
-            if (menu == REVERB_MENU) lcd_drawReverb_ActiveData();
+            if (menu == REVERB_MENU) lcd_drawReverb_ActiveData(); page_markDirty(PAGE_REVERB);
             lcd_updateGlobalMenuData(ENC_REVERB_ACTIVE);
         }
     }
@@ -18061,7 +18296,7 @@ void Controller::reverb_setSize(uint8_t size_) {
 
         // 3. UI & GLOBAL REFRESH
         // Refresh Reverb tab data (if visible) and global summary field.
-        if (menu == REVERB_MENU) lcd_drawReverb_SizeData();
+        if (menu == REVERB_MENU) lcd_drawReverb_SizeData(); page_markDirty(PAGE_REVERB);
         lcd_updateGlobalMenuData(ENC_REVERB_SIZE);
     }
 }
@@ -18078,7 +18313,7 @@ void Controller::reverb_setDecay(uint8_t decay_) {
 
         // 3. UI & GLOBAL REFRESH
         // Refresh Reverb tab data (if visible) and global summary field.
-        if (menu == REVERB_MENU) lcd_drawReverb_DecayData();
+        if (menu == REVERB_MENU) lcd_drawReverb_DecayData(); page_markDirty(PAGE_REVERB);
         lcd_updateGlobalMenuData(ENC_REVERB_DECAY);
     }
 }
@@ -18095,7 +18330,7 @@ void Controller::reverb_setDamping(uint8_t damping_) {
 
         // 3. UI & GLOBAL REFRESH
         // Refresh Reverb tab data (if visible) and global summary field.
-        if (menu == REVERB_MENU) lcd_drawReverb_DampingData();
+        if (menu == REVERB_MENU) lcd_drawReverb_DampingData(); page_markDirty(PAGE_REVERB);
         lcd_updateGlobalMenuData(ENC_REVERB_DAMPING);
     }
 }
@@ -18127,7 +18362,7 @@ void Controller::reverb_setPreDelay(uint8_t preDelay_) {
 
                 // 5. UI & GLOBAL REFRESH
                 // Refresh Reverb tab data (if visible) and global summary field.
-                if (menu == REVERB_MENU) lcd_drawReverb_PreDelayData();
+                if (menu == REVERB_MENU) lcd_drawReverb_PreDelayData(); page_markDirty(PAGE_REVERB);
                 lcd_updateGlobalMenuData(ENC_REVERB_PREDELAY);
             }
         }
@@ -18161,7 +18396,7 @@ void Controller::reverb_setSurround(uint8_t surround_) {
 
                 // 5. UI & GLOBAL REFRESH
                 // Refresh Reverb tab data (if visible) and global summary field.
-                if (menu == REVERB_MENU) lcd_drawReverb_SurroundData();
+                if (menu == REVERB_MENU) lcd_drawReverb_SurroundData(); page_markDirty(PAGE_REVERB);
                 lcd_updateGlobalMenuData(ENC_REVERB_SURROUND);
             }
         }
@@ -18200,6 +18435,7 @@ void Controller::reverb_setDry(uint8_t dry_) {
         if (menu == REVERB_MENU) {
             lcd_drawReverb_DryData();
             lcd_drawReverb_WetData();
+            page_markDirty(PAGE_REVERB);
         }
         lcd_updateGlobalMenuData(ENC_REVERB_DRY);
         lcd_updateGlobalMenuData(ENC_REVERB_WET);
@@ -18238,6 +18474,7 @@ void Controller::reverb_setWet(uint8_t wet_) {
         if (menu == REVERB_MENU) {
             lcd_drawReverb_DryData();
             lcd_drawReverb_WetData();
+            page_markDirty(PAGE_REVERB);
         }
         lcd_updateGlobalMenuData(ENC_REVERB_DRY);
         lcd_updateGlobalMenuData(ENC_REVERB_WET);

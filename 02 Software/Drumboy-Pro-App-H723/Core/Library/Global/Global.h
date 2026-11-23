@@ -2150,8 +2150,21 @@ const uint8_t kQuantizeOrderSize                    = sizeof(kQuantizeOrder) / s
 
 // SWING (MPC-style): percent of each note pair given to the first note.
 // 50 = straight, 54 = light, 58-62 = classic MPC/Dilla range, 66 = triplet feel, 75 = max.
+// Custom full-screen pages: pressing an effect key again swaps the song grid
+// (the 10 layer lanes) for a picture of that effect. Area = the layer lanes.
+typedef enum {
+    PAGE_NONE                                       = 0x00,
+    PAGE_REVERB                                     = 0x01
+} PageView;
+
+const uint16_t kPageX                               = 20;
+const uint16_t kPageY                               = 131;
+const uint16_t kPageWidth                           = 920;
+const uint16_t kPageHeight                          = 320;
+const uint32_t kPageRedrawIntervalMs                = 40;   // at most ~25 redraws/s while knobs turn
+
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.09 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.10 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;

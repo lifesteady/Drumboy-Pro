@@ -925,6 +925,7 @@ void Lcd::initialize() {
 }
 
 void Lcd::clearScreen() {
+    if (protectActive) return;  // custom: protected page area
     /// @brief Clears the full screen using the current background color.
 
     // 1. BACKGROUND CLEAR
@@ -933,6 +934,7 @@ void Lcd::clearScreen() {
 }
 
 void Lcd::fillScreen() {
+    if (protectActive) return;  // custom: protected page area
     /// @brief Fills the full screen using the current foreground color.
 
     // 1. FOREGROUND FILL
@@ -941,6 +943,7 @@ void Lcd::fillScreen() {
 }
 
 void Lcd::fillScreen(RGB16Color color) {
+    if (protectActive) return;  // custom: protected page area
     /// @brief Fills the full screen with a specified RGB565 color.
 
     // 1. FULL-SCREEN COLOR FILL
@@ -951,6 +954,7 @@ void Lcd::fillScreen(RGB16Color color) {
 }
 
 void Lcd::drawPixel(uint16_t x, uint16_t y) {
+    if (isProtected(x, y, 1, 1)) return;  // custom: protected page area
     /// @brief Draws a single pixel at the given coordinates.
 
     // 1. SINGLE PIXEL DRAW
@@ -967,6 +971,7 @@ void Lcd::drawPixel(uint16_t x, uint16_t y) {
 }
 
 void Lcd::drawHLine(uint16_t x, uint16_t y, int16_t l) {
+    if (isProtected((l < 0) ? (int32_t)x + l : x, y, (l < 0) ? -l : l, 1)) return;  // custom: protected page area
     /// @brief Draws a horizontal line with clipping support.
 
     if (l == 0 || y >= height) return;
@@ -992,6 +997,7 @@ void Lcd::drawHLine(uint16_t x, uint16_t y, int16_t l) {
 }
 
 void Lcd::drawVLine(uint16_t x, uint16_t y, int16_t l) {
+    if (isProtected(x, (l < 0) ? (int32_t)y + l : y, 1, (l < 0) ? -l : l)) return;  // custom: protected page area
     /// @brief Draws a vertical line with clipping support.
 
     if (l == 0 || x >= width) return;
@@ -1017,6 +1023,7 @@ void Lcd::drawVLine(uint16_t x, uint16_t y, int16_t l) {
 }
 
 void Lcd::drawLine(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
+    if (isProtected((x0 < x1) ? x0 : x1, (y0 < y1) ? y0 : y1, ((x0 < x1) ? x1 - x0 : x0 - x1) + 1, ((y0 < y1) ? y1 - y0 : y0 - y1) + 1)) return;  // custom: protected page area
     /// @brief Draws a line segment between two points using Bresenham rasterization.
 
     // 1. BRESENHAM LINE DRAW
@@ -1046,6 +1053,7 @@ void Lcd::drawLine(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
 }
 
 void Lcd::drawRect(uint16_t x, uint16_t y, uint32_t w, uint32_t h) {
+    if (isProtected(x, y, (w > 2000) ? 2000 : w, (h > 2000) ? 2000 : h)) return;  // custom: protected page area
     /// @brief Draws a rectangle outline.
 
     // 1. RECTANGLE OUTLINE DRAW
@@ -1063,6 +1071,7 @@ void Lcd::drawRect(uint16_t x, uint16_t y, uint32_t w, uint32_t h) {
 }
 
 void Lcd::fillRect(uint16_t x, uint16_t y, uint32_t w, uint32_t h) {
+    if (isProtected(x, y, (w > 2000) ? 2000 : w, (h > 2000) ? 2000 : h)) return;  // custom: protected page area
     /// @brief Fills a rectangular area with foreground color.
 
     // 1. RECTANGLE AREA FILL
@@ -1079,6 +1088,7 @@ void Lcd::fillRect(uint16_t x, uint16_t y, uint32_t w, uint32_t h) {
 }
 
 void Lcd::drawCircle(uint16_t x, uint16_t y, uint16_t r) {
+    if (isProtected((int32_t)x - r, (int32_t)y - r, 2 * r + 1, 2 * r + 1)) return;  // custom: protected page area
     /// @brief Draws a circle outline centered at the given coordinates.
 
     // 1. MIDPOINT CIRCLE DRAW
@@ -1251,6 +1261,7 @@ void Lcd::drawHalfCircle(uint16_t x, uint16_t y, uint16_t r, uint8_t half) {
 }
 
 void Lcd::fillCircle(uint16_t x, uint16_t y, uint16_t r) {
+    if (isProtected((int32_t)x - r, (int32_t)y - r, 2 * r + 1, 2 * r + 1)) return;  // custom: protected page area
     /// @brief Fills a circle area centered at the given coordinates.
 
     // 1. CIRCLE AREA FILL
@@ -1396,6 +1407,8 @@ void Lcd::drawText(const char text[], uint16_t textLength, uint16_t x, uint16_t 
             break;
     }
 
+    if (isProtected(xPos, y, wText, hText)) return;  // custom: protected page area
+
     // 4. GLYPH INDEX PRECALCULATION
     // Resolve glyph table index for each character.
     uint8_t letterIndices[textLength];
@@ -1518,6 +1531,7 @@ void Lcd::drawNumber(int32_t num, uint8_t numSize, uint16_t x, uint16_t y) {
 }
 
 void Lcd::clearHLine(uint16_t x, uint16_t y, uint16_t l) {
+    if (isProtected(x, y, l, 1)) return;  // custom: protected page area
     /// @brief Clears a horizontal segment using background color.
 
     // 1. HORIZONTAL CLEAR
@@ -1531,6 +1545,7 @@ void Lcd::clearHLine(uint16_t x, uint16_t y, uint16_t l) {
 }
 
 void Lcd::clearVLine(uint16_t x, uint16_t y, uint16_t l) {
+    if (isProtected(x, y, 1, l)) return;  // custom: protected page area
     /// @brief Clears a vertical segment using background color.
 
     // 1. VERTICAL CLEAR
@@ -1544,6 +1559,7 @@ void Lcd::clearVLine(uint16_t x, uint16_t y, uint16_t l) {
 }
 
 void Lcd::clearRect(uint16_t x, uint16_t y, uint32_t w, uint32_t h) {
+    if (isProtected(x, y, (w > 2000) ? 2000 : w, (h > 2000) ? 2000 : h)) return;  // custom: protected page area
     /// @brief Clears a rectangular region using background color.
 
     // 1. RECTANGLE CLEAR
@@ -1560,6 +1576,7 @@ void Lcd::clearRect(uint16_t x, uint16_t y, uint32_t w, uint32_t h) {
 }
 
 void Lcd::drawRGB16Image(const RGB16Color* indexPtr, const uint8_t* pixelPtr, uint8_t indexSize, uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
+    if (isProtected(x, y, w, h)) return;  // custom: protected page area
     /// @brief Draws an indexed RGB565 image.
 
     // 1. DRAW WINDOW SETUP
@@ -1589,6 +1606,7 @@ void Lcd::drawRGB16Image(const RGB16Color* indexPtr, const uint8_t* pixelPtr, ui
 }
 
 void Lcd::drawRGB16Image(const RGB16Color* indexPtr, const uint8_t* pixelPtr, uint8_t indexSize, uint8_t alpha, uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
+    if (isProtected(x, y, w, h)) return;  // custom: protected page area
     /// @brief Draws an indexed RGB565 image with alpha applied to its palette.
 
     // 1. PALETTE ALPHA PRECOMPUTE
@@ -1623,6 +1641,7 @@ void Lcd::drawRGB16Image(const RGB16Color* indexPtr, const uint8_t* pixelPtr, ui
 }
 
 void Lcd::drawRGB16ImagePartial(const RGB16Color* indexPtr, const uint8_t* pixelPtr, uint8_t indexSize, uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t xStart, uint16_t xWidth) {
+    if (isProtected(x, y, w, h)) return;  // custom: protected page area
     /// @brief Draws a horizontal slice of an indexed RGB565 image.
 
     // 1. SOURCE RANGE CLAMP
@@ -1656,6 +1675,7 @@ void Lcd::drawRGB16ImagePartial(const RGB16Color* indexPtr, const uint8_t* pixel
 }
 
 void Lcd::drawRGB24Image(const RGB24RawColor* indexPtr, const uint8_t* pixelPtr, uint8_t indexSize, uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
+    if (isProtected(x, y, w, h)) return;  // custom: protected page area
     /// @brief Draws an indexed RGB24 image after RGB565 conversion.
 
     // 1. PALETTE COLOR CONVERSION
@@ -1690,6 +1710,7 @@ void Lcd::drawRGB24Image(const RGB24RawColor* indexPtr, const uint8_t* pixelPtr,
 }
 
 void Lcd::drawRGB24Image(const RGB24RawColor* indexPtr, const uint8_t* pixelPtr, uint8_t indexSize, uint8_t alpha, uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
+    if (isProtected(x, y, w, h)) return;  // custom: protected page area
     /// @brief Draws an indexed RGB24 image with alpha-adjusted palette conversion.
 
     // 1. PALETTE ALPHA CONVERSION
@@ -1724,6 +1745,7 @@ void Lcd::drawRGB24Image(const RGB24RawColor* indexPtr, const uint8_t* pixelPtr,
 }
 
 void Lcd::fadeRGB16Image(const RGB16Color* indexPtr, const uint8_t* pixelPtr, uint8_t indexSize, uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool mode, uint8_t step, uint16_t delay) {
+    if (isProtected(x, y, w, h)) return;  // custom: protected page area
     /// @brief Fades an indexed RGB565 image in or out over multiple steps.
 
     // 1. WORKSPACE PREPARATION
@@ -1767,6 +1789,7 @@ void Lcd::fadeRGB16Image(const RGB16Color* indexPtr, const uint8_t* pixelPtr, ui
 }
 
 void Lcd::fadeRGB24Image(const RGB24RawColor* indexPtr, const uint8_t* pixelPtr, uint8_t indexSize, uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool mode, uint8_t step, uint16_t delay) {
+    if (isProtected(x, y, w, h)) return;  // custom: protected page area
     /// @brief Fades an indexed RGB24 image in or out over multiple steps.
 
     // 1. WORKSPACE PREPARATION

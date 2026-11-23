@@ -35,6 +35,12 @@ class Lcd {
     uint16_t fontWidth;                                                 // Glyph width for selected font
     uint16_t fontHeight;                                                // Glyph height for selected font
 
+    /* Custom: protected area (full-screen pages) ---------------- */
+    // While active, any drawing that touches this rectangle is skipped, so background
+    // UI updates can't scribble over a page. The page itself drops protection to draw.
+    bool protectActive = false;
+    uint16_t protectX0 = 0, protectY0 = 0, protectX1 = 0, protectY1 = 0;
+
     /* Low-Level Bus Primitives ---------------------------------- */
 
     ALWAYSINLINE void writeCommand(uint16_t command) {
@@ -136,6 +142,20 @@ class Lcd {
     void drawNumber(int32_t num, uint8_t numSize, uint16_t x, uint16_t y);
 
     /* Display Control Functions --------------------------------- */
+
+    /* Custom: protected area ----------------------------------- */
+
+    void setProtect(bool on_, uint16_t x_ = 0, uint16_t y_ = 0, uint16_t w_ = 0, uint16_t h_ = 0) {
+        protectActive = on_ && (w_ > 0) && (h_ > 0);
+        protectX0 = x_; protectY0 = y_; protectX1 = x_ + w_ - 1; protectY1 = y_ + h_ - 1;
+    }
+    bool getProtect() const { return protectActive; }
+    bool isProtected(int32_t x_, int32_t y_, int32_t w_, int32_t h_) const {
+        if (!protectActive || (w_ <= 0) || (h_ <= 0)) return false;
+        return !((x_ + w_ - 1 < protectX0) || (x_ > protectX1) || (y_ + h_ - 1 < protectY0) || (y_ > protectY1));
+    }
+    uint16_t getFontWidth() const { return fontWidth; }
+    uint16_t getFontHeight() const { return fontHeight; }
 
     void invertDisplay(bool invert);
     void displayOn();
