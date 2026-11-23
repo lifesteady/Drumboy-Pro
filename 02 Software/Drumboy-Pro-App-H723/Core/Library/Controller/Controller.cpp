@@ -14399,16 +14399,8 @@ void Controller::rhythm_menuUp() {
 
             // Quantize edits are blocked when quantize lock is enabled.
             if (!rhythm.quantizeLock) {
-                if (rhythm_stepQuantize(rhythm.quantize, true) != rhythm.quantize) {
-                    // During playback, show alert instead of altering quantize grid.
-                    if (playActive) {
-                        alertFlag = true;
-                        alertType = ALERT_QUANTIZEUP;
-                        lcd_drawAlert();
-                    } else {
-                        rhythm_setQuantize(rhythm_stepQuantize(rhythm.quantize, true));
-                    }
-                }
+                // Safe to change any time now (it only affects new recordings), even while playing.
+                rhythm_setQuantize(rhythm_stepQuantize(rhythm.quantize, true));
             }
             break;
 
@@ -14476,16 +14468,8 @@ void Controller::rhythm_menuDown() {
 
             // Quantize edits are blocked when quantize lock is enabled.
             if (!rhythm.quantizeLock) {
-                if (rhythm_stepQuantize(rhythm.quantize, false) != rhythm.quantize) {
-                    // During playback, show alert instead of altering quantize grid.
-                    if (playActive) {
-                        alertFlag = true;
-                        alertType = ALERT_QUANTIZEDOWN;
-                        lcd_drawAlert();
-                    } else {
-                        rhythm_setQuantize(rhythm_stepQuantize(rhythm.quantize, false));
-                    }
-                }
+                // Safe to change any time now (it only affects new recordings), even while playing.
+                rhythm_setQuantize(rhythm_stepQuantize(rhythm.quantize, false));
             }
             break;
 
@@ -14638,37 +14622,15 @@ uint16_t Controller::rhythm_snapToGrid(uint16_t interval_, int8_t stepOffset_) {
 }
 
 void Controller::rhythm_setQuantize(uint8_t quantize_) {
-    /// @brief Sets quantize grid and re-quantizes active song beats across banks.
+    /// @brief Sets the quantize grid used for NEW recordings and note nudges (MPC-style).
+    /// Stock firmware also re-snapped every recorded note in every bank and reset playback
+    /// on each change, so scrolling through 1:2 / 1:1 permanently merged a whole take into
+    /// one hit per bar. Existing notes are now left exactly where they are.
 
-    // 1. INPUT VALIDATION
-    // Accept only values inside configured quantize limits.
     if ((quantize_ >= kMinQuantize) && (quantize_ <= kMaxQuantize)) {
-        // 2. DATA UPDATE
-        // Store quantize resolution value.
         rhythm.quantize = quantize_;
-
-        // 3. RHYTHM UI REFRESH
-        // Refresh quantize field when Rhythm menu is active.
         if (menu == RHYTHM_MENU)
             lcd_drawRhythm_QuantizeData();
-
-        // 4. BEAT DATA RE-QUANTIZATION
-        // Recompute active beat positions for all layers and banks.
-        for (uint8_t i = 0; i < kLayerLibrarySize; i++) {
-            for (uint8_t j = 0; j < kBankLibrarySize; j++) {
-                layerSong_quantizeActiveBeats(i, j);
-            }
-        }
-
-        // 5. SONG UI REPAINT
-        // Redraw layer lanes so quantized beat positions are visible.
-        for (uint8_t j = 0; j < kLayerLibrarySize; j++) {
-            lcd_drawSong(j, activeSongBank);
-        }
-
-        // 6. TRANSPORT RESET
-        // Restart playback state to apply new quantize grid safely.
-        reset();
     }
 }
 
@@ -21043,7 +21005,8 @@ void Controller::layerSong_shiftSelectedBeat(bool direction_) {
     // 1. DIRECTIONAL SHIFT APPLY
     // Shift forward/backward when neighbor and boundary constraints allow.
     if (direction_) {
-        uint16_t newInterval = rhythm_snapToGrid(interval, 1);
+        uint16_t nearest = rhythm_snapToGrid(interval);
+        uint16_t newInterval = (nearest > interval) ? nearest : rhythm_snapToGrid(interval, 1);
         if (((selectedBeatNum == bank.lastActiveBeatNum) && (newInterval < songInterval)) || ((selectedBeatNum < bank.lastActiveBeatNum) && (newInterval < bank.beatLibrary[selectedBeatNum + 1].getStartInterval()))) {
             // Extend previous beat
             if (selectedBeatNum > 0) {
@@ -21059,7 +21022,8 @@ void Controller::layerSong_shiftSelectedBeat(bool direction_) {
             layerSong_setSelectedBeatFill(0, 0, 0, 0);
         }
     } else if (interval > 0) {
-        uint16_t newInterval = rhythm_snapToGrid(interval, -1);
+        uint16_t nearest = rhythm_snapToGrid(interval);
+        uint16_t newInterval = (nearest < interval) ? nearest : rhythm_snapToGrid(interval, -1);
         if (((selectedBeatNum == 0) && (newInterval >= 0)) || ((selectedBeatNum > 0) && (newInterval > bank.beatLibrary[selectedBeatNum - 1].getStartInterval()))) {
             // Shrink previous beat
             if (selectedBeatNum > 0) {
