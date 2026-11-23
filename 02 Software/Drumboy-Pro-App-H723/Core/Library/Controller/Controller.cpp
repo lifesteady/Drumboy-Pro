@@ -5272,18 +5272,18 @@ void Controller::page_drawReverb() {
         const char hint[] = "PRESS REVERB AGAIN: BACK TO SONG";
         lcd.drawText(hint, strlen(hint), 30, 436);
         lcd.setAlignment(RIGHT);
-        const char hint2[] = "KNOBS = BOXES ABOVE / BELOW";
+        const char hint2[] = "KNOBS: BOXES ABOVE / BELOW";
         lcd.drawText(hint2, strlen(hint2), 930, 436);
         pageFullRedraw = false;
     }
 
     // ---- 4. header (fixed-width text, so shorter values never leave old characters behind)
+    // Title: big accent text on black (black-on-orange lost contrast on the real panel).
     lcd.setFont(FONT_14x18);
     lcd.setAlignment(LEFT);
-    lcd.setForeColor(BLACK);
-    lcd.setBackColor(on ? kThemeAccent : kThemeLine);
-    lcd.drawText(on ? " REVERB     " : " REVERB OFF ", 12, 30, 138);
     lcd.setBackColor(BLACK);
+    lcd.setForeColor(on ? kThemeAccent : kThemeMid);
+    lcd.drawText(on ? "REVERB    " : "REVERB OFF", 10, 30, 139);
 
     char info[48];
     const uint16_t tailT = (uint16_t)(tail * 10.0f + 0.5f);
@@ -5296,10 +5296,11 @@ void Controller::page_drawReverb() {
     lcd.drawText(info, strlen(info), 930, 144);
 
     // ---- 5. columns: each pixel of the graph written once per redraw (black, fill, edge)
-    const RGB16Color fillL = page_mix(BLACK, accent, 0.45f);
-    const RGB16Color fillLHf = page_mix(BLACK, amber, 0.60f);
-    const RGB16Color fillR = page_mix(BLACK, accent, 0.30f);
-    const RGB16Color fillRHf = page_mix(BLACK, amber, 0.40f);
+    // Fills kept dark: the real panel shows these much more saturated than a monitor.
+    const RGB16Color fillL = page_mix(BLACK, accent, 0.30f);
+    const RGB16Color fillLHf = page_mix(BLACK, amber, 0.34f);
+    const RGB16Color fillR = page_mix(BLACK, accent, 0.20f);
+    const RGB16Color fillRHf = page_mix(BLACK, amber, 0.24f);
     const RGB16Color edgeR = page_mix(BLACK, accent, 0.75f);
     for (uint16_t i = 0; i < gw; i++) {
         const float t = (axis * i) / gw;
