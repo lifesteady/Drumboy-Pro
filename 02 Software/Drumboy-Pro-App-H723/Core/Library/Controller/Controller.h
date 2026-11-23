@@ -187,6 +187,7 @@ class Controller {
     uint32_t swingTimerPeriod;                                          // Period currently loaded into TIM15 (straight or swung)
     PageView page = PAGE_NONE;                                          // Custom full-screen page currently shown
     bool pageDirty = false;                                             // Page needs a redraw
+    bool pageFullRedraw = false;                                        // Next draw clears and draws static parts
     uint32_t pageLastDrawTick = 0;                                      // Rate limit for page redraws
     uint32_t measureTimerPeriod;                                        // Calculated period for hardware Measure Pulse
 

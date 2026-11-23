@@ -2164,7 +2164,7 @@ const uint16_t kPageHeight                          = 320;
 const uint32_t kPageRedrawIntervalMs                = 40;   // at most ~25 redraws/s while knobs turn
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.10 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.11 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;

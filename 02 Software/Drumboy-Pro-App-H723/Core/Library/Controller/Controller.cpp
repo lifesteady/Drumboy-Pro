@@ -5147,6 +5147,7 @@ void Controller::page_open(PageView page_) {
     /// @brief Shows a full-screen page over the song grid and protects it from background drawing.
     if (page_ == PAGE_NONE) return;
     page = page_;
+    pageFullRedraw = true;
     lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
     page_draw();
 }
@@ -5211,115 +5212,138 @@ void Controller::page_draw() {
 }
 
 void Controller::page_drawReverb() {
-    /// @brief Reverb page: stereo decay tail computed from the real reverb settings.
-    /// The tail time is the reverb's actual 60 dB decay: 8 Freeverb-style combs averaging
-    /// ~1378 samples (31 ms) with feedback g = 0.70 + 0.15*size + 0.13*decay.
+    /// @brief Reverb page: stereo decay drawn in decibels on a fixed 0-4 s axis, so a longer tail
+    /// is visibly longer. Tail = the reverb's real 60 dB decay time: 8 Freeverb-style combs
+    /// averaging ~1378 samples (31 ms) with feedback g = 0.70 + 0.15*size + 0.13*decay.
+    /// Amber inner tail = high frequencies, which die sooner as damping goes up.
+    /// Redraws column by column (no full clear) so turning knobs doesn't flash.
 
     const bool on = reverb.active;
     const RGB16Color ink = on ? kThemeInk : kThemeMid;
     const RGB16Color accent = on ? kThemeAccent : kThemeLine;
+    const RGB16Color amber = on ? kThemeAmber : kThemeMid;
     const RGB16Color label = kThemeHeader;
 
     // ---- 1. numbers from the real settings
     const float g = 0.70f + (0.15f * reverb.size / 100.0f) + (0.13f * reverb.decay / 100.0f);
     const float combSeconds = 1378.0f / 44100.0f;
     const float tail = (-3.0f / log10f(g)) * combSeconds;                   // seconds to -60 dB
+    const float tailHf = tail * (1.0f - 0.75f * reverb.damping / 100.0f);    // highs die sooner
     const float preSec = kReverbPreDelayDataLibrary[reverb.preDelay].data;   // 0 .. 0.1 s
     const float widthSec = kReverbSurroundDataLibrary[reverb.surround].data; // 0 .. 0.02 s
-    const float axisChoices[] = {0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 6.0f, 8.0f, 12.0f};
-    float axis = 12.0f;
-    for (uint8_t i = 0; i < 9; i++) {
-        if (axisChoices[i] >= (tail + preSec) * 1.05f) { axis = axisChoices[i]; break; }
-    }
+    const float axis = 4.0f;                                                 // fixed: changes are visible
 
     // ---- 2. layout
     const uint16_t gx = 70, gw = 800;          // graph x, width
     const uint16_t base = 290;                 // centre line (L above, R below)
     const uint16_t hh = 98;                    // max height each side
-    const float wetScale = 0.25f + (0.75f * reverb.wet / 100.0f);
-    const float level0 = hh * wetScale;
-    const float damp = reverb.damping / 100.0f;
+    const float level0 = hh * (0.30f + (0.70f * reverb.wet / 100.0f));
     int16_t prePx = (int16_t)((preSec / axis) * gw);
     if ((reverb.preDelay > 0) && (prePx < 3)) prePx = 3;
-    int16_t widthPx = (int16_t)((widthSec / axis) * gw);
-    if ((reverb.surround > 0) && (widthPx < 2)) widthPx = 2;
+    const int16_t widthPx = reverb.surround * 3;  // exaggerated x3 px per step so width is visible
 
-    lcd.setBackColor(BLACK);
-    lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
+    // ---- 3. static parts only on first draw (page just opened)
+    if (pageFullRedraw) {
+        lcd.setBackColor(BLACK);
+        lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
+        lcd.setForeColor(kThemeLine);
+        lcd.drawHLine(30, 162, 900);
+        lcd.setFont(FONT_07x09);
+        lcd.setForeColor(label);
+        lcd.setAlignment(LEFT);
+        lcd.drawText("L", 1, gx + gw + 14, base - 40);
+        lcd.drawText("R", 1, gx + gw + 14, base + 32);
+        lcd.setAlignment(CENTER);
+        const char* ticks[] = {"0", "1s", "2s", "3s", "4s"};
+        for (uint8_t q = 0; q <= 4; q++) lcd.drawText(ticks[q], strlen(ticks[q]), gx + (gw * q) / 4, base + hh + 8);
+        lcd.setAlignment(LEFT);
+        lcd.setForeColor(kThemeLine);
+        const char hint[] = "PRESS REVERB AGAIN: BACK TO SONG";
+        lcd.drawText(hint, strlen(hint), 30, 436);
+        lcd.setAlignment(RIGHT);
+        const char hint2[] = "KNOBS = BOXES ABOVE / BELOW";
+        lcd.drawText(hint2, strlen(hint2), 930, 436);
+        pageFullRedraw = false;
+    }
 
-    // ---- 3. header: REVERB tag + summary
+    // ---- 4. header (fixed-width text, so shorter values never leave old characters behind)
     lcd.setFont(FONT_14x18);
     lcd.setAlignment(LEFT);
-    const char* title = on ? " REVERB " : " REVERB OFF ";
     lcd.setForeColor(BLACK);
     lcd.setBackColor(on ? kThemeAccent : kThemeLine);
-    lcd.drawText(title, strlen(title), 30, 138);
+    lcd.drawText(on ? " REVERB     " : " REVERB OFF ", 12, 30, 138);
     lcd.setBackColor(BLACK);
 
-    char info[64];
-    const uint16_t tailTenths = (uint16_t)(tail * 10.0f + 0.5f);
-    sprintf(info, "TAIL %u.%us  PRE %ums  WIDTH %ums  WET %u", tailTenths / 10, tailTenths % 10,
-            (unsigned)(preSec * 1000.0f + 0.5f), (unsigned)(widthSec * 1000.0f + 0.5f), reverb.wet);
+    char info[48];
+    const uint16_t tailT = (uint16_t)(tail * 10.0f + 0.5f);
+    const uint16_t hfT = (uint16_t)(tailHf * 10.0f + 0.5f);
+    snprintf(info, sizeof(info), "TAIL %2u.%us  HIGHS %2u.%us  PRE %3ums  WET %3u", tailT / 10, tailT % 10,
+             hfT / 10, hfT % 10, (unsigned)(preSec * 1000.0f + 0.5f), reverb.wet);
     lcd.setFont(FONT_07x09);
     lcd.setAlignment(RIGHT);
     lcd.setForeColor(label);
     lcd.drawText(info, strlen(info), 930, 144);
-    lcd.setForeColor(kThemeLine);
-    lcd.drawHLine(30, 162, 900);
 
-    // ---- 4. dotted time grid (quarters of the axis)
-    for (uint8_t q = 0; q <= 4; q++) {
-        const uint16_t x = gx + (gw * q) / 4;
-        for (int16_t y = base - hh; y <= base + hh; y += 4) lcd.drawPixel(x, y);
-    }
-
-    // ---- 5. tails: filled columns, brightness fades faster with more damping
+    // ---- 5. columns: each pixel of the graph written once per redraw (black, fill, edge)
+    const RGB16Color fillL = page_mix(BLACK, accent, 0.45f);
+    const RGB16Color fillLHf = page_mix(BLACK, amber, 0.60f);
+    const RGB16Color fillR = page_mix(BLACK, accent, 0.30f);
+    const RGB16Color fillRHf = page_mix(BLACK, amber, 0.40f);
+    const RGB16Color edgeR = page_mix(BLACK, accent, 0.75f);
     for (uint16_t i = 0; i < gw; i++) {
         const float t = (axis * i) / gw;
         const uint16_t x = gx + i;
-        // Left channel (above the line)
+        const bool gridCol = ((i % (gw / 4)) == 0);
+
+        // Linear in dB: full level at the start of the tail, silence (-60 dB) at its end.
         const float tl = t - preSec;
+        const float tr = t - preSec - (widthPx * axis / gw);
+        int16_t hL = 0, hLHf = 0, hR = 0, hRHf = 0;
         if (tl >= 0.0f) {
-            const float a = level0 * powf(g, tl / combSeconds);
-            const int16_t h = (int16_t)(a + 0.5f);
-            if (h >= 1) {
-                const float bright = expf(-damp * 3.0f * tl / tail);
-                lcd.setForeColor(page_mix(BLACK, accent, 0.22f + 0.30f * bright));
-                lcd.drawVLine(x, base - h, h);
-                lcd.setForeColor(page_mix(BLACK, accent, 0.55f + 0.45f * bright));
-                lcd.drawPixel(x, base - h);
-                lcd.drawPixel(x, base - h + 1);
-            }
+            if (tl < tail) hL = (int16_t)(level0 * (1.0f - tl / tail) + 0.5f);
+            if (tl < tailHf) hLHf = (int16_t)(level0 * (1.0f - tl / tailHf) + 0.5f);
         }
-        // Right channel (below the line), offset by the surround (stereo width) delay
-        const float tr = t - preSec - widthSec;
         if (tr >= 0.0f) {
-            const float a = level0 * powf(g, tr / combSeconds);
-            const int16_t h = (int16_t)(a + 0.5f);
-            if (h >= 1) {
-                const float bright = expf(-damp * 3.0f * tr / tail);
-                lcd.setForeColor(page_mix(BLACK, accent, 0.15f + 0.22f * bright));
-                lcd.drawVLine(x, base + 1, h);
-                lcd.setForeColor(page_mix(BLACK, accent, 0.40f + 0.35f * bright));
-                lcd.drawPixel(x, base + h);
-                lcd.drawPixel(x, base + h - 1);
-            }
+            if (tr < tail) hR = (int16_t)(level0 * (1.0f - tr / tail) + 0.5f);
+            if (tr < tailHf) hRHf = (int16_t)(level0 * (1.0f - tr / tailHf) + 0.5f);
+        }
+
+        // Upper half (L): black space, outer tail, inner high-frequency tail, edge
+        lcd.setForeColor(BLACK);
+        if (hh - hL > 0) lcd.drawVLine(x, base - hh, hh - hL);
+        if (hL - hLHf > 0) { lcd.setForeColor(fillL); lcd.drawVLine(x, base - hL, hL - hLHf); }
+        if (hLHf > 0) { lcd.setForeColor(fillLHf); lcd.drawVLine(x, base - hLHf, hLHf); }
+        if (hL > 0) { lcd.setForeColor(accent); lcd.drawPixel(x, base - hL); lcd.drawPixel(x, base - hL + 1); }
+
+        // Lower half (R), mirrored
+        lcd.setForeColor(BLACK);
+        if (hh - hR > 0) lcd.drawVLine(x, base + 1 + hR, hh - hR);
+        if (hRHf > 0) { lcd.setForeColor(fillRHf); lcd.drawVLine(x, base + 1, hRHf); }
+        if (hR - hRHf > 0) { lcd.setForeColor(fillR); lcd.drawVLine(x, base + 1 + hRHf, hR - hRHf); }
+        if (hR > 0) { lcd.setForeColor(edgeR); lcd.drawPixel(x, base + hR); lcd.drawPixel(x, base + hR - 1); }
+
+        // Dotted second markers, only over empty space
+        if (gridCol) {
+            lcd.setForeColor(kThemeLine);
+            for (int16_t y = base - hh; y < base - hL; y += 4) lcd.drawPixel(x, y);
+            for (int16_t y = base + hh; y > base + hR + 1; y -= 4) lcd.drawPixel(x, y);
         }
     }
 
-    // ---- 6. early reflections: spacing grows with room size
-    const uint8_t spacing = 3 + (reverb.size * 12) / 100;
-    for (uint8_t i = 0; i < 6; i++) {
+    // ---- 6. early reflections: count and spread grow with room size
+    const uint8_t spacing = 3 + (reverb.size * 25) / 100;   // 3 .. 28 px
+    for (uint8_t i = 0; i < 8; i++) {
         const uint16_t x = gx + prePx + 4 + (i * spacing);
-        const int16_t hL = (int16_t)(level0 * (0.95f - 0.11f * i));
+        const int16_t hER = (int16_t)(level0 * (0.98f - 0.09f * i));
+        if ((x + widthPx + 1) >= (gx + gw) || hER <= 0) break;
         lcd.setForeColor(ink);
-        lcd.drawVLine(x, base - hL, hL);
-        lcd.drawVLine(x + 1, base - hL, hL);
+        lcd.drawVLine(x, base - hER, hER);
+        lcd.drawVLine(x + 1, base - hER, hER);
         lcd.setForeColor(label);
-        lcd.drawVLine(x + widthPx, base + 1, (int16_t)(hL * 0.85f));
+        lcd.drawVLine(x + widthPx, base + 1, (int16_t)(hER * 0.9f));
     }
 
-    // ---- 7. centre line, pre-delay marker, labels
+    // ---- 7. centre line, pre-delay marker, "runs past 4 s" marker
     lcd.setForeColor(ink);
     lcd.drawHLine(gx, base, gw);
     if (prePx > 0) {
@@ -5327,30 +5351,10 @@ void Controller::page_drawReverb() {
         lcd.drawHLine(gx, base + 3, prePx);
         lcd.drawHLine(gx, base + 4, prePx);
     }
-
     lcd.setFont(FONT_07x09);
-    lcd.setForeColor(label);
-    lcd.setAlignment(LEFT);
-    lcd.drawText("L", 1, gx + gw + 14, base - 40);
-    lcd.drawText("R", 1, gx + gw + 14, base + 32);
-    lcd.setAlignment(CENTER);
-    for (uint8_t q = 0; q <= 4; q++) {
-        char lbl[8];
-        const uint16_t tenths = (uint16_t)((axis * q * 10.0f) / 4.0f + 0.5f);
-        if (q == 0) strcpy(lbl, "0");
-        else if (tenths % 10 == 0) sprintf(lbl, "%us", tenths / 10);
-        else sprintf(lbl, "%u.%us", tenths / 10, tenths % 10);
-        lcd.drawText(lbl, strlen(lbl), gx + (gw * q) / 4, base + hh + 8);
-    }
-
-    // ---- 8. footer hint
-    lcd.setAlignment(LEFT);
-    lcd.setForeColor(kThemeLine);
-    const char hint[] = "PRESS REVERB AGAIN: BACK TO SONG";
-    lcd.drawText(hint, strlen(hint), 30, 436);
     lcd.setAlignment(RIGHT);
-    const char hint2[] = "KNOBS = BOXES ABOVE / BELOW";
-    lcd.drawText(hint2, strlen(hint2), 930, 436);
+    lcd.setForeColor((tail + preSec > axis) ? accent : BLACK);
+    lcd.drawText(">>", 2, gx + gw, base - hh - 2);
 }
 
 bool Controller::sd_showPreviews() {
