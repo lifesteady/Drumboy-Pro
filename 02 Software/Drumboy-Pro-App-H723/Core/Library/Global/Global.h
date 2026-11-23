@@ -2096,7 +2096,7 @@ const uint8_t kQuantizeOrderSize                    = sizeof(kQuantizeOrder) / s
 // SWING (MPC-style): percent of each note pair given to the first note.
 // 50 = straight, 54 = light, 58-62 = classic MPC/Dilla range, 66 = triplet feel, 75 = max.
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.04 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.05 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;

@@ -12651,20 +12651,29 @@ void Controller::lcd_drawBeat(uint8_t layerNum_, uint8_t bankNum_, uint8_t beatN
             uint16_t startInterval = beat.getStartInterval();
             uint16_t endInterval = beat.getEndInterval();
             uint16_t xStart = kSongX + (startInterval * kSongWidth / songInterval);
-            uint16_t xEnd = kSongX + (endInterval * kSongWidth / songInterval) - 2;
             uint16_t yStart = kImageLayerY[layerNum_] + kSongOffsetY;
+
+            // FIX: two hits closer than ~2 pixels (easy with quantize OFF, or 1:64 on long songs)
+            // made (xEnd - xStart) negative. Passed to the LCD as a uint32 width, that became
+            // ~4 billion pixels: the screen and keys froze for minutes while it "drew".
+            // Work in signed math and never let a width go below 1 pixel.
+            int32_t xEndSigned = (int32_t)kSongX + ((int32_t)endInterval * kSongWidth / songInterval) - 2;
+            if (xEndSigned < (int32_t)xStart) xEndSigned = xStart;
+            uint16_t xEnd = (uint16_t)xEndSigned;
+            uint32_t clearWidth = (uint32_t)(xEnd - xStart) + 1;      // >= 1
+            uint32_t fillWidth = (xEnd > xStart) ? (uint32_t)(xEnd - xStart) : 1;
 
             // Draw beat shape based on fill type
             if ((fillType == 0) && (fillPattern < 2)) {
-                lcd.clearRect(xStart, yStart, xEnd - xStart + 1, kSongHeight);
+                lcd.clearRect(xStart, yStart, clearWidth, kSongHeight);
                 lcd.drawRect(xStart, yStart, 2, kSongHeight);
             } else if ((fillType == 0) && (fillPattern == 2)) {
-                lcd.clearRect(xStart, yStart, xEnd - xStart + 1, kSongHeight);
+                lcd.clearRect(xStart, yStart, clearWidth, kSongHeight);
                 for (uint8_t i = 0; i < 4; i++) {
                     lcd.drawPixel(xStart, yStart + (i * 3));
                 }
             } else {
-                lcd.fillRect(xStart, yStart, xEnd - xStart, kSongHeight);
+                lcd.fillRect(xStart, yStart, fillWidth, kSongHeight);
             }
         }
     }
@@ -12691,7 +12700,7 @@ void Controller::lcd_clearBeat(uint8_t layerNum_, uint8_t bankNum_, uint8_t beat
         // 3. REGION CLEAR
         // Clear beat rectangle to background color.
         lcd.setBackColor(BLACK);
-        lcd.clearRect(xStart, yStart, xEnd - xStart, (kSongHeight + 1));
+        if (xEnd > xStart) lcd.clearRect(xStart, yStart, xEnd - xStart, (kSongHeight + 1));  // skip zero-width
     }
 }
 
@@ -12752,7 +12761,7 @@ void Controller::lcd_clearInterval(uint8_t layerNum_, uint8_t bankNum_, uint16_t
         // 3. SEGMENT CLEAR
         // Clear requested sub-region in lane.
         lcd.setBackColor(BLACK);
-        lcd.clearRect(xStart, yStart, xEnd - xStart, kSongHeight + 1);
+        if (xEnd > xStart) lcd.clearRect(xStart, yStart, xEnd - xStart, kSongHeight + 1);  // skip zero-width
     }
 }
 

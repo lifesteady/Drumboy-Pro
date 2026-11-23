@@ -1050,9 +1050,11 @@ void Lcd::drawRect(uint16_t x, uint16_t y, uint32_t w, uint32_t h) {
 
     // 1. RECTANGLE OUTLINE DRAW
     // Draw rectangle border using four line primitives.
-    if ((x < width) && (y < height)) {
-        if ((x + w - 1) >= width) w = width - x;
-        if ((y + h - 1) >= height) h = height - y;
+    // Overflow-safe clipping: a huge or wrapped-around width/height is clamped to the screen
+    // instead of wrapping (which used to mean billions of pixels and a frozen UI).
+    if ((x < width) && (y < height) && (w > 0) && (h > 0)) {
+        if (w > (uint32_t)(width - x)) w = width - x;
+        if (h > (uint32_t)(height - y)) h = height - y;
         drawHLine(x, y, w);
         drawHLine(x, y + h - 1, w);
         drawVLine(x, y, h);
@@ -1065,9 +1067,11 @@ void Lcd::fillRect(uint16_t x, uint16_t y, uint32_t w, uint32_t h) {
 
     // 1. RECTANGLE AREA FILL
     // Fill rectangle interior with foreground color.
-    if ((x < width) && (y < height)) {
-        if ((x + w - 1) >= width) w = width - x;
-        if ((y + h - 1) >= height) h = height - y;
+    // Overflow-safe clipping: a huge or wrapped-around width/height is clamped to the screen
+    // instead of wrapping (which used to mean billions of pixels and a frozen UI).
+    if ((x < width) && (y < height) && (w > 0) && (h > 0)) {
+        if (w > (uint32_t)(width - x)) w = width - x;
+        if (h > (uint32_t)(height - y)) h = height - y;
         setAddressWindow(x, y, x + w - 1, y + h - 1);
         LCD_RS_HIGH;
         fastFill(foreColor, w * h);
@@ -1544,9 +1548,11 @@ void Lcd::clearRect(uint16_t x, uint16_t y, uint32_t w, uint32_t h) {
 
     // 1. RECTANGLE CLEAR
     // Clear rectangle region with background color.
-    if ((x < width) && (y < height)) {
-        if ((x + w - 1) >= width) w = width - x;
-        if ((y + h - 1) >= height) h = height - y;
+    // Overflow-safe clipping: a huge or wrapped-around width/height is clamped to the screen
+    // instead of wrapping (which used to mean billions of pixels and a frozen UI).
+    if ((x < width) && (y < height) && (w > 0) && (h > 0)) {
+        if (w > (uint32_t)(width - x)) w = width - x;
+        if (h > (uint32_t)(height - y)) h = height - y;
         setAddressWindow(x, y, x + w - 1, y + h - 1);
         LCD_RS_HIGH;
         fastFill(backColor, w * h);
