@@ -7809,7 +7809,7 @@ void Controller::lcd_drawSdDataIntro() {
 
     // 2. INTRO MESSAGE DRAW
     // Render static SD analyze text.
-    lcd.drawText("[ ANALYZING SDCARD ]", 20, 480, kSdDataY);
+    lcd.drawText(kFirmwareBootText, strlen(kFirmwareBootText), 480, kSdDataY);
 }
 
 void Controller::lcd_drawSdData() {
@@ -20768,7 +20768,9 @@ void Controller::layerSong_setBeat(uint8_t layerNum_, uint8_t bankTab_, uint16_t
 
     // 1. CAPACITY & QUANTIZE PREPARATION
     // Validate beat capacity and quantize incoming interval.
-    if (bank.lastActiveBeatNum < kBeatLibrarySize) {
+    // FIX: stock check allowed an insert when all 64 slots were full, writing past the end
+    // of beatLibrary and corrupting memory. Only insert while at least one slot is free.
+    if (bank.lastActiveBeatNum < (int16_t)(kBeatLibrarySize - 1)) {
         // Quantize incoming interval using nearest-grid rounding (straight or triplet grid).
         uint16_t startInterval = rhythm_snapToGrid(interval_);
         uint16_t endInterval;
