@@ -2129,7 +2129,7 @@ const uint8_t kMaxQuantize                          = 11;  // 0-6 = stock straig
 const uint8_t kQuantizeOff                          = 11;  // no quantize: hits keep their exact timing
 const uint8_t kQuantizeOffNudge                     = 5;   // ticks moved per nudge when quantize is OFF (~4 ms at 90 BPM)
 
-const uint8_t kInitialTempo                         = 120;
+const uint8_t kInitialTempo                         = 92;   // custom: new songs start at 92 BPM (stock: 120)
 const uint8_t kInitialMeasure                       = 4;
 const uint8_t kInitialBar                           = 4;
 const uint8_t kInitialQuantize                      = 2;
