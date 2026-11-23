@@ -2009,12 +2009,12 @@ void Controller::keyboard_action() {
 
                                         case ALERT_QUANTIZEUP:
                                             lcd_clearAlert();
-                                            rhythm_setQuantize(rhythm.quantize + 1);
+                                            rhythm_setQuantize(rhythm_stepQuantize(rhythm.quantize, true));
                                             break;
 
                                         case ALERT_QUANTIZEDOWN:
                                             lcd_clearAlert();
-                                            rhythm_setQuantize(rhythm.quantize - 1);
+                                            rhythm_setQuantize(rhythm_stepQuantize(rhythm.quantize, false));
                                             break;
 
                                         case ALERT_NEWFILE:
@@ -3445,8 +3445,8 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
             break;
 
         case ENC_RHYTHM_QUANTIZE:
-            if ((!rhythm.quantizeLock) && (rhythm.quantize < kMaxQuantize))
-                rhythm_setQuantize(rhythm.quantize + 1);
+            if ((!rhythm.quantizeLock) && (rhythm_stepQuantize(rhythm.quantize, true) != rhythm.quantize))
+                rhythm_setQuantize(rhythm_stepQuantize(rhythm.quantize, true));
             break;
 
         case ENC_RHYTHM_SWING:
@@ -4025,8 +4025,8 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
             break;
 
         case ENC_RHYTHM_QUANTIZE:
-            if ((!rhythm.quantizeLock) && (rhythm.quantize > kMinQuantize))
-                rhythm_setQuantize(rhythm.quantize - 1);
+            if ((!rhythm.quantizeLock) && (rhythm_stepQuantize(rhythm.quantize, false) != rhythm.quantize))
+                rhythm_setQuantize(rhythm_stepQuantize(rhythm.quantize, false));
             break;
 
         case ENC_RHYTHM_SWING:
@@ -14380,14 +14380,14 @@ void Controller::rhythm_menuUp() {
 
             // Quantize edits are blocked when quantize lock is enabled.
             if (!rhythm.quantizeLock) {
-                if (rhythm.quantize < kMaxQuantize) {
+                if (rhythm_stepQuantize(rhythm.quantize, true) != rhythm.quantize) {
                     // During playback, show alert instead of altering quantize grid.
                     if (playActive) {
                         alertFlag = true;
                         alertType = ALERT_QUANTIZEUP;
                         lcd_drawAlert();
                     } else {
-                        rhythm_setQuantize(rhythm.quantize + 1);
+                        rhythm_setQuantize(rhythm_stepQuantize(rhythm.quantize, true));
                     }
                 }
             }
@@ -14457,14 +14457,14 @@ void Controller::rhythm_menuDown() {
 
             // Quantize edits are blocked when quantize lock is enabled.
             if (!rhythm.quantizeLock) {
-                if (rhythm.quantize > kMinQuantize) {
+                if (rhythm_stepQuantize(rhythm.quantize, false) != rhythm.quantize) {
                     // During playback, show alert instead of altering quantize grid.
                     if (playActive) {
                         alertFlag = true;
                         alertType = ALERT_QUANTIZEDOWN;
                         lcd_drawAlert();
                     } else {
-                        rhythm_setQuantize(rhythm.quantize - 1);
+                        rhythm_setQuantize(rhythm_stepQuantize(rhythm.quantize, false));
                     }
                 }
             }
@@ -14581,6 +14581,32 @@ void Controller::rhythm_setSwingGrid(uint8_t swingGrid_) {
         rhythm.swingGrid = swingGrid_;
         if (menu == RHYTHM_MENU) lcd_drawRhythm_SwingGridData();
     }
+}
+
+uint8_t Controller::rhythm_stepQuantize(uint8_t quantize_, bool up_) {
+    /// @brief Returns the next finer/coarser grid in menu order (triplets sit next to their straight grid).
+    /// Returns quantize_ unchanged at either end of the list.
+
+    for (uint8_t i = 0; i < kQuantizeOrderSize; i++) {
+        if (kQuantizeOrder[i] == quantize_) {
+            if (up_) return (i < kQuantizeOrderSize - 1) ? kQuantizeOrder[i + 1] : quantize_;
+            return (i > 0) ? kQuantizeOrder[i - 1] : quantize_;
+        }
+    }
+    return kInitialQuantize;
+}
+
+uint16_t Controller::rhythm_snapToGrid(uint16_t interval_, int8_t stepOffset_) {
+    /// @brief Snaps a tick position to the nearest point of the current grid (straight or triplet),
+    /// then optionally moves it a number of grid steps forward/back.
+
+    const uint8_t q = (rhythm.quantize <= kMaxQuantize) ? rhythm.quantize : kInitialQuantize;
+    const float step = kQuantizeInterval[q];
+    int32_t index = (int32_t)(((float)interval_ / step) + 0.5f) + stepOffset_;
+    if (index < 0) index = 0;
+    float snapped = ((float)index * step) + 0.5f;
+    if (snapped > 65535.0f) snapped = 65535.0f;
+    return (uint16_t)snapped;
 }
 
 void Controller::rhythm_setQuantize(uint8_t quantize_) {
@@ -20732,10 +20758,8 @@ void Controller::layerSong_setBeat(uint8_t layerNum_, uint8_t bankTab_, uint16_t
     // 1. CAPACITY & QUANTIZE PREPARATION
     // Validate beat capacity and quantize incoming interval.
     if (bank.lastActiveBeatNum < kBeatLibrarySize) {
-        uint16_t quantizeInterval = kQuantizeInterval[rhythm.quantize];
-
-        // Quantize incoming interval using nearest-grid rounding.
-        uint16_t startInterval = ((interval_ / quantizeInterval) + ((interval_ % quantizeInterval) / (quantizeInterval / 2))) * quantizeInterval;
+        // Quantize incoming interval using nearest-grid rounding (straight or triplet grid).
+        uint16_t startInterval = rhythm_snapToGrid(interval_);
         uint16_t endInterval;
 
         // 2. LOOP BOUNDARY NORMALIZATION
@@ -20979,9 +21003,8 @@ void Controller::layerSong_generateBeat(uint8_t type) {
 }
 
 void Controller::layerSong_shiftSelectedBeat(bool direction_) {
-    /// @brief Shifts selected beat start position by one quantize step.
+    /// @brief Shifts selected beat start position by one quantize step (straight or triplet grid).
 
-    uint16_t quantizeInterval = kQuantizeInterval[rhythm.quantize];
     Layer& layer = layerLibrary[selectedLayerNum];
     Bank& bank = layer.bankLibrary[activeSongBank];
     Beat& beat = bank.beatLibrary[selectedBeatNum];
@@ -20990,7 +21013,7 @@ void Controller::layerSong_shiftSelectedBeat(bool direction_) {
     // 1. DIRECTIONAL SHIFT APPLY
     // Shift forward/backward when neighbor and boundary constraints allow.
     if (direction_) {
-        uint16_t newInterval = interval + quantizeInterval;
+        uint16_t newInterval = rhythm_snapToGrid(interval, 1);
         if (((selectedBeatNum == bank.lastActiveBeatNum) && (newInterval < songInterval)) || ((selectedBeatNum < bank.lastActiveBeatNum) && (newInterval < bank.beatLibrary[selectedBeatNum + 1].getStartInterval()))) {
             // Extend previous beat
             if (selectedBeatNum > 0) {
@@ -21005,8 +21028,8 @@ void Controller::layerSong_shiftSelectedBeat(bool direction_) {
             bank.setBeatFill(selectedBeatNum, 0, 0, 0, 0);
             layerSong_setSelectedBeatFill(0, 0, 0, 0);
         }
-    } else if (interval >= quantizeInterval) {
-        uint16_t newInterval = interval - quantizeInterval;
+    } else if (interval > 0) {
+        uint16_t newInterval = rhythm_snapToGrid(interval, -1);
         if (((selectedBeatNum == 0) && (newInterval >= 0)) || ((selectedBeatNum > 0) && (newInterval > bank.beatLibrary[selectedBeatNum - 1].getStartInterval()))) {
             // Shrink previous beat
             if (selectedBeatNum > 0) {
@@ -21139,8 +21162,6 @@ void Controller::layerSong_resetAllBeats(uint8_t layerNum_, uint8_t bankTab_) {
 void Controller::layerSong_quantizeActiveBeats(uint8_t layerNum_, uint8_t bankTab_) {
     /// @brief Quantizes active beats to current rhythm grid and rebuilds beat ordering.
 
-    uint16_t quantizeInterval = kQuantizeInterval[rhythm.quantize];
-
     // 1. ACTIVE BEAT QUANTIZATION
     // Snap start/end intervals to quantize grid for active beats.
     for (uint8_t i = 0; i < kLayerLibrarySize; i++) {
@@ -21156,8 +21177,8 @@ void Controller::layerSong_quantizeActiveBeats(uint8_t layerNum_, uint8_t bankTa
                     // Compensate interval for better quantization.
                     if (startInterval != 0) startInterval -= 1;
                     if (endInterval != 0) endInterval -= 1;
-                    startInterval = ((startInterval / quantizeInterval) + ((startInterval % quantizeInterval) / (quantizeInterval / 2))) * quantizeInterval;
-                    endInterval = ((endInterval / quantizeInterval) + ((endInterval % quantizeInterval) / (quantizeInterval / 2))) * quantizeInterval;
+                    startInterval = rhythm_snapToGrid(startInterval);
+                    endInterval = rhythm_snapToGrid(endInterval);
                     if (endInterval > songInterval) {
                         endInterval = songInterval;
                     }

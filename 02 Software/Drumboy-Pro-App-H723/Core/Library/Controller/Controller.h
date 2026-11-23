@@ -743,6 +743,8 @@ class Controller {
     void rhythm_setBar(uint8_t bar_);
     void rhythm_setQuantize(uint8_t quantize_);
     void rhythm_setSwing(uint8_t swing_);
+    uint8_t rhythm_stepQuantize(uint8_t quantize_, bool up_);
+    uint16_t rhythm_snapToGrid(uint16_t interval_, int8_t stepOffset_ = 0);
     void rhythm_setSwingGrid(uint8_t swingGrid_);
 
     /* Mixer Functions ------------------------------------------- */

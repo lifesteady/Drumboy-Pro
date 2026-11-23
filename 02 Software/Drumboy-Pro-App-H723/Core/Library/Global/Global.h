@@ -2070,7 +2070,7 @@ const uint8_t kMaxBar                               = 12;
 const uint8_t kMaxSongMeasureTotal                  = 80;
 
 const uint8_t kMinQuantize                          = 0;
-const uint8_t kMaxQuantize                          = 6;
+const uint8_t kMaxQuantize                          = 10;  // 0-6 = stock straight grids, 7-10 = triplet grids
 
 const uint8_t kInitialTempo                         = 120;
 const uint8_t kInitialMeasure                       = 4;
@@ -2081,7 +2081,14 @@ const uint16_t kMeasureInterval                     = 800;
 const uint16_t kMeasureHalfInterval                 = kMeasureInterval / 2;
 const uint16_t kMinSongInterval                     = 800;
 const uint16_t kMaxSongInterval                     = 64000;
-const float kQuantizeInterval[]                     = {50, 100, 200, 400, 800, 1600, 3200};
+// Grid size in sequencer ticks (800 ticks = 1 beat). Indexes 0-6 match stock firmware so old files load the same.
+// Triplet grids don't divide 800 evenly, so positions are rounded to the nearest tick (under 0.5 ms off at any tempo).
+const float kQuantizeInterval[]                     = {50, 100, 200, 400, 800, 1600, 3200,
+                                                       800.0f / 12.0f, 800.0f / 6.0f, 800.0f / 3.0f, 1600.0f / 3.0f};
+
+// Order the grids appear in when scrolling: 1:64, 1:32, 1:32T, 1:16, 1:16T, 1:8, 1:8T, 1:4, 1:4T, 1:2, 1:1
+const uint8_t kQuantizeOrder[]                      = {0, 1, 7, 2, 8, 3, 9, 4, 10, 5, 6};
+const uint8_t kQuantizeOrderSize                    = sizeof(kQuantizeOrder) / sizeof(kQuantizeOrder[0]);
 
 // SWING (MPC-style): percent of each note pair given to the first note.
 // 50 = straight, 54 = light, 58-62 = classic MPC/Dilla range, 66 = triplet feel, 75 = max.
@@ -2122,7 +2129,11 @@ const struct QuantizeData kQuantizeDataLibrary[] = {
     {"       1:8"}, 
     {"       1:4"}, 
     {"       1:2"}, 
-    {"       1:1"}};
+    {"       1:1"}, 
+    {"     1:32T"}, 
+    {"     1:16T"}, 
+    {"      1:8T"}, 
+    {"      1:4T"}};
 
 /*----------------------------------------------------------------------------*/
 
