@@ -2096,7 +2096,7 @@ const uint8_t kQuantizeOrderSize                    = sizeof(kQuantizeOrder) / s
 // SWING (MPC-style): percent of each note pair given to the first note.
 // 50 = straight, 54 = light, 58-62 = classic MPC/Dilla range, 66 = triplet feel, 75 = max.
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.06 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.07 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -5670,7 +5670,7 @@ const uint8_t kMaxReverbDry                         = 100;
 const uint8_t kMinReverbWet                         = 0;
 const uint8_t kMaxReverbWet                         = 100;
 
-const bool kInitialReverbActive                     = true;
+const bool kInitialReverbActive                     = false;  // custom: new songs start dry (stock: true)
 const uint8_t kInitialReverbSize                    = 25;
 const uint8_t kInitialReverbDecay                   = 50;
 const uint8_t kInitialReverbDamping                 = 30;
