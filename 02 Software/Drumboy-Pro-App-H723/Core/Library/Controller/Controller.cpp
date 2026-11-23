@@ -5148,6 +5148,11 @@ void Controller::page_open(PageView page_) {
     if (page_ == PAGE_NONE) return;
     page = page_;
     pageFullRedraw = true;
+
+    // Hide the M F P lane labels: they belong to the song grid, not to the page.
+    lcd.setBackColor(BLACK);
+    lcd.clearRect(kImageMenuAX + kPageMfpImageX, kImageMenuAY + kPageMfpImageRow, kPageMfpWidth, kPageMfpHeight);
+
     lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
     page_draw();
 }
@@ -5158,6 +5163,12 @@ void Controller::page_close() {
     page = PAGE_NONE;
     pageDirty = false;
     lcd.setProtect(false);
+
+    // Restore the M F P labels from the top menu image (just those rows and columns).
+    lcd.drawRGB16ImagePartial((const RGB16Color*)(RAM_IMAGE_MENU_A_PALETTE_ADDRESS),
+                              (const uint8_t*)(RAM_IMAGE_MENU_A_DATA_ADDRESS) + (kPageMfpImageRow * kImageMenuAWidth),
+                              64, kImageMenuAX + kPageMfpImageX, kImageMenuAY + kPageMfpImageRow,
+                              kImageMenuAWidth, kPageMfpHeight, kPageMfpImageX, kPageMfpWidth);
 
     const LcdFont font = lcd.getFont();
     const LcdAlign align = lcd.getAlignment();
