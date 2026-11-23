@@ -308,6 +308,15 @@ void Controller::initialize() {
         lcd_drawSdData();
         if (animation) HAL_Delay(2000);
 
+        // Custom: design previews. If the card has Preview/Preview_1.rwi ... Preview_9.rwi,
+        // show each full-screen for a few seconds, then continue the normal boot.
+        if (sd_showPreviews()) {
+            lcd.setBackColor(BLACK);
+            lcd.clearRect(0, 0, kLCD_HEIGHT, kLCD_WIDTH);
+            lcd_drawLogo(false);
+            lcd_drawSdData();
+        }
+
         // Clean up UI and transition to main interface
         lcd_clearSdData();
         lcd_clearLogo(animation);
@@ -5096,6 +5105,53 @@ SdResult Controller::sd_loadImage(char* fileAddress, uint32_t paletteAddress, ui
     // Re-enable keyboard interrupts once SD transaction flow is complete.
     keyboard_enable();
     return result;
+}
+
+bool Controller::sd_showPreviews() {
+    /// @brief Shows full-screen design preview images from the SD card at boot.
+    /// Files: Preview/Preview_1.rwi ... Preview_9.rwi, standard RW_IMAGE format,
+    /// 960x540, 16-bit palette of up to 256 colors. Streams one row at a time
+    /// (no big RAM buffer). Returns true if at least one preview was shown.
+
+    static RGB16Color palette[256];
+    static uint8_t row[kLCD_HEIGHT];  // one landscape row (960 px)
+    bool shown = false;
+
+    if (!sd.ready) return false;
+
+    for (uint8_t n = 1; n <= 9; n++) {
+        char path[32];
+        sprintf(path, "Preview/Preview_%u.rwi", n);
+        if (f_open(&sd.file, path, FA_READ) != FR_OK) continue;
+
+        char signature[11] = {0};
+        char marker[4] = {0};
+        uint16_t meta[4];  // palette size, depth, width, height
+        UINT bytesRead;
+        bool ok = (f_read(&sd.file, signature, 10, &bytesRead) == FR_OK) && (bytesRead == 10) &&
+                  (strncmp(signature, "RW_IMAGE  ", 10) == 0) &&
+                  (f_read(&sd.file, meta, 8, &bytesRead) == FR_OK) && (bytesRead == 8) &&
+                  (meta[0] >= 1) && (meta[0] <= 256) && (meta[1] == 16) &&
+                  (meta[2] == kLCD_HEIGHT) && (meta[3] == kLCD_WIDTH) &&
+                  (f_read(&sd.file, marker, 3, &bytesRead) == FR_OK) && (strncmp(marker, "_PA", 3) == 0) &&
+                  (f_read(&sd.file, palette, meta[0] * 2, &bytesRead) == FR_OK) && (bytesRead == (UINT)(meta[0] * 2)) &&
+                  (f_read(&sd.file, marker, 3, &bytesRead) == FR_OK) && (strncmp(marker, "_DA", 3) == 0);
+
+        if (ok) {
+            // Any pixel index beyond the palette is drawn with entry 0 (never reads past the table).
+            for (uint16_t y = 0; y < kLCD_WIDTH; y++) {
+                if ((f_read(&sd.file, row, kLCD_HEIGHT, &bytesRead) != FR_OK) || (bytesRead != kLCD_HEIGHT)) break;
+                for (uint16_t x = 0; x < kLCD_HEIGHT; x++) {
+                    if (row[x] >= meta[0]) row[x] = 0;
+                }
+                lcd.drawRGB16Image(palette, row, (uint8_t)(meta[0] - 1), 0, y, kLCD_HEIGHT, 1);
+            }
+            shown = true;
+            HAL_Delay(6000);
+        }
+        f_close(&sd.file);
+    }
+    return shown;
 }
 
 void Controller::sd_getLibraries() {
