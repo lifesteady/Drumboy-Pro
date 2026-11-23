@@ -2157,7 +2157,9 @@ typedef enum {
     PAGE_REVERB                                     = 0x01,
     PAGE_FILTER_0                                   = 0x02,
     PAGE_FILTER_1                                   = 0x03,
-    PAGE_EQ                                         = 0x04
+    PAGE_EQ                                         = 0x04,
+    PAGE_EFFECT_0                                   = 0x05,
+    PAGE_EFFECT_1                                   = 0x06
 } PageView;
 
 const uint16_t kPageX                               = 20;
@@ -2174,7 +2176,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.15 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.16 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;

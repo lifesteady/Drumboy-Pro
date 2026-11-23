@@ -2591,11 +2591,12 @@ void Controller::keyboard_action() {
                                 break;
 
                             case KEY_EFFECT_0:
-                                if (!alertFlag) effect_select(0);
+                                // Custom: pressing EFFECT 1 again while in its menu toggles the Effect page.
+                                if (!alertFlag) (menu == EFFECT_0_MENU) ? page_toggle(PAGE_EFFECT_0) : effect_select(0);
                                 break;
 
                             case KEY_EFFECT_1:
-                                if (!alertFlag) effect_select(1);
+                                if (!alertFlag) (menu == EFFECT_1_MENU) ? page_toggle(PAGE_EFFECT_1) : effect_select(1);
                                 break;
 
                             case KEY_REVERB:
@@ -5236,6 +5237,12 @@ void Controller::page_draw() {
         case PAGE_EQ:
             page_drawEq();
             break;
+        case PAGE_EFFECT_0:
+            page_drawEffect(0);
+            break;
+        case PAGE_EFFECT_1:
+            page_drawEffect(1);
+            break;
         default:
             break;
     }
@@ -5687,6 +5694,307 @@ void Controller::page_drawEq() {
         if (ly < gTop) ly = my + 7;
         if (ly > gBot - 8) ly = my - 14;
         lcd.drawText(names[b], strlen(names[b]), mx, ly);
+    }
+}
+
+void Controller::page_drawEffect(uint8_t effectNum_) {
+    /// @brief Effect page: one picture per effect type, from the live values the audio code uses.
+    ///  DELAY: echo train (dry + repeats, darker as damping filters them).
+    ///  CHORUS / FLANGER: the modulated delay time over time.  PHASER: the swept notch frequency.
+    ///  COMPRESSOR / EXPANDER: static input/output level curve vs threshold and ratio.
+    ///  OVERDRIVE / DISTORTION: the waveshaper's input/output curve (tone filter not drawn).
+    ///  BITCRUSHER: a test sine after sample-and-hold, folding/clipping and bit reduction.
+    /// Everything is drawn column by column with fixed-width text, so knob turns don't flash.
+
+    Effect& e = effect[effectNum_];
+    auto trim = [](const char* t) -> const char* { while (*t == ' ') t++; return t; };  // library labels are space-padded
+    const bool on = e.active;
+    const RGB16Color ink = on ? kThemeInk : kThemeMid;
+    const RGB16Color accent = on ? kThemeAccent : kThemeLine;
+    const RGB16Color label = kThemeHeader;
+    const uint16_t gx = 80, gw = 790, gTop = 180, gBot = 400;
+    const uint16_t gh = gBot - gTop;
+
+    static int16_t curveY[790];   // main curve (accent), -1 = none
+    static int16_t refY[790];     // reference line (dim), -1 = none
+    static int16_t barTop[790];   // filled bar from barTop down to gBot, -1 = none
+    static uint8_t barShade[790]; // 0..100 brightness of the bar
+    for (uint16_t i = 0; i < gw; i++) { curveY[i] = -1; refY[i] = -1; barTop[i] = -1; barShade[i] = 0; }
+
+    char title[16];
+    char info[72];
+    const char* xl[5] = {"", "", "", "", ""};   // bottom axis labels
+    char xbuf[5][8];
+    const char* yl[3] = {"", "", ""};           // left axis labels: top, middle, bottom
+    int16_t markX = -1;                          // amber dotted vertical marker (column index)
+
+    auto yFromUnit = [&](float u) -> int16_t {   // u: 0 = bottom, 1 = top
+        if (u < 0.0f) u = 0.0f;
+        if (u > 1.0f) u = 1.0f;
+        return (int16_t)(gBot - u * gh + 0.5f);
+    };
+
+    switch (e.type) {
+        case EF_DELAY: {
+            Delay& d = e.delay;
+            const float sec = (float)d.lag / AUDIO_SAMPLE_RATE;
+            float win = sec * 8.0f;
+            if (win < 0.5f) win = 0.5f;
+            if (win > 4.0f) win = 4.0f;
+            const float dry = d.eDry / 100.0f, wet = d.fWet / 100.0f;
+            for (uint8_t n = 0; n < 40; n++) {
+                const float t = n * sec;
+                if ((t > win) || ((n > 0) && (sec <= 0.0f))) break;
+                float a = (n == 0) ? dry : wet * d.level * powf(d.feedback, (float)(n - 1));
+                if (a > 1.0f) a = 1.0f;
+                if ((n > 0) && (a < 0.004f)) break;
+                const int16_t cx = (int16_t)((t / win) * (gw - 8)) + 3;
+                const uint8_t shade = (n == 0) ? 100 : (uint8_t)(100.0f * powf(1.0f - 0.5f * d.dDamping / 100.0f, (float)(n - 1)));
+                for (int16_t k = cx - 3; k <= cx + 3; k++) {
+                    if ((k >= 0) && (k < gw)) { barTop[k] = yFromUnit(a * 0.95f); barShade[k] = (n == 0) ? 255 : shade; }
+                }
+            }
+            snprintf(title, sizeof(title), "DELAY %u", effectNum_ + 1);
+            snprintf(info, sizeof(info), "%4s = %4ums  FEEDBACK %3u  LEVEL %3u  DAMP %3u", trim(kDelayTimeDataLibrary[d.aTime].nameLongR),
+                     (unsigned)(sec * 1000.0f + 0.5f), d.cFeedback, d.bLevel, d.dDamping);
+            for (uint8_t q = 0; q < 5; q++) { snprintf(xbuf[q], 8, "%ums", (unsigned)(win * 250.0f * q + 0.5f)); xl[q] = xbuf[q]; }
+            yl[0] = "100%"; yl[1] = " 50%"; yl[2] = "   0";
+        } break;
+
+        case EF_CHORUS:
+        case EF_FLANGER:
+        case EF_PHASER: {
+            float rate, lo, hi;
+            bool logY = false;
+            if (e.type == EF_CHORUS) {
+                Chorus& c = e.chorus;
+                rate = c.rate; lo = c.time * (1.0f - c.depth); hi = c.time * (1.0f + c.depth);
+                snprintf(title, sizeof(title), "CHORUS %u", effectNum_ + 1);
+                snprintf(info, sizeof(info), "DELAY %2ums  DEPTH %3u  RATE %4sHZ  FEEDBACK %3u", (unsigned)(c.time * 1000.0f + 0.5f), c.dDepth,
+                         trim(kChorusRateDataLibrary[c.cRate].nameLongR), (unsigned)(c.feedback * 100.0f + 0.5f));
+            } else if (e.type == EF_FLANGER) {
+                Flanger& f = e.flanger;
+                rate = f.rate; lo = f.time * (1.0f - f.width); hi = f.time * (1.0f + f.width);
+                snprintf(title, sizeof(title), "FLANGER %u", effectNum_ + 1);
+                snprintf(info, sizeof(info), "DELAY %3sms  WIDTH %3u  RATE %4sHZ  FEEDBACK %3u", trim(kFlangerTimeDataLibrary[f.aTime].nameLongR), f.dWidth,
+                         trim(kFlangerRateDataLibrary[f.cRate].nameLongR), (unsigned)(f.feedback * 100.0f + 0.5f));
+            } else {
+                Phaser& ph = e.phaser;
+                rate = ph.rate; lo = (float)kPhaserFreqDataLibrary[ph.aStartFreq].data; hi = (float)kPhaserFreqDataLibrary[ph.bEndFreq].data;
+                if (lo > hi) { const float t = lo; lo = hi; hi = t; }
+                if (lo < 20.0f) lo = 20.0f;
+                logY = true;
+                snprintf(title, sizeof(title), "PHASER %u", effectNum_ + 1);
+                snprintf(info, sizeof(info), "SWEEP %4s - %4sHZ  RATE %4sHZ  FEEDBACK %3u", trim(kPhaserFreqDataLibrary[ph.aStartFreq].nameLongR),
+                         trim(kPhaserFreqDataLibrary[ph.bEndFreq].nameLongR), trim(kPhaserRateDataLibrary[ph.cRate].nameLongR), ph.dFeedback);
+            }
+            if (rate < 0.05f) rate = 0.05f;
+            float win = 2.0f / rate;               // two LFO cycles
+            if (win > 10.0f) win = 10.0f;
+            if (win < 0.25f) win = 0.25f;
+            // y axis: delay 0..2x base (chorus/flanger) or 20 Hz..20 kHz log (phaser)
+            const float yMax = logY ? 20000.0f : ((e.type == EF_CHORUS) ? 0.1f : 0.01f);
+            for (uint16_t i = 0; i < gw; i++) {
+                const float t = win * i / gw;
+                const float u = 0.5f + 0.5f * sinf(2.0f * 3.14159265f * rate * t);
+                float v;
+                if (logY) {
+                    v = lo * powf(hi / lo, u);
+                    curveY[i] = yFromUnit(log10f(v / 20.0f) / 3.0f);
+                    refY[i] = ((i % 6) < 3) ? yFromUnit(log10f(lo / 20.0f) / 3.0f) : yFromUnit(log10f(hi / 20.0f) / 3.0f);
+                } else {
+                    v = lo + (hi - lo) * u;
+                    curveY[i] = yFromUnit(v / yMax);
+                    refY[i] = ((i % 6) < 3) ? yFromUnit(lo / yMax) : yFromUnit(hi / yMax);
+                }
+            }
+            for (uint8_t q = 0; q < 5; q++) {
+                const float tq = win * q / 4.0f;
+                (tq < 1.0f) ? snprintf(xbuf[q], 8, "%ums", (unsigned)(tq * 1000.0f + 0.5f)) : snprintf(xbuf[q], 8, "%u.%us", (unsigned)tq, (unsigned)(tq * 10.0f) % 10);
+                xl[q] = xbuf[q];
+            }
+            if (logY) { yl[0] = "20K"; yl[1] = "630"; yl[2] = " 20"; }
+            else if (e.type == EF_CHORUS) { yl[0] = "100MS"; yl[1] = " 50MS"; yl[2] = "  0MS"; }
+            else { yl[0] = "10MS"; yl[1] = " 5MS"; yl[2] = " 0MS"; }
+        } break;
+
+        case EF_COMPRESSOR:
+        case EF_EXPANDER: {
+            const bool comp = (e.type == EF_COMPRESSOR);
+            const float th = comp ? e.compressor.threshold : e.expander.threshold;
+            const float ratio = comp ? e.compressor.rate : e.expander.rate;
+            const float dry = (comp ? e.compressor.eDry : e.expander.eDry) / 100.0f;
+            const float wet = (comp ? e.compressor.fWet : e.expander.fWet) / 100.0f;
+            const float dbMin = -48.0f;
+            for (uint16_t i = 0; i < gw; i++) {
+                const float in = dbMin + (-dbMin) * i / (gw - 1);       // -48 .. 0 dB
+                float out = in;
+                if (comp && (in > th)) out = th + (in - th) / ratio;
+                if (!comp && (in < th)) out = th + (in - th) * ratio;
+                // parallel mix (dry + wet) in linear terms
+                const float lin = dry * powf(10.0f, in / 20.0f) + wet * powf(10.0f, out / 20.0f);
+                const float mixDb = (lin > 1.0e-6f) ? 20.0f * log10f(lin) : -120.0f;
+                curveY[i] = yFromUnit((mixDb - dbMin) / (-dbMin));
+                if ((i % 4) < 2) refY[i] = yFromUnit((in - dbMin) / (-dbMin));
+            }
+            markX = (int16_t)((th - dbMin) / (-dbMin) * (gw - 1));
+            const uint8_t aIdx = comp ? e.compressor.cAttackTime : e.expander.cAttackTime;
+            const uint8_t rIdx = comp ? e.compressor.dReleaseTime : e.expander.dReleaseTime;
+            snprintf(title, sizeof(title), comp ? "COMPRESSOR %u" : "EXPANDER %u", effectNum_ + 1);
+            snprintf(info, sizeof(info), "THRESH %+3ddB  RATIO %2u:1  ATTACK %3ums  RELEASE %4ums", (int)th, (unsigned)ratio,
+                     (unsigned)((comp ? kCompressorAttackTimeDataLibrary[aIdx].data : kExpanderAttackTimeDataLibrary[aIdx].data) * 1000.0f + 0.5f),
+                     (unsigned)((comp ? kCompressorReleaseTimeDataLibrary[rIdx].data : kExpanderReleaseTimeDataLibrary[rIdx].data) * 1000.0f + 0.5f));
+            xl[0] = "-48"; xl[1] = "-36"; xl[2] = "-24"; xl[3] = "-12"; xl[4] = "0DB";
+            yl[0] = "0DB"; yl[1] = "-24"; yl[2] = "-48";
+        } break;
+
+        case EF_OVERDRIVE:
+        case EF_DISTORTION: {
+            const bool od = (e.type == EF_OVERDRIVE);
+            const float gain = od ? e.overdrive.gain : e.distortion.gain;
+            const float th = od ? e.overdrive.threshold : e.distortion.threshold;
+            const float bias = od ? 0.0f : e.distortion.bias;
+            const float dry = (od ? e.overdrive.eDry : e.distortion.eDry) / 100.0f;
+            const float wet = (od ? e.overdrive.fWet : e.distortion.fWet) / 100.0f;
+            const float range = 1.25f;
+            for (uint16_t i = 0; i < gw; i++) {
+                const float x = -1.0f + 2.0f * i / (gw - 1);
+                float shaped;
+                if (od) {
+                    const float dsig = x * gain;
+                    if (dsig < -th) shaped = -0.66666667f * th;
+                    else if (dsig > th) shaped = 0.66666667f * th;
+                    else shaped = dsig - (dsig * dsig * dsig) / 3.0f;
+                } else {
+                    shaped = (gain > 0.0001f) ? ((2.0f / 3.14159265f) * atanf(x * gain + bias) * th - bias * 0.5f) : x * th;
+                }
+                const float y = wet * shaped + dry * x;
+                curveY[i] = yFromUnit((y + range) / (2.0f * range));
+                if ((i % 4) < 2) refY[i] = yFromUnit((x + range) / (2.0f * range));
+            }
+            snprintf(title, sizeof(title), od ? "OVERDRIVE %u" : "DISTORTION %u", effectNum_ + 1);
+            const uint8_t tone = od ? e.overdrive.cTone : e.distortion.cTone;
+            snprintf(info, sizeof(info), "GAIN %2udB  CEILING %+3ddB  TONE %4sHZ  %s %3u",
+                     (unsigned)(od ? kOverdriveGainDataLibrary[e.overdrive.aGain].data : kDistortionGainDataLibrary[e.distortion.aGain].data),
+                     (int)(od ? kOverdriveThresholdDataLibrary[e.overdrive.bThreshold].data : kDistortionThresholdDataLibrary[e.distortion.bThreshold].data),
+                     od ? trim(kOverdriveToneDataLibrary[tone].nameLongR) : trim(kDistortionToneDataLibrary[tone].nameLongR), od ? "LOWCUT" : "  ASYM", od ? e.overdrive.dDriveColor : e.distortion.dAsym);
+            xl[0] = "IN -1"; xl[1] = ""; xl[2] = "0"; xl[3] = ""; xl[4] = "+1";
+            yl[0] = "+1"; yl[1] = "OUT"; yl[2] = "-1";
+        } break;
+
+        case EF_BITCRUSHER: {
+            Bitcrusher& b = e.bitcrusher;
+            const float dry = b.eDry / 100.0f, wet = b.fWet / 100.0f;
+            const uint32_t hold = (b.sampleCounterMax > 0) ? b.sampleCounterMax : 1;
+            const float range = 1.15f;
+            const float samples = 400.0f;                // 2 cycles of a 220 Hz test tone
+            for (uint16_t i = 0; i < gw; i++) {
+                const uint32_t n = (uint32_t)(samples * i / gw);
+                const float x = 0.9f * sinf(2.0f * 3.14159265f * n / 200.0f);
+                const uint32_t n0 = (n / hold) * hold;
+                float p = 0.9f * sinf(2.0f * 3.14159265f * n0 / 200.0f);
+                if (fabsf(p) < 0.002f) {
+                    p = 0.0f;
+                } else {
+                    if (b.mode == BIT_FOLD) {
+                        for (uint8_t k = 0; (k < 8) && ((p > b.limitPos) || (p < b.limitNeg)); k++) {
+                            if (p > b.limitPos) p = b.limitPos - (p - b.limitPos);
+                            if (p < b.limitNeg) p = b.limitNeg - (p - b.limitNeg);
+                        }
+                    } else {
+                        if (p > b.limitPos) p = b.limitPos;
+                        if (p < b.limitNeg) p = b.limitNeg;
+                    }
+                    uint32_t scaled = (uint32_t)(((p + 1.0f) * 0.5f) * 16777215.0f);
+                    scaled &= b.resModifier;
+                    p = ((float)scaled / 16777215.0f) * 2.0f - 1.0f;
+                }
+                const float y = wet * p + dry * x;
+                curveY[i] = yFromUnit((y + range) / (2.0f * range));
+                if ((i % 4) < 2) refY[i] = yFromUnit((x + range) / (2.0f * range));
+            }
+            snprintf(title, sizeof(title), "BITCRUSHER %u", effectNum_ + 1);
+            snprintf(info, sizeof(info), "%2u BIT  RATE 1/%-2u  %s  THRESH %+3ddB  SMOOTH %3u",
+                     (unsigned)kBitcrusherResolutionDataLibrary[b.aResolution].data, (unsigned)hold, (b.mode == BIT_FOLD) ? "FOLD" : "CLIP",
+                     (int)kBitcrusherThresholdDataLibrary[b.cThreshold].data, b.dSmooth);
+            xl[0] = "0"; xl[1] = ""; xl[2] = "TEST TONE"; xl[3] = ""; xl[4] = "9MS";
+            yl[0] = "+1"; yl[1] = "0"; yl[2] = "-1";
+        } break;
+
+        default:
+            snprintf(title, sizeof(title), "EFFECT %u", effectNum_ + 1);
+            snprintf(info, sizeof(info), " ");
+            break;
+    }
+
+    // ---- frame (first draw only)
+    if (pageFullRedraw) {
+        lcd.setBackColor(BLACK);
+        lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
+        lcd.setForeColor(kThemeLine);
+        lcd.drawHLine(30, 162, 900);
+        lcd.setFont(FONT_07x09);
+        lcd.setAlignment(LEFT);
+        const char hint[] = "PRESS EFFECT AGAIN: BACK TO SONG";
+        lcd.drawText(hint, strlen(hint), 30, 436);
+        lcd.setAlignment(RIGHT);
+        const char hint2[] = "KNOBS: BOXES ABOVE / BELOW";
+        lcd.drawText(hint2, strlen(hint2), 930, 436);
+        pageFullRedraw = false;
+    }
+
+    // ---- header and axis labels (fixed widths so a type change leaves nothing behind)
+    char padded[80];
+    lcd.setBackColor(BLACK);
+    lcd.setFont(FONT_14x18);
+    lcd.setAlignment(LEFT);
+    lcd.setForeColor(on ? kThemeAccent : kThemeMid);
+    snprintf(padded, sizeof(padded), "%-13s", on ? title : "EFFECT OFF");
+    lcd.drawText(padded, 13, 30, 139);
+    lcd.setFont(FONT_07x09);
+    lcd.setAlignment(RIGHT);
+    lcd.setForeColor(label);
+    snprintf(padded, sizeof(padded), "%54s", info);
+    lcd.drawText(padded, strlen(padded), 930, 144);
+    lcd.setAlignment(CENTER);
+    for (uint8_t q = 0; q < 5; q++) {
+        snprintf(padded, sizeof(padded), "%9s", "");
+        const uint8_t len = strlen(xl[q]);
+        memcpy(padded + (9 - len) / 2, xl[q], len);
+        lcd.drawText(padded, 9, gx + (gw * q) / 4, gBot + 8);
+    }
+    lcd.setAlignment(RIGHT);
+    for (uint8_t q = 0; q < 3; q++) {
+        snprintf(padded, sizeof(padded), "%5s", yl[q]);
+        lcd.drawText(padded, 5, gx - 6, (q == 0) ? gTop : ((q == 1) ? (gTop + gBot) / 2 - 4 : gBot - 9));
+    }
+
+    // ---- columns
+    int16_t prevY = -1;
+    for (uint16_t i = 0; i < gw; i++) {
+        const uint16_t x = gx + i;
+        lcd.setForeColor(BLACK);
+        lcd.drawVLine(x, gTop, gh + 1);
+        if ((i % (gw / 4)) == 0) { lcd.setForeColor(kThemeLine); for (int16_t yy = gTop; yy <= gBot; yy += 4) lcd.drawPixel(x, yy); }
+        if ((x % 4) == 0) { lcd.setForeColor(kThemeLine); lcd.drawPixel(x, (gTop + gBot) / 2); }
+        if (barTop[i] >= 0) {
+            lcd.setForeColor((barShade[i] == 255) ? ink : page_mix(BLACK, accent, 0.25f + 0.75f * barShade[i] / 100.0f));
+            lcd.drawVLine(x, barTop[i], gBot - barTop[i] + 1);
+        }
+        if (refY[i] >= 0) { lcd.setForeColor(page_mix(BLACK, ink, 0.45f)); lcd.drawPixel(x, refY[i]); }
+        if (markX == (int16_t)i) { lcd.setForeColor(kThemeAmber); for (int16_t yy = gTop; yy <= gBot; yy += 3) lcd.drawPixel(x, yy); }
+        if (curveY[i] >= 0) {
+            lcd.setForeColor(accent);
+            if (prevY >= 0) {
+                const int16_t lo = (curveY[i] < prevY) ? curveY[i] : prevY, hi = (curveY[i] < prevY) ? prevY : curveY[i];
+                if (hi - lo > 1) lcd.drawVLine(x, lo, hi - lo);
+            }
+            lcd.drawPixel(x, curveY[i]);
+            if (curveY[i] + 1 <= gBot) lcd.drawPixel(x, curveY[i] + 1);
+            prevY = curveY[i];
+        } else {
+            prevY = -1;
+        }
     }
 }
 
@@ -15140,6 +15448,8 @@ void Controller::rhythm_setTempo(uint8_t tempo_) {
         updatePlayTimerPeriod();
         effect[0].delay.update(tempo_);
         effect[1].delay.update(tempo_);
+        page_markDirty(PAGE_EFFECT_0);
+        page_markDirty(PAGE_EFFECT_1);
 
         // 3. UI & GLOBAL REFRESH
         // Refresh Rhythm/LFO screens (if visible) and global summary field.
@@ -17289,7 +17599,7 @@ void Controller::effect_setActive(uint8_t effectNum_, bool active_) {
             // 4. UI & GLOBAL REFRESH
             // Refresh Effect tab data (if visible) and global summary field.
             if ((((menu == EFFECT_0_MENU) && (effectNum_ == 0)) || ((menu == EFFECT_1_MENU) && (effectNum_ == 1))))
-                lcd_drawEffect_ActiveData(effectNum_);
+                lcd_drawEffect_ActiveData(effectNum_); page_markDirty(effectNum_ ? PAGE_EFFECT_1 : PAGE_EFFECT_0);
             EncoderFunc function;
             (effectNum_ == 0) ? function = ENC_EFFECT_0_ACTIVE : function = ENC_EFFECT_1_ACTIVE;
             lcd_updateGlobalMenuData(function);
@@ -17329,13 +17639,13 @@ void Controller::effect_setType(uint8_t effectNum_, uint8_t type_) {
             // 4. UI REFRESH
             // Refresh all parameter fields since active sub-effect schema can change.
             if ((((menu == EFFECT_0_MENU) && (effectNum_ == 0)) || ((menu == EFFECT_1_MENU) && (effectNum_ == 1)))) {
-                lcd_drawEffect_TypeData(effectNum_);
-                lcd_drawEffect_AData(effectNum_);
-                lcd_drawEffect_BData(effectNum_);
-                lcd_drawEffect_CData(effectNum_);
-                lcd_drawEffect_DData(effectNum_);
-                lcd_drawEffect_EData(effectNum_);
-                lcd_drawEffect_FData(effectNum_);
+                lcd_drawEffect_TypeData(effectNum_); page_markDirty(effectNum_ ? PAGE_EFFECT_1 : PAGE_EFFECT_0);
+                lcd_drawEffect_AData(effectNum_); page_markDirty(effectNum_ ? PAGE_EFFECT_1 : PAGE_EFFECT_0);
+                lcd_drawEffect_BData(effectNum_); page_markDirty(effectNum_ ? PAGE_EFFECT_1 : PAGE_EFFECT_0);
+                lcd_drawEffect_CData(effectNum_); page_markDirty(effectNum_ ? PAGE_EFFECT_1 : PAGE_EFFECT_0);
+                lcd_drawEffect_DData(effectNum_); page_markDirty(effectNum_ ? PAGE_EFFECT_1 : PAGE_EFFECT_0);
+                lcd_drawEffect_EData(effectNum_); page_markDirty(effectNum_ ? PAGE_EFFECT_1 : PAGE_EFFECT_0);
+                lcd_drawEffect_FData(effectNum_); page_markDirty(effectNum_ ? PAGE_EFFECT_1 : PAGE_EFFECT_0);
             }
 
             // Encoder/global rebind block intentionally kept disabled as in original.
@@ -17491,7 +17801,7 @@ void Controller::effect_setAData(uint8_t effectNum_, uint8_t subEffectNum_, uint
         // 3. UI & GLOBAL REFRESH
         // Refresh local parameter field (if visible) and global summary field.
         if ((((menu == EFFECT_0_MENU) && (effectNum_ == 0)) || ((menu == EFFECT_1_MENU) && (effectNum_ == 1))) && (effect_.type == subEffectNum_)) {
-            lcd_drawEffect_AData(effectNum_);
+            lcd_drawEffect_AData(effectNum_); page_markDirty(effectNum_ ? PAGE_EFFECT_1 : PAGE_EFFECT_0);
         }
         const EncoderFunc function = (effectNum_ == 0) ? ENC_EFFECT_0_PARAM_A : ENC_EFFECT_1_PARAM_A;
         lcd_updateGlobalMenuData(function);
@@ -17603,7 +17913,7 @@ void Controller::effect_setBData(uint8_t effectNum_, uint8_t subEffectNum_, uint
         // 3. UI & GLOBAL REFRESH
         // Refresh local parameter field (if visible) and global summary field.
         if ((((menu == EFFECT_0_MENU) && (effectNum_ == 0)) || ((menu == EFFECT_1_MENU) && (effectNum_ == 1))) && (effect_.type == subEffectNum_)) {
-            lcd_drawEffect_BData(effectNum_);
+            lcd_drawEffect_BData(effectNum_); page_markDirty(effectNum_ ? PAGE_EFFECT_1 : PAGE_EFFECT_0);
         }
         const EncoderFunc function = (effectNum_ == 0) ? ENC_EFFECT_0_PARAM_B : ENC_EFFECT_1_PARAM_B;
         lcd_updateGlobalMenuData(function);
@@ -17697,7 +18007,7 @@ void Controller::effect_setCData(uint8_t effectNum_, uint8_t subEffectNum_, uint
         // 3. UI & GLOBAL REFRESH
         // Refresh local parameter field (if visible) and global summary field.
         if ((((menu == EFFECT_0_MENU) && (effectNum_ == 0)) || ((menu == EFFECT_1_MENU) && (effectNum_ == 1))) && (effect_.type == subEffectNum_)) {
-            lcd_drawEffect_CData(effectNum_);
+            lcd_drawEffect_CData(effectNum_); page_markDirty(effectNum_ ? PAGE_EFFECT_1 : PAGE_EFFECT_0);
         }
         const EncoderFunc function = (effectNum_ == 0) ? ENC_EFFECT_0_PARAM_C : ENC_EFFECT_1_PARAM_C;
         lcd_updateGlobalMenuData(function);
@@ -17784,7 +18094,7 @@ void Controller::effect_setDData(uint8_t effectNum_, uint8_t subEffectNum_, uint
         // 3. UI & GLOBAL REFRESH
         // Refresh local parameter field and global bottom bar.
         if ((((menu == EFFECT_0_MENU) && (effectNum_ == 0)) || ((menu == EFFECT_1_MENU) && (effectNum_ == 1))) && (effect_.type == subEffectNum_)) {
-            lcd_drawEffect_DData(effectNum_);
+            lcd_drawEffect_DData(effectNum_); page_markDirty(effectNum_ ? PAGE_EFFECT_1 : PAGE_EFFECT_0);
         }
 
         const EncoderFunc function = (effectNum_ == 0) ? ENC_EFFECT_0_PARAM_D : ENC_EFFECT_1_PARAM_D;
@@ -17956,8 +18266,8 @@ void Controller::effect_setEData(uint8_t effectNum_, uint8_t subEffectNum_, uint
         // 4. UI & GLOBAL REFRESH
         // Refresh local E/F fields (if visible) and global summary fields.
         if ((((menu == EFFECT_0_MENU) && (effectNum_ == 0)) || ((menu == EFFECT_1_MENU) && (effectNum_ == 1))) && (effect_.type == subEffectNum_)) {
-            lcd_drawEffect_EData(effectNum_);
-            lcd_drawEffect_FData(effectNum_);
+            lcd_drawEffect_EData(effectNum_); page_markDirty(effectNum_ ? PAGE_EFFECT_1 : PAGE_EFFECT_0);
+            lcd_drawEffect_FData(effectNum_); page_markDirty(effectNum_ ? PAGE_EFFECT_1 : PAGE_EFFECT_0);
         }
         const EncoderFunc functionA = (effectNum_ == 0) ? ENC_EFFECT_0_PARAM_E : ENC_EFFECT_1_PARAM_E;
         const EncoderFunc functionB = (effectNum_ == 0) ? ENC_EFFECT_0_PARAM_F : ENC_EFFECT_1_PARAM_F;
@@ -18130,8 +18440,8 @@ void Controller::effect_setFData(uint8_t effectNum_, uint8_t subEffectNum_, uint
         // 4. UI & GLOBAL REFRESH
         // Refresh local E/F fields (if visible) and global summary fields.
         if ((((menu == EFFECT_0_MENU) && (effectNum_ == 0)) || ((menu == EFFECT_1_MENU) && (effectNum_ == 1))) && (effect_.type == subEffectNum_)) {
-            lcd_drawEffect_EData(effectNum_);
-            lcd_drawEffect_FData(effectNum_);
+            lcd_drawEffect_EData(effectNum_); page_markDirty(effectNum_ ? PAGE_EFFECT_1 : PAGE_EFFECT_0);
+            lcd_drawEffect_FData(effectNum_); page_markDirty(effectNum_ ? PAGE_EFFECT_1 : PAGE_EFFECT_0);
         }
         const EncoderFunc functionA = (effectNum_ == 0) ? ENC_EFFECT_0_PARAM_E : ENC_EFFECT_1_PARAM_E;
         const EncoderFunc functionB = (effectNum_ == 0) ? ENC_EFFECT_0_PARAM_F : ENC_EFFECT_1_PARAM_F;

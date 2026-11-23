@@ -474,6 +474,7 @@ class Controller {
     void page_drawReverb();
     void page_drawFilter(uint8_t filterNum_);
     void page_drawEq();
+    void page_drawEffect(uint8_t effectNum_);
     void sd_getLibraries();
     SdResult sd_getFileLibrary();
     SdResult sd_getDrumkitLibrary();
