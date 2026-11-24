@@ -6085,7 +6085,7 @@ void Controller::page_drawLfo() {
     const RGB16Color ink = on ? kThemeInk : kThemeMid;
     const RGB16Color accent = on ? kThemeAccent : kThemeLine;
     const RGB16Color label = kThemeHeader;
-    const uint16_t gx = 80, gw = 790, gTop = 186, gBot = 276;
+    const uint16_t gx = 80, gw = 790, gTop = 186, gBot = 270;
     const int16_t mid = (gTop + gBot) / 2;
     const float half = (gBot - gTop) / 2.0f;
     const float depth = kNumberDataLibrary[lfo.depth].stdMultiplier;   // 0..1, as the audio code uses
