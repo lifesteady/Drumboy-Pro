@@ -1622,6 +1622,12 @@ void Controller::keyboard_action() {
                             ledLayerPlayMode = false;
                             ledLayerSelectFlag = true;
                             ledLayerSelectData = 0x03 << (selectedSongBank * 2);
+                        } else if ((page == PAGE_LFO) && (menu == LFO_MENU) && (!alertFlag)) {
+                            // Custom: on the LFO page a pad adds/removes that drum on the target row.
+                            // The drum still sounds (so you hear what you picked) but nothing is recorded.
+                            lfo_toggleTarget(layerNum);
+                            Layer& layer = layerLibrary[layerNum];
+                            if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(layerNum, 1.0f);
                         } else if ((keyboard.encKeyPress) && (!alertFlag)) {
                             uint8_t selectedEncoderBank = layerNum / 2;
                             encoder_selectBank(selectedEncoderBank);
@@ -3878,6 +3884,10 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
                 lfo_setDepth(selectedLfoNum, lfoLibrary[selectedLfoNum].depth + 1);
             break;
 
+        case ENC_LFO_TARGET:
+            lfo_stepTarget(1);
+            break;
+
             // Layer inst functions
 
         case ENC_INST_0_INST:
@@ -4435,6 +4445,10 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
         case ENC_LFO_DEPTH:
             if (lfoLibrary[selectedLfoNum].depth > kMinLfoDepth)
                 lfo_setDepth(selectedLfoNum, lfoLibrary[selectedLfoNum].depth - 1);
+            break;
+
+        case ENC_LFO_TARGET:
+            lfo_stepTarget(-1);
             break;
 
             // Layer inst functions
@@ -5245,6 +5259,38 @@ void Controller::page_toggle(PageView page_) {
     (page == page_) ? page_close() : page_open(page_);
 }
 
+void Controller::lfo_stepTarget(int8_t step_) {
+    /// @brief LFO menu, 3rd top knob: moves the target row on the LFO page (opens the page if needed).
+    if (page != PAGE_LFO) {
+        page_open(PAGE_LFO);   // first turn just shows the page, so you can see what you are choosing
+        return;
+    }
+    lfoTargetParam = (uint8_t)((lfoTargetParam + 8 + step_) % 8);
+    page_markDirty(PAGE_LFO);
+}
+
+void Controller::lfo_toggleTarget(uint8_t layerNum_) {
+    /// @brief LFO page: assigns / removes the selected LFO on one drum's target setting.
+    if ((selectedLfoNum < 0) || (selectedLfoNum >= kLfoLibrarySize) || (layerNum_ >= kLayerLibrarySize)) return;
+    Layer& ly = layerLibrary[layerNum_];
+    const uint8_t me = (uint8_t)(selectedLfoNum + 1);
+    const uint8_t current[8] = {ly.lfoLevel, ly.lfoPitch, ly.lfoDirection, ly.lfoResolution, ly.lfoStart, ly.lfoEnd, ly.lfoTiming, ly.lfoProbability};
+    const uint8_t value = (current[lfoTargetParam] == me) ? 0 : me;   // on -> off, anything else -> this LFO
+    switch (lfoTargetParam) {
+        case 0: layerInst_setLfoLevel(layerNum_, value); break;
+        case 1: layerInst_setLfoPitch(layerNum_, value); break;
+        case 2: layerInst_setLfoDirection(layerNum_, value); break;
+        case 3: layerInst_setLfoResolution(layerNum_, value); break;
+        case 4: layerInst_setLfoStart(layerNum_, value); break;
+        case 5: layerInst_setLfoEnd(layerNum_, value); break;
+        case 6: layerInst_setLfoTiming(layerNum_, value); break;
+        default: layerInst_setLfoProbability(layerNum_, value); break;
+    }
+    if (value) layerInst_lfoGesture(layerNum_, value);   // switches the LFO and the drum's P on
+    lfoKeyUsed = true;
+    page_markDirty(PAGE_LFO);
+}
+
 void Controller::page_markDirty(PageView page_) {
     if (page == page_) pageDirty = true;
 }
@@ -6039,7 +6085,7 @@ void Controller::page_drawLfo() {
     const RGB16Color ink = on ? kThemeInk : kThemeMid;
     const RGB16Color accent = on ? kThemeAccent : kThemeLine;
     const RGB16Color label = kThemeHeader;
-    const uint16_t gx = 80, gw = 790, gTop = 190, gBot = 372;
+    const uint16_t gx = 80, gw = 790, gTop = 186, gBot = 276;
     const int16_t mid = (gTop + gBot) / 2;
     const float half = (gBot - gTop) / 2.0f;
     const float depth = kNumberDataLibrary[lfo.depth].stdMultiplier;   // 0..1, as the audio code uses
@@ -6054,11 +6100,11 @@ void Controller::page_drawLfo() {
         lcd.drawHLine(30, 177, 900);
         lcd.setFont(FONT_07x09);
         lcd.setAlignment(LEFT);
-        const char hint[] = "TAP LFO ALONE: BACK TO SONG";
-        lcd.drawText(hint, strlen(hint), 30, 436);
+        const char hint[] = "TOP KNOB 3: PICK ROW    TAP A PAD: ADD / REMOVE THAT DRUM";
+        lcd.drawText(hint, strlen(hint), 30, 438);
         lcd.setAlignment(RIGHT);
-        const char hint2[] = "KNOBS: BOXES ABOVE / BELOW";
-        lcd.drawText(hint2, strlen(hint2), 930, 436);
+        const char hint2[] = "TAP LFO ALONE: BACK TO SONG";
+        lcd.drawText(hint2, strlen(hint2), 930, 438);
         lcd.setForeColor(label);
         lcd.drawText("+", 1, gx - 8, gTop);
         lcd.drawText("0", 1, gx - 8, mid - 4);
@@ -6120,35 +6166,55 @@ void Controller::page_drawLfo() {
         prevY = y;
     }
 
-    // ---- which layers this LFO modulates
+    // ---- assignment grid: rows = drum settings, columns = drums 1-10
+    // Filled orange block = this LFO.  Small dim number = another LFO is on that setting.
     const char* paramNames[8] = {"LEVEL", "PITCH", "DIRECTION", "RESOLUTION", "START", "END", "TIMING", "PROBABILITY"};
-    char used[kPageSummaryChars + 1];
-    uint8_t len = 0;
-    uint8_t count = 0;
-    used[0] = 0;
-    len = snprintf(used, sizeof(used), "USED BY:");
+    const uint16_t mLabelX = 30, mX = 170, mColW = 75, mHeadY = 296, mRowY = 309, mRowH = 15;
+    const uint8_t me = (uint8_t)(selectedLfoNum + 1);
+    lcd.setFont(FONT_07x09);
+    lcd.setBackColor(BLACK);
+    lcd.setAlignment(CENTER);
+    lcd.setForeColor(label);
     for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
-        const Layer& ly = layerLibrary[l];
-        const uint8_t targets[8] = {ly.lfoLevel, ly.lfoPitch, ly.lfoDirection, ly.lfoResolution, ly.lfoStart, ly.lfoEnd, ly.lfoTiming, ly.lfoProbability};
-        for (uint8_t t = 0; t < 8; t++) {
-            if (targets[t] == (uint8_t)(selectedLfoNum + 1)) {
-                char item[24];
-                snprintf(item, sizeof(item), " %02u %s,", l + 1, paramNames[t]);
-                if (len + strlen(item) < kPageSummaryChars - 4) { strcat(used, item); len += strlen(item); }
-                else if (len < kPageSummaryChars - 4) { strcat(used, " ..."); len += 4; }
-                count++;
+        char num[8];
+        snprintf(num, sizeof(num), "DRUM %02u", l + 1);
+        lcd.drawText(num, strlen(num), mX + l * mColW + mColW / 2, mHeadY);
+    }
+    for (uint8_t t = 0; t < 8; t++) {
+        const uint16_t y = mRowY + t * mRowH;
+        const bool sel = (t == lfoTargetParam);
+        // row label with a marker on the selected row
+        lcd.setAlignment(LEFT);
+        lcd.setBackColor(BLACK);
+        lcd.setForeColor(sel ? kThemeAccent : kThemeMid);
+        char lab[16];
+        snprintf(lab, sizeof(lab), "%c %-11s", sel ? '>' : ' ', paramNames[t]);
+        lcd.drawText(lab, 13, mLabelX, y + 2);
+        // selected row: thin frame lines so it is easy to follow across
+        lcd.setForeColor(sel ? page_mix(BLACK, kThemeAccent, 0.45f) : BLACK);
+        lcd.drawHLine(mX, y - 1, mColW * kLayerLibrarySize);
+        lcd.drawHLine(mX, y + mRowH - 2, mColW * kLayerLibrarySize);
+        for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
+            const Layer& ly = layerLibrary[l];
+            const uint8_t tg[8] = {ly.lfoLevel, ly.lfoPitch, ly.lfoDirection, ly.lfoResolution, ly.lfoStart, ly.lfoEnd, ly.lfoTiming, ly.lfoProbability};
+            const uint16_t cx = mX + l * mColW + 8, cw = mColW - 16, cy = y + 1, ch = mRowH - 4;
+            lcd.setBackColor(BLACK);
+            lcd.clearRect(cx, cy, cw, ch);
+            if (tg[t] == me) {
+                lcd.setForeColor(accent);
+                lcd.fillRect(cx, cy, cw, ch);
+            } else if (tg[t] != 0) {
+                char other[8];
+                snprintf(other, sizeof(other), "LFO %u", tg[t]);
+                lcd.setAlignment(CENTER);
+                lcd.setForeColor(kThemeLine);
+                lcd.drawText(other, strlen(other), cx + cw / 2, cy + 1);
+            } else {
+                lcd.setForeColor(kThemeLine);
+                lcd.drawPixel(cx + cw / 2, cy + ch / 2);
             }
         }
     }
-    if (count == 0) strcat(used, " NOT ASSIGNED TO ANY LAYER YET");
-    else if (used[strlen(used) - 1] == ',') used[strlen(used) - 1] = 0;
-    char row[kPageSummaryChars + 1];
-    snprintf(row, sizeof(row), "%-*s", (int)kPageSummaryChars, used);
-    lcd.setFont(FONT_10x14);
-    lcd.setAlignment(LEFT);
-    lcd.setBackColor(BLACK);
-    lcd.setForeColor(count ? kThemeAmber : kThemeLine);
-    lcd.drawText(row, kPageSummaryChars, 30, 414);
 }
 
 bool Controller::sd_showPreviews() {

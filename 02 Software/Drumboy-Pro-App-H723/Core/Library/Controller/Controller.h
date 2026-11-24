@@ -468,6 +468,8 @@ class Controller {
     void page_open(PageView page_);
     void page_close();
     void page_toggle(PageView page_);
+    void lfo_toggleTarget(uint8_t layerNum_);
+    void lfo_stepTarget(int8_t step_);
     void page_markDirty(PageView page_);
     void page_update();
     void page_draw();
@@ -478,6 +480,7 @@ class Controller {
     void page_drawEffect(uint8_t effectNum_);
     void page_drawLfo();
     void layerInst_lfoGesture(uint8_t layerNum_, uint8_t lfo_);
+    uint8_t lfoTargetParam = 1;                                         // LFO page: selected target row (0 LEVEL .. 7 PROBABILITY)
     bool lfoKeyUsed = false;                                            // LFO key was combined with a pad
     void sd_getLibraries();
     SdResult sd_getFileLibrary();
