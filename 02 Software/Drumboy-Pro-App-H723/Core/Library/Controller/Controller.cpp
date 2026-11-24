@@ -1924,7 +1924,9 @@ void Controller::keyboard_action() {
                                             break;
 
                                         case RHYTHM_MENU:
-                                            rhythm_menuLeft();
+                                            // Custom: on the Groove page LEFT shifts the selected drum earlier.
+                                            if (page == PAGE_GROOVE) groove_shift(grooveLayer, false, keyboard.shiftKeyPress);
+                                            else rhythm_menuLeft();
                                             break;
 
                                         case MIXER_MENU:
@@ -1990,7 +1992,9 @@ void Controller::keyboard_action() {
                                             break;
 
                                         case RHYTHM_MENU:
-                                            rhythm_menuRight();
+                                            // Custom: on the Groove page RIGHT shifts the selected drum later.
+                                            if (page == PAGE_GROOVE) groove_shift(grooveLayer, true, keyboard.shiftKeyPress);
+                                            else rhythm_menuRight();
                                             break;
 
                                         case MIXER_MENU:
@@ -5358,6 +5362,7 @@ bool Controller::undo_slotEqualsLive(uint8_t pos_) {
 }
 
 void Controller::undo_load(uint8_t pos_) {
+    memset(grooveShiftTotal, 0, sizeof(grooveShiftTotal));   // shift totals no longer match the hits
     const uint8_t* src = (const uint8_t*)undo_slotAddress(pos_);
     // Pause the sequencer interrupt (not audio) while the song is swapped, then re-find
     // each drum's next hit from the current play position.
@@ -5388,6 +5393,7 @@ void Controller::undo_load(uint8_t pos_) {
 }
 
 void Controller::undo_reset() {
+    memset(grooveShiftTotal, 0, sizeof(grooveShiftTotal));   // shift totals no longer match the hits
     // Used when the song is replaced (new / load) or the bar length changes.
     undoBase = 0;
     undoPos = 0;
@@ -5571,6 +5577,57 @@ void Controller::groove_timingCorrect(uint8_t layerNum_) {
     page_markDirty(PAGE_GROOVE);
 }
 
+void Controller::groove_shift(uint8_t layerNum_, bool later_, bool big_) {
+    /// @brief Slides every hit of one drum (current song bank) earlier or later, keeping the pattern.
+    /// Hits pushed past the loop end wrap to the start (and the other way round).
+    /// Small step = a few ticks; with ADD held = one QUANTIZE step. Quick taps = one undo step.
+    if (layerNum_ >= kLayerLibrarySize) return;
+    Bank& bank = layerLibrary[layerNum_].bankLibrary[activeSongBank];
+    if (bank.lastActiveBeatNum == -1) {
+        snprintf(grooveMessage, sizeof(grooveMessage), "DRUM %02u HAS NO HITS IN THIS SONG", layerNum_ + 1);
+        page_markDirty(PAGE_GROOVE);
+        return;
+    }
+    int32_t step = kShiftStepTicks;
+    if (big_) step = (rhythm.quantize == kQuantizeOff) ? kShiftBigStepTicks : (int32_t)(kQuantizeInterval[rhythm.quantize] + 0.5f);
+    if (step < 1) step = 1;
+    if (!later_) step = -step;
+    const int32_t loop = (int32_t)songInterval;
+    if (loop <= 0) return;
+
+    undo_checkpoint(UNDO_NUDGE);
+    HAL_NVIC_DisableIRQ(TIM15_IRQn);
+    const uint8_t last = (uint8_t)bank.lastActiveBeatNum;
+    for (uint8_t j = 0; j <= last; j++) {
+        Beat& beat = bank.beatLibrary[j];
+        if (!beat.getActive()) continue;
+        int32_t s = ((int32_t)beat.getStartInterval() + step) % loop;
+        if (s < 0) s += loop;
+        beat.setStartInterval((uint16_t)s);
+    }
+    // Wrapping can change the order: sort by start (insertion sort, all hits included).
+    for (uint8_t i = 1; i <= last; i++) {
+        Beat tmp = bank.beatLibrary[i];
+        int16_t k = (int16_t)i - 1;
+        while ((k >= 0) && (bank.beatLibrary[k].getStartInterval() > tmp.getStartInterval())) {
+            bank.beatLibrary[k + 1] = bank.beatLibrary[k];
+            k--;
+        }
+        bank.beatLibrary[k + 1] = tmp;
+    }
+    layerSong_arrangeActiveBeats(layerNum_, activeSongBank, true, true, true, true);
+    HAL_NVIC_EnableIRQ(TIM15_IRQn);
+    lcd_drawSong(layerNum_, activeSongBank);
+
+    grooveShiftTotal[layerNum_] += step;
+    const float msPerTick = 60000.0f / ((float)(rhythm.tempo ? rhythm.tempo : 1) * (float)kMeasureInterval);
+    const float stepMs = fabsf((float)step) * msPerTick;
+    const float totalMs = (float)grooveShiftTotal[layerNum_] * msPerTick;
+    snprintf(grooveMessage, sizeof(grooveMessage), "DRUM %02u %s %d MS   TOTAL %+d MS", layerNum_ + 1,
+             later_ ? "LATER" : "EARLIER", (int)(stepMs + 0.5f), (int)(totalMs + (totalMs >= 0 ? 0.5f : -0.5f)));
+    page_markDirty(PAGE_GROOVE);
+}
+
 void Controller::page_drawGroove() {
     /// @brief Groove page: swing of each drum (master + its own extra) and Timing Correct controls.
     const uint8_t master = (rhythm.swing >= kMinSwing) ? rhythm.swing : kMinSwing;
@@ -5587,11 +5644,11 @@ void Controller::page_drawGroove() {
         lcd.setForeColor(label);
         const char h1[] = "PAD: PICK DRUM    BOTTOM KNOB 3: DRUM SWING    BOTTOM KNOB 4: CORRECT %";
         lcd.drawText(h1, strlen(h1), 30, 420);
-        const char h2[] = "HOLD ADD + TAP PAD: TIMING CORRECT THAT DRUM    (ADD + CLEAR = UNDO)";
+        const char h2[] = "ADD + PAD: TIMING CORRECT    LEFT / RIGHT: SHIFT DRUM EARLIER / LATER (ADD = BIG)";
         lcd.drawText(h2, strlen(h2), 30, 438);
         lcd.setAlignment(RIGHT);
-        const char h3[] = "TAP RHYTHM: BACK";
-        lcd.drawText(h3, strlen(h3), 930, 438);
+        const char h3[] = "RHYTHM: BACK";
+        lcd.drawText(h3, strlen(h3), 930, 420);
         pageFullRedraw = false;
     }
 

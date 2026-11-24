@@ -2200,6 +2200,8 @@ const uint8_t kMaxDrumSwing                         = 25;
 const uint8_t kMaxTotalSwing                        = 80;   // master + drum extra never goes past this
 const uint8_t kInitialCorrect                       = 50;   // %
 const uint8_t kCorrectStep                          = 5;
+const uint8_t kShiftStepTicks                       = 5;    // LEFT/RIGHT on the Groove page (~4 ms at 92 BPM)
+const uint8_t kShiftBigStepTicks                    = 25;   // ADD + LEFT/RIGHT when QUANTIZE is OFF
 
 const uint16_t kPageX                               = 20;
 const uint16_t kPageY                               = 131;
@@ -2216,7 +2218,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.30 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.31 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;

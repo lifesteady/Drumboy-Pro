@@ -476,6 +476,7 @@ class Controller {
     void groove_setDrumSwing(uint8_t layerNum_, int16_t value_);
     void groove_timingCorrect(uint8_t layerNum_);
     void groove_knob(bool drumSwing_, int8_t step_);
+    void groove_shift(uint8_t layerNum_, bool later_, bool big_);
     void page_drawGroove();
     void lcd_drawRhythm_GrooveData();
     void lcd_drawMenuLabel(Menu menu_, int16_t num_);
@@ -511,6 +512,7 @@ class Controller {
     char undoText[6] = "UNDO ";
     int16_t currentFileNum = -1;                                        // project shown top-right (-1 = new, unsaved)
     uint8_t grooveLayer = 0;                                            // Groove page: selected drum
+    int32_t grooveShiftTotal[kLayerLibrarySize] = {0};                  // Groove page: net shift per drum this session (ticks)
     uint8_t grooveCorrect = kInitialCorrect;                            // Timing Correct strength %
     char grooveMessage[48] = "";                                        // Groove page status line
     volatile uint16_t swingDelayTicks[kLayerLibrarySize] = {0};         // per-drum swing delay for the hit being triggered
