@@ -1865,7 +1865,9 @@ void Controller::keyboard_action() {
                                             break;
 
                                         case MIXER_MENU:
-                                            mixer_menuUp();
+                                            // Custom: on the Routing page UP / DOWN switch CHAIN / 2 LANES.
+                                            if (page == PAGE_ROUTE) route_setMode(ROUTE_LANES);
+                                            else mixer_menuUp();
                                             break;
 
                                         case METRO_MENU:
@@ -1936,7 +1938,8 @@ void Controller::keyboard_action() {
                                             break;
 
                                         case MIXER_MENU:
-                                            mixer_menuDown();
+                                            if (page == PAGE_ROUTE) route_setMode(ROUTE_CHAIN);
+                                            else mixer_menuDown();
                                             break;
 
                                         case METRO_MENU:
@@ -5567,7 +5570,63 @@ void Controller::route_setEntry(uint8_t layerNum_, uint8_t entry_) {
     layerInst_calculateMixMode(layerNum_);
 }
 
+static uint8_t route_chainEntry(const Layer& L_) {
+    /// @brief The drum's CHAIN entry point from its EQ / FILTER / EFFECT / REVERB settings.
+    if (L_.eq) return MIXER_IN_EQ;
+    if (L_.filter == 2) return MIXER_IN_FILTER_0;
+    if (L_.filter == 1) return MIXER_IN_FILTER_1;
+    if (L_.effect == 2) return MIXER_IN_EFFECT_0;
+    if (L_.effect == 1) return MIXER_IN_EFFECT_1;
+    if (L_.reverb) return MIXER_IN_REVERB;
+    return MIXER_IN_SEND;
+}
+
+uint8_t Controller::route_laneDest(uint8_t layerNum_) {
+    /// @brief 2 LANES destination of a drum. First time: taken from where it entered the chain.
+    Layer& L = layerLibrary[layerNum_];
+    if (L.laneDest == LANE_DEST_AUTO) {
+        switch (route_chainEntry(L)) {
+            case MIXER_IN_EQ: L.laneDest = LANE_DEST_A; L.laneEq = true; break;
+            case MIXER_IN_FILTER_0:
+            case MIXER_IN_EFFECT_0: L.laneDest = LANE_DEST_A; L.laneEq = false; break;
+            case MIXER_IN_FILTER_1:
+            case MIXER_IN_EFFECT_1: L.laneDest = LANE_DEST_B; L.laneEq = false; break;
+            case MIXER_IN_REVERB: L.laneDest = LANE_DEST_REVERB; L.laneEq = false; break;
+            default: L.laneDest = LANE_DEST_DRY; L.laneEq = false; break;
+        }
+    }
+    return L.laneDest;
+}
+
+MixerInMode Controller::route_laneCode(uint8_t layerNum_) {
+    const uint8_t d = route_laneDest(layerNum_);
+    const bool e = layerLibrary[layerNum_].laneEq;
+    switch (d) {
+        case LANE_DEST_A: return e ? MIXER_IN_LANE_A_EQ : MIXER_IN_LANE_A;
+        case LANE_DEST_B: return e ? MIXER_IN_LANE_B_EQ : MIXER_IN_LANE_B;
+        case LANE_DEST_REVERB: return e ? MIXER_IN_REVERB_EQ : MIXER_IN_REVERB;
+        default: return e ? MIXER_IN_SEND_EQ : MIXER_IN_SEND;
+    }
+}
+
+void Controller::route_setMode(uint8_t mode_) {
+    /// @brief CHAIN (stock) or 2 LANES. Every drum's routing is recalculated; each layout keeps its own settings.
+    mode_ = (mode_ == ROUTE_LANES) ? ROUTE_LANES : ROUTE_CHAIN;
+    if (mode_ == routeMode) return;
+    routeMode = mode_;
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) layerInst_calculateMixMode(l);
+    if (page == PAGE_ROUTE) { pageFullRedraw = true; page_markDirty(PAGE_ROUTE); }
+}
+
 void Controller::route_shift(bool later_) {
+    if (routeMode == ROUTE_LANES) {   // 2 LANES: LANE A, LANE B, REVERB, DRY (left to right on screen)
+        const uint8_t d = route_laneDest(routeLayer);
+        if (later_ && (d < LANE_DEST_DRY)) layerLibrary[routeLayer].laneDest = d + 1;
+        else if (!later_ && (d > LANE_DEST_A)) layerLibrary[routeLayer].laneDest = d - 1;
+        layerInst_calculateMixMode(routeLayer);
+        page_markDirty(PAGE_ROUTE);
+        return;
+    }
     const uint8_t now = (uint8_t)layerLibrary[routeLayer].mixerInMode;
     if (later_ && (now < MIXER_IN_SEND)) route_setEntry(routeLayer, now + 1);
     else if (!later_ && (now > MIXER_IN_EQ)) route_setEntry(routeLayer, now - 1);
@@ -5576,19 +5635,29 @@ void Controller::route_shift(bool later_) {
 
 void Controller::route_pad(uint8_t layerNum_) {
     routeLayer = layerNum_;
+    if (keyboard.shiftKeyPress && (routeMode == ROUTE_LANES)) {   // ADD + pad: this drum's EQ on / off
+        route_laneDest(layerNum_);
+        layerLibrary[layerNum_].laneEq = !layerLibrary[layerNum_].laneEq;
+        layerInst_calculateMixMode(layerNum_);
+        page_markDirty(PAGE_ROUTE);
+        return;
+    }
     Layer& layer = layerLibrary[layerNum_];
     if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(layerNum_, 1.0f);
     page_markDirty(PAGE_ROUTE);
 }
 
 void Controller::page_drawRoute() {
-    /// @brief Routing page: the chain as 7 boxes, then one row per drum (and Line In, Metronome)
-    /// showing where it enters and which stages it goes through. Filled square = that stage is on
-    /// and changes the sound; hollow = it's off, the sound just passes through.
+    /// @brief Routing page: the stages as 7 boxes, then one row per drum (and Line In, Metronome)
+    /// showing which stages it goes through. Filled square = that stage is on and changes the
+    /// sound; hollow = it's off, the sound just passes through.
+    /// CHAIN: one line, a drum goes through everything after where it enters.
+    /// 2 LANES: EQ (per drum), then lane A (FILTER 1 > EFFECT 1) or lane B (FILTER 2 > EFFECT 2), then REVERB.
     const RGB16Color label = kThemeHeader;
-    const uint16_t x0 = 190, colW = 106, boxW = 96, boxY = 188, boxH = 42;
-    const uint16_t rowY = 242, rowH = 15;
-    char text[96];
+    const bool lanes = (routeMode == ROUTE_LANES);
+    const uint16_t x0 = 190, colW = 106, boxW = 96, boxY = 190, boxH = 40;
+    const uint16_t rowY = 236, rowH = 15;
+    char text[112];
 
     bool stageOn[7];
     stageOn[0] = eq.active;
@@ -5598,6 +5667,13 @@ void Controller::page_drawRoute() {
     stageOn[4] = effect[1].active;
     stageOn[5] = reverb.active;
     stageOn[6] = true;
+
+    // Column order on screen. CHAIN: EQ F1 F2 FX1 FX2 REVERB OUT. 2 LANES: EQ [F1 FX1] [F2 FX2] REVERB OUT.
+    const uint8_t chainCol[7] = {0, 1, 2, 3, 4, 5, 6};
+    const uint8_t laneCol[7] = {0, 1, 3, 2, 4, 5, 6};   // stage -> column (stage 2 = FILTER 2, stage 3 = EFFECT 1)
+    const uint8_t* colOf = lanes ? laneCol : chainCol;
+    uint8_t stageAt[7];
+    for (uint8_t st = 0; st < 7; st++) stageAt[colOf[st]] = st;
 
     auto stageState = [&](uint8_t c_) -> const char* {
         static char buf[12];
@@ -5623,6 +5699,35 @@ void Controller::page_drawRoute() {
         return buf;
     };
 
+    // Which stages a source goes through (by stage number 0..6)
+    auto pathOf = [&](uint8_t code_, bool visit_[7]) {
+        for (uint8_t st = 0; st < 7; st++) visit_[st] = false;
+        visit_[6] = true;
+        if (!lanes) {
+            const uint8_t e = (code_ > MIXER_IN_SEND) ? MIXER_IN_SEND : code_;
+            for (uint8_t st = e; st < 7; st++) visit_[st] = true;
+            return;
+        }
+        switch (code_) {   // line in / metronome keep chain codes: same mapping as the audio
+            case MIXER_IN_EQ: code_ = MIXER_IN_LANE_A_EQ; break;
+            case MIXER_IN_FILTER_0:
+            case MIXER_IN_EFFECT_0: code_ = MIXER_IN_LANE_A; break;
+            case MIXER_IN_FILTER_1:
+            case MIXER_IN_EFFECT_1: code_ = MIXER_IN_LANE_B; break;
+            default: break;
+        }
+        switch (code_) {
+            case MIXER_IN_LANE_A_EQ: visit_[0] = true;   // fall through
+            case MIXER_IN_LANE_A: visit_[1] = visit_[3] = visit_[5] = true; break;
+            case MIXER_IN_LANE_B_EQ: visit_[0] = true;   // fall through
+            case MIXER_IN_LANE_B: visit_[2] = visit_[4] = visit_[5] = true; break;
+            case MIXER_IN_REVERB_EQ: visit_[0] = true;   // fall through
+            case MIXER_IN_REVERB: visit_[5] = true; break;
+            case MIXER_IN_SEND_EQ: visit_[0] = true; break;
+            default: break;
+        }
+    };
+
     if (pageFullRedraw) {
         lcd.setBackColor(BLACK);
         lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
@@ -5631,60 +5736,82 @@ void Controller::page_drawRoute() {
         lcd.setFont(FONT_07x09);
         lcd.setAlignment(LEFT);
         lcd.setForeColor(label);
-        const char h1[] = "PAD: PICK DRUM    LEFT / RIGHT: ENTER EARLIER / LATER    FILLED: STAGE ON   HOLLOW: BYPASSED";
-        lcd.drawText(h1, strlen(h1), 30, 438);
+        const char* h1 = lanes ? "PAD: PICK DRUM    LEFT / RIGHT: LANE A, LANE B, REVERB ONLY, DRY    ADD + PAD: EQ ON / OFF"
+                               : "PAD: PICK DRUM    LEFT / RIGHT: ENTER EARLIER / LATER";
+        lcd.drawText(h1, strlen(h1), 30, 422);
+        const char h2[] = "UP / DOWN: 2 LANES / CHAIN    FILLED: STAGE ON   HOLLOW: BYPASSED";
+        lcd.drawText(h2, strlen(h2), 30, 438);
         lcd.setAlignment(RIGHT);
-        const char h2[] = "MIXER: NEXT";
-        lcd.drawText(h2, strlen(h2), 930, 438);
+        const char h3[] = "MIXER: NEXT";
+        lcd.drawText(h3, strlen(h3), 930, 438);
+        if (lanes) {   // lane labels over their boxes
+            lcd.setAlignment(CENTER);
+            lcd.setForeColor(kThemeAmber);
+            lcd.drawText("LANE A", 6, x0 + colW * 2, 180);
+            lcd.drawText("LANE B", 6, x0 + colW * 4, 180);
+        }
         pageFullRedraw = false;
     }
 
-    // ---- title + summary (what the selected drum goes through)
+    // ---- title (+ layout) and summary (what the selected drum goes through)
     lcd.setFont(FONT_14x18);
     lcd.setAlignment(LEFT);
     lcd.setBackColor(BLACK);
     lcd.setForeColor(kThemeAccent);
     lcd.drawText("ROUTING", 7, 30, 136);
+    lcd.setForeColor(kThemeAmber);
+    lcd.drawText(lanes ? "2 LANES" : "CHAIN  ", 7, 186, 136);
     page_drawCpu(930, 136);
     {
-        const Layer& L = layerLibrary[routeLayer];
-        const uint8_t e = (uint8_t)L.mixerInMode;
+        bool v[7];
+        pathOf((uint8_t)layerLibrary[routeLayer].mixerInMode, v);
         int n = snprintf(text, sizeof(text), "DRUM %02u:", routeLayer + 1);
         bool any = false;
-        for (uint8_t c = e; c < 6; c++) {
-            if (!stageOn[c]) continue;
-            n += snprintf(text + n, sizeof(text) - n, "%s %s", any ? " -" : "", kRouteStageName[c]);
+        for (uint8_t c = 0; c < 6; c++) {
+            const uint8_t st = stageAt[c];
+            if (!v[st] || !stageOn[st]) continue;
+            n += snprintf(text + n, sizeof(text) - n, "%s %s", any ? " -" : "", kRouteStageName[st]);
             any = true;
         }
         if (!any) snprintf(text + n, sizeof(text) - n, " DRY, NOTHING CHANGES IT");
         page_drawSummary(text);
     }
 
-    // ---- stage boxes
+    // ---- stage boxes (drawn in column order)
     for (uint8_t c = 0; c < 7; c++) {
+        const uint8_t st = stageAt[c];
         const uint16_t bx = x0 + c * colW + (colW - boxW) / 2;
-        const bool on = stageOn[c];
+        const bool on = stageOn[st];
         lcd.setForeColor(on ? page_mix(BLACK, kThemeAccent, 0.8f) : kThemeLine);
         lcd.drawRect(bx, boxY, boxW, boxH);
         lcd.setFont(FONT_07x09);
         lcd.setAlignment(CENTER);
         lcd.setBackColor(BLACK);
+        char nm[13];
+        snprintf(nm, sizeof(nm), "%-11s", kRouteStageName[st]);
+        const int nl = (int)strlen(kRouteStageName[st]);
+        const int nleft = (11 - nl) / 2;
+        snprintf(nm, sizeof(nm), "%*s%-*s", nleft + nl, kRouteStageName[st], 11 - nleft - nl, "");
         lcd.setForeColor(on ? kThemeInk : kThemeMid);
-        lcd.drawText(kRouteStageName[c], strlen(kRouteStageName[c]), bx + boxW / 2, boxY + 8);
-        const char* st = stageState(c);
+        lcd.drawText(nm, strlen(nm), bx + boxW / 2, boxY + 7);
+        const char* sv = stageState(st);
         char pad[13];
-        const int len = (int)strlen(st);
+        const int len = (int)strlen(sv);
         const int left = (11 - len) / 2;
-        snprintf(pad, sizeof(pad), "%*s%-*s", left + len, st, 11 - left - len, "");   // centred, fixed 11 chars
+        snprintf(pad, sizeof(pad), "%*s%-*s", left + len, sv, 11 - left - len, "");   // centred, fixed 11 chars
         lcd.setForeColor(on ? kThemeAmber : kThemeMid);
-        lcd.drawText(pad, strlen(pad), bx + boxW / 2, boxY + 25);
-        if (c < 6) {   // arrow to the next box
+        lcd.drawText(pad, strlen(pad), bx + boxW / 2, boxY + 23);
+        if (c < 6) {   // arrow to the next box (2 LANES: none between lane A and lane B)
             const uint16_t ax = bx + boxW + 2;
             const uint16_t ay = boxY + boxH / 2;
-            lcd.setForeColor(kThemeLine);
-            lcd.drawHLine(ax, ay, 6);
-            lcd.drawPixel(ax + 4, ay - 2); lcd.drawPixel(ax + 5, ay - 1);
-            lcd.drawPixel(ax + 4, ay + 2); lcd.drawPixel(ax + 5, ay + 1);
+            lcd.setForeColor(BLACK);
+            lcd.fillRect(ax, ay - 3, 7, 7);
+            if (!(lanes && (c == 2))) {
+                lcd.setForeColor(kThemeLine);
+                lcd.drawHLine(ax, ay, 6);
+                lcd.drawPixel(ax + 4, ay - 2); lcd.drawPixel(ax + 5, ay - 1);
+                lcd.drawPixel(ax + 4, ay + 2); lcd.drawPixel(ax + 5, ay + 1);
+            }
         }
     }
 
@@ -5693,12 +5820,12 @@ void Controller::page_drawRoute() {
         const uint16_t y = rowY + r * rowH;
         const bool isDrum = (r < kLayerLibrarySize);
         const bool sel = isDrum && (r == routeLayer);
-        uint8_t entry;
+        uint8_t code;
         bool dim = false;
         char name[16];
         if (isDrum) {
             const Layer& L = layerLibrary[r];
-            entry = (uint8_t)L.mixerInMode;
+            code = (uint8_t)L.mixerInMode;
             char nm[13];
             memcpy(nm, L.instLoadedData.nameShortL, 12);
             nm[12] = 0;
@@ -5708,15 +5835,18 @@ void Controller::page_drawRoute() {
             snprintf(name, sizeof(name), "%02u %-10.10s", r + 1, (*p && (*p != '-')) ? p : "------");
             dim = L.mute || !L.samplePlay;
         } else if (r == kLayerLibrarySize) {
-            entry = (uint8_t)mixer.liMixerInMode;
+            code = (uint8_t)mixer.liMixerInMode;
             snprintf(name, sizeof(name), "   LINE IN    ");
             dim = mixer.liMute;
         } else {
-            entry = (uint8_t)metronome.mixerInMode;
+            code = (uint8_t)metronome.mixerInMode;
             snprintf(name, sizeof(name), "   METRONOME  ");
             dim = !metronome.active;
         }
-        if (entry > MIXER_IN_SEND) entry = MIXER_IN_SEND;
+        bool v[7];
+        pathOf(code, v);
+        uint8_t firstCol = 6;
+        for (uint8_t c = 0; c < 7; c++) if (v[stageAt[c]]) { firstCol = c; break; }
 
         const RGB16Color bg = sel ? kRouteSelectBg : BLACK;
         lcd.setBackColor(bg);
@@ -5728,19 +5858,21 @@ void Controller::page_drawRoute() {
 
         const uint16_t yc = y + rowH / 2 - 1;
         const RGB16Color lineCol = sel ? kThemeAccent : (dim ? kThemeLine : page_mix(BLACK, kThemeInk, 0.55f));
-        // faint dots before the entry point (the sound skips these)
+        // faint dots before the first stage (the sound skips these)
         lcd.setForeColor(page_mix(BLACK, kThemeLine, 0.6f));
-        for (uint16_t x = x0 + colW / 2; x < x0 + entry * colW + colW / 2; x += 6) lcd.drawPixel(x, yc);
-        // solid line from the entry point to OUT
-        const uint16_t xs = x0 + entry * colW + colW / 2, xe = x0 + 6 * colW + colW / 2;
+        for (uint16_t x = x0 + colW / 2; x < x0 + firstCol * colW + colW / 2; x += 6) lcd.drawPixel(x, yc);
+        // solid line from the first stage to OUT
+        const uint16_t xs = x0 + firstCol * colW + colW / 2, xe = x0 + 6 * colW + colW / 2;
         lcd.setForeColor(lineCol);
         if (xe > xs) lcd.drawHLine(xs, yc, xe - xs);
         // a node on every stage it goes through
-        for (uint8_t c = entry; c < 7; c++) {
+        for (uint8_t c = firstCol; c < 7; c++) {
+            const uint8_t st = stageAt[c];
+            if (!v[st]) continue;
             const uint16_t cx = x0 + c * colW + colW / 2;
-            const RGB16Color nodeCol = (c == entry) ? (sel ? kThemeAccent : kThemeAmber) : lineCol;
+            const RGB16Color nodeCol = (c == firstCol) ? (sel ? kThemeAccent : kThemeAmber) : lineCol;
             lcd.setForeColor(nodeCol);
-            if (stageOn[c] || (c == 6)) {
+            if (stageOn[st] || (st == 6)) {
                 lcd.fillRect(cx - 3, yc - 3, 7, 7);
             } else {
                 lcd.setForeColor(bg);
@@ -9255,6 +9387,9 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
                         }
                     }
 
+                    // custom: routing layout (older files: CHAIN). Drums are recalculated as they load.
+                    routeMode = ((data[179] & 0xF0) == kRouteModeFileMark) ? ((data[179] & 0x0F) ? ROUTE_LANES : ROUTE_CHAIN) : ROUTE_CHAIN;
+
                     // Reverb processor parameters
                     reverb_setActive(data[167]);
                     // custom: reverb type (older files: STANDARD)
@@ -9305,6 +9440,14 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
                         layerInst_setFill(i, (bool)data[offset + 21]);
                         layerInst_setStyle(i, (bool)data[offset + 22]);
                         layerLibrary[i].swingExtra = (data[offset + 23] <= kMaxDrumSwing) ? data[offset + 23] : 0;   // custom
+                        if ((data[offset + 24] & 0xF0) == kLaneFileMark) {   // custom: 2 LANES settings
+                            layerLibrary[i].laneDest = data[offset + 24] & 0x03;
+                            layerLibrary[i].laneEq = (data[offset + 24] >> 2) & 0x01;
+                        } else {
+                            layerLibrary[i].laneDest = LANE_DEST_AUTO;
+                            layerLibrary[i].laneEq = false;
+                        }
+                        layerInst_calculateMixMode(i);
                         {   // custom envelope (old files: defaults)
                             const uint16_t ao = 500 + (i * 100) + kEnvFileMarkerOffset;
                             const bool hasEnv = (data[ao] == 'E');
@@ -9630,6 +9773,7 @@ void Controller::sd_encodeProject(uint8_t* data) {
     // 2.9 REVERB SETTINGS
     data[167] = reverb.active;
     data[178] = kReverbTypeFileMark | reverb.type;   // custom: reverb type
+    data[179] = kRouteModeFileMark | (routeMode & 0x0F);   // custom: CHAIN / 2 LANES
     data[168] = reverb.size;
     data[169] = reverb.decay;
     data[170] = reverb.damping;
@@ -9678,6 +9822,7 @@ void Controller::sd_encodeProject(uint8_t* data) {
         data[offset + 21] = layer.fill;
         data[offset + 22] = layer.style;
         data[offset + 23] = layer.swingExtra;   // custom: per-drum swing (byte was unused)
+        data[offset + 24] = (layer.laneDest == LANE_DEST_AUTO) ? 0 : (uint8_t)(kLaneFileMark | (layer.laneEq ? 0x04 : 0) | (layer.laneDest & 0x03));   // custom
     }
 
     // 2.12 ASSET REFERENCES
@@ -10103,6 +10248,9 @@ SdResult Controller::sd_loadDrumkit(uint8_t kitNum_) {
                         }
                     }
 
+                    // custom: routing layout (older files: CHAIN). Drums are recalculated as they load.
+                    routeMode = ((data[179] & 0xF0) == kRouteModeFileMark) ? ((data[179] & 0x0F) ? ROUTE_LANES : ROUTE_CHAIN) : ROUTE_CHAIN;
+
                     // Reverb processor parameters
                     reverb_setActive(data[167]);
                     // custom: reverb type (older files: STANDARD)
@@ -10153,6 +10301,14 @@ SdResult Controller::sd_loadDrumkit(uint8_t kitNum_) {
                         layerInst_setFill(i, (bool)data[offset + 21]);
                         layerInst_setStyle(i, (bool)data[offset + 22]);
                         layerLibrary[i].swingExtra = (data[offset + 23] <= kMaxDrumSwing) ? data[offset + 23] : 0;   // custom
+                        if ((data[offset + 24] & 0xF0) == kLaneFileMark) {   // custom: 2 LANES settings
+                            layerLibrary[i].laneDest = data[offset + 24] & 0x03;
+                            layerLibrary[i].laneEq = (data[offset + 24] >> 2) & 0x01;
+                        } else {
+                            layerLibrary[i].laneDest = LANE_DEST_AUTO;
+                            layerLibrary[i].laneEq = false;
+                        }
+                        layerInst_calculateMixMode(i);
                         {   // custom envelope (old files: defaults)
                             const uint16_t ao = 500 + (i * 100) + kEnvFileMarkerOffset;
                             const bool hasEnv = (data[ao] == 'E');
@@ -10417,6 +10573,7 @@ SdResult Controller::sd_saveDrumkit(uint8_t kitNum_) {
     // 2.9 REVERB SETTINGS
     data[167] = reverb.active;
     data[178] = kReverbTypeFileMark | reverb.type;   // custom: reverb type
+    data[179] = kRouteModeFileMark | (routeMode & 0x0F);   // custom: CHAIN / 2 LANES
     data[168] = reverb.size;
     data[169] = reverb.decay;
     data[170] = reverb.damping;
@@ -10465,6 +10622,7 @@ SdResult Controller::sd_saveDrumkit(uint8_t kitNum_) {
         data[offset + 21] = layer.fill;
         data[offset + 22] = layer.style;
         data[offset + 23] = layer.swingExtra;   // custom: per-drum swing (byte was unused)
+        data[offset + 24] = (layer.laneDest == LANE_DEST_AUTO) ? 0 : (uint8_t)(kLaneFileMark | (layer.laneEq ? 0x04 : 0) | (layer.laneDest & 0x03));   // custom
     }
 
     // 2.12 ASSET REFERENCES
@@ -17536,6 +17694,7 @@ void Controller::mixer_select() {
 }
 
 void Controller::mixer_reset() {
+    route_setMode(ROUTE_CHAIN);   // custom
     /// @brief Restores mixer mute, level, routing, and dynamics parameters to default values.
 
     // 1. MUTE STATE RESET
@@ -23006,6 +23165,8 @@ void Controller::layerInst_reset(uint8_t layerNum_) {
     layerInst_setFill(layerNum_, true);
     layerInst_setStyle(layerNum_, true);
     layerLibrary[layerNum_].swingExtra = 0;   // custom
+    layerLibrary[layerNum_].laneDest = LANE_DEST_AUTO;
+    layerLibrary[layerNum_].laneEq = false;
     layerLibrary[layerNum_].envAttack = kInitialEnvAttack;
     layerLibrary[layerNum_].envHold = kInitialEnvHold;
     layerLibrary[layerNum_].envDecay = kInitialEnvDecay;
@@ -24400,6 +24561,10 @@ void Controller::layerInst_calculateMixMode(uint8_t layerNum_) {
     // 1. ROUTING PRIORITY RESOLUTION
     // Apply fixed priority chain to choose single mixer input source.
     Layer& layer = layerLibrary[layerNum_];
+    if (routeMode == ROUTE_LANES) {   // custom: 2 LANES uses the drum's lane settings instead
+        layer.mixerInMode = route_laneCode(layerNum_);
+        return;
+    }
     if (layer.eq) {
         layer.mixerInMode = MIXER_IN_EQ;
     } else if (layer.filter == 2) {
@@ -25967,13 +26132,19 @@ void Controller::processAudioBlock(uint32_t* inputBuffer_, uint32_t* outputBuffe
 
         // 3. SERIAL DSP CHAIN
         // Run EQ, Filter, Effect, and Reverb stages in order.
-        processAudioEq();
+        // Custom: 2 LANES routing replaces the EQ / filter / effect stages with parallel lanes.
+        routeLanesBlock = (routeMode == ROUTE_LANES);
+        if (routeLanesBlock) {
+            processAudioLanes();
+        } else {
+            processAudioEq();
 
-        // Dual-bus filtering stage.
-        processAudioFilter();
+            // Dual-bus filtering stage.
+            processAudioFilter();
 
-        // Dual-bus effect stage.
-        processAudioEffect();
+            // Dual-bus effect stage.
+            processAudioEffect();
+        }
 
         // Global reverb stage.
         processAudioReverb();
@@ -26562,6 +26733,94 @@ void Controller::processAudioEffect() {
     }
 }
 
+void Controller::processAudioLanes() {
+    /// @brief Custom 2 LANES routing: per-drum EQ, then lane A (FILTER 1 > EFFECT 1) or lane B
+    /// (FILTER 2 > EFFECT 2) running side by side; both lanes then feed the reverb stage.
+    /// EQ'd drums are summed per destination and each sum gets its own copy of the EQ (same settings).
+    static float eqIn[4][I2S_BLOCK_SIZE];
+    float* busA = audioFilter[0];
+    float* busB = audioFilter[1];
+    memset(audioEq, 0, I2S_BLOCK_SIZE * sizeof(float));
+    memset(audioFilter[0], 0, I2S_BLOCK_SIZE * sizeof(float));
+    memset(audioFilter[1], 0, I2S_BLOCK_SIZE * sizeof(float));
+    memset(eqIn, 0, sizeof(eqIn));
+    memset(laneEqRev, 0, sizeof(laneEqRev));
+    memset(laneEqDry, 0, sizeof(laneEqDry));
+    bool used[4] = {false, false, false, false};
+
+    auto addSrc = [&](uint8_t code_, const float* src_) {
+        float* dst = nullptr;
+        switch (code_) {
+            case MIXER_IN_LANE_A: dst = busA; break;
+            case MIXER_IN_LANE_B: dst = busB; break;
+            case MIXER_IN_LANE_A_EQ: dst = eqIn[0]; used[0] = true; break;
+            case MIXER_IN_LANE_B_EQ: dst = eqIn[1]; used[1] = true; break;
+            case MIXER_IN_REVERB_EQ: dst = eqIn[2]; used[2] = true; break;
+            case MIXER_IN_SEND_EQ: dst = eqIn[3]; used[3] = true; break;
+            default: return;   // REVERB / SEND are picked up by the stock reverb and output stages
+        }
+        for (uint16_t i = 0; i < I2S_BLOCK_SIZE; i++) dst[i] += src_[i];
+    };
+    // Line In and metronome keep their stock (chain) setting: map it onto the lanes.
+    auto mapChain = [](uint8_t m_) -> uint8_t {
+        switch (m_) {
+            case MIXER_IN_EQ: return MIXER_IN_LANE_A_EQ;
+            case MIXER_IN_FILTER_0:
+            case MIXER_IN_EFFECT_0: return MIXER_IN_LANE_A;
+            case MIXER_IN_FILTER_1:
+            case MIXER_IN_EFFECT_1: return MIXER_IN_LANE_B;
+            default: return m_;
+        }
+    };
+    addSrc(mapChain(mixer.liMixerInMode), audioReceive);
+    if (metroPlayData.active) addSrc(mapChain(metroPlayData.mixerInMode), audioMetronome);
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) addSrc(layerPlayData[l].activeBeatPlayData.mixerInMode, audioLayer[l]);
+
+    // EQ: one copy per destination, same coefficients as the EQ menu
+    const bool eqOn = eq.active || eq.genTransition.active;
+    const EqFilter* srcF[6] = {&eq.filterLowShelf, &eq.filterHighShelf, &eq.filterPeak[0], &eq.filterPeak[1], &eq.filterPeak[2], &eq.filterPeak[3]};
+    const bool act[6] = {eq.gainLowShelf != kEqGainZero, eq.gainHighShelf != kEqGainZero, eq.gainPeak[0] != kEqGainZero,
+                         eq.gainPeak[1] != kEqGainZero, eq.gainPeak[2] != kEqGainZero, eq.gainPeak[3] != kEqGainZero};
+    float* outs[4] = {busA, busB, laneEqRev, laneEqDry};
+    for (uint8_t p = 0; p < 4; p++) {
+        EqFilter* f = laneEqF[p];
+        if (!used[p]) {
+            for (uint8_t k = 0; k < 6; k++) f[k].x1 = f[k].x2 = f[k].y1 = f[k].y2 = 0.0f;
+            continue;
+        }
+        if (!eqOn) {
+            for (uint16_t i = 0; i < I2S_BLOCK_SIZE; i++) outs[p][i] += eqIn[p][i];
+            continue;
+        }
+        for (uint8_t k = 0; k < 6; k++) {
+            f[k].b0 = srcF[k]->b0; f[k].b1 = srcF[k]->b1; f[k].b2 = srcF[k]->b2;
+            f[k].a1 = srcF[k]->a1; f[k].a2 = srcF[k]->a2;
+        }
+        for (uint16_t i = 0; i < I2S_BLOCK_SIZE; i++) {
+            const float in = eqIn[p][i];
+            float x = in;
+            for (uint8_t k = 0; k < 6; k++) x = processEqBiquad(f[k], x, act[k]);
+            if (eq.genTransition.active) x = (x * eq.genTransition.activeWet) + (in * eq.genTransition.activeDry);
+            outs[p][i] += x;
+        }
+    }
+
+    // Lane filters (side by side, no cross feed)
+    if ((filter[0].active) || (filter[0].genTransition.active))
+        for (uint16_t i = 0; i < I2S_BLOCK_SIZE; i++) busA[i] = processAudioFilterHelper(0, busA[i]);
+    if ((filter[1].active) || (filter[1].genTransition.active))
+        for (uint16_t i = 0; i < I2S_BLOCK_SIZE; i++) busB[i] = processAudioFilterHelper(1, busB[i]);
+
+    // Lane effects, then both lanes into effect bus 1 (= what the reverb stage reads)
+    memcpy(audioEffect[0], busA, I2S_BLOCK_SIZE * sizeof(float));
+    memcpy(audioEffect[1], busB, I2S_BLOCK_SIZE * sizeof(float));
+    if ((effect[0].active) || (effect[0].genTransition.active))
+        for (uint16_t i = 0; i < I2S_BLOCK_SIZE; i++) audioEffect[0][i] = processAudioEffectHelper(0, audioEffect[0][i]);
+    if ((effect[1].active) || (effect[1].genTransition.active))
+        for (uint16_t i = 0; i < I2S_BLOCK_SIZE; i++) audioEffect[1][i] = processAudioEffectHelper(1, audioEffect[1][i]);
+    for (uint16_t i = 0; i < I2S_BLOCK_SIZE; i++) audioEffect[1][i] += audioEffect[0][i];
+}
+
 void Controller::processAudioReverb() {
     /// @brief Accumulates inputs and applies a damped stereo reverb with pre-delay and surround enhancement.
 
@@ -26574,6 +26833,9 @@ void Controller::processAudioReverb() {
     // Sum effect, line-in, metronome, and layer signals into left reverb input.
     for (uint16_t i = 0; i < I2S_BLOCK_SIZE; i++) {
         audioReverb_L[i] += audioEffect[1][i];
+    }
+    if (routeLanesBlock) {   // custom: 2 LANES, EQ'd drums that go to the reverb only
+        for (uint16_t i = 0; i < I2S_BLOCK_SIZE; i++) audioReverb_L[i] += laneEqRev[i];
     }
 
     // Accumulate line-in
@@ -26705,6 +26967,9 @@ void Controller::processAudioSend(uint32_t* outputBuffer) {
     // Merge reverb output with routed line-in, metronome, and layer signals.
     memcpy(audioSend_L, audioReverb_L, I2S_BLOCK_SIZE * sizeof(float));
     memcpy(audioSend_R, audioReverb_R, I2S_BLOCK_SIZE * sizeof(float));
+    if (routeLanesBlock) {   // custom: 2 LANES, EQ'd drums that go straight out
+        for (uint16_t i = 0; i < I2S_BLOCK_SIZE; i++) { audioSend_L[i] += laneEqDry[i]; audioSend_R[i] += laneEqDry[i]; }
+    }
 
     // Accumulate line-in signal
     if (mixer.liMixerInMode == MIXER_IN_SEND) {

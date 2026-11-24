@@ -502,6 +502,10 @@ class Controller {
     void route_pad(uint8_t layerNum_);
     void route_setEntry(uint8_t layerNum_, uint8_t entry_);
     void page_drawCpu(uint16_t x_, uint16_t y_);
+    void processAudioLanes();
+    void route_setMode(uint8_t mode_);
+    uint8_t route_laneDest(uint8_t layerNum_);
+    MixerInMode route_laneCode(uint8_t layerNum_);
     void sd_encodeProject(uint8_t* data);
     uint32_t project_hash();
     void project_markSaved();
@@ -595,6 +599,11 @@ class Controller {
     volatile float cpuLoad = 0.0f;                                      // audio CPU use, 0..1 (smoothed)
     volatile float cpuPeak = 0.0f;                                      // audio CPU peak, slowly falling
     uint8_t routeLayer = 0;                                             // Routing page: selected drum
+    volatile uint8_t routeMode = ROUTE_CHAIN;                           // CHAIN (stock) or 2 LANES
+    bool routeLanesBlock = false;                                       // audio: this block uses 2 LANES
+    float laneEqRev[I2S_BLOCK_SIZE] = {0};                              // 2 LANES: EQ'd drums going to the reverb only
+    float laneEqDry[I2S_BLOCK_SIZE] = {0};                              // 2 LANES: EQ'd drums going straight out
+    EqFilter laneEqF[4][6];                                             // 2 LANES: EQ state per path (A, B, REVERB, DRY)
     uint32_t routeCpuTick = 0;
     volatile int8_t noteRepeatPitchPad = -1;                            // Notes: pad the roll plays
     volatile bool noteRepeatHeld = false;                               // Metronome key held = Note Repeat

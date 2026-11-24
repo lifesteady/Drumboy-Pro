@@ -1970,7 +1970,21 @@ typedef enum {
     MIXER_IN_EFFECT_1                               = 0x04,
     MIXER_IN_REVERB                                 = 0x05,
     MIXER_IN_SEND                                   = 0x06,
+    // custom: 2 LANES routing (Routing page). The stock chain code ignores these values.
+    MIXER_IN_LANE_A                                 = 0x07,
+    MIXER_IN_LANE_B                                 = 0x08,
+    MIXER_IN_LANE_A_EQ                              = 0x09,
+    MIXER_IN_LANE_B_EQ                              = 0x0A,
+    MIXER_IN_REVERB_EQ                              = 0x0B,
+    MIXER_IN_SEND_EQ                                = 0x0C,
 } MixerInMode;
+
+// Custom routing layouts. CHAIN = stock: one line EQ > F1 > F2 > FX1 > FX2 > REVERB, each drum
+// enters at one point. 2 LANES: EQ (per drum) > lane A (F1 > FX1) or lane B (F2 > FX2) > REVERB.
+enum RouteMode : uint8_t { ROUTE_CHAIN = 0, ROUTE_LANES = 1 };
+enum LaneDest : uint8_t { LANE_DEST_A = 0, LANE_DEST_B = 1, LANE_DEST_REVERB = 2, LANE_DEST_DRY = 3, LANE_DEST_AUTO = 0xFF };
+const uint8_t kRouteModeFileMark                    = 0xC0;   // song byte 179 = 0xC0 | mode
+const uint8_t kLaneFileMark                         = 0xD0;   // drum byte 24 = 0xD0 | eq << 2 | dest
 
 const MixerInMode kInitialMixerLiMixerInMode        = MIXER_IN_EQ;
 
@@ -2311,7 +2325,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.83 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.84 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -7562,6 +7576,8 @@ struct Layer {
     uint8_t timing                                  = kInitialLayerTiming;
     uint8_t probability                             = kInitialLayerProbability;
     uint8_t swingExtra                              = 0;   // custom: extra swing for this drum (0-25 %)
+    uint8_t laneDest                                = LANE_DEST_AUTO;   // custom: 2 LANES destination
+    bool laneEq                                     = false;            // custom: 2 LANES, EQ on this drum
     uint8_t envAttack                               = kInitialEnvAttack;   // custom envelope (0-100)
     uint8_t envHold                                 = kInitialEnvHold;
     uint8_t envDecay                                = kInitialEnvDecay;
