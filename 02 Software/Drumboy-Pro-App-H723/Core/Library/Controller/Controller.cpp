@@ -5158,6 +5158,18 @@ static RGB16Color page_mix(RGB16Color a_, RGB16Color b_, float f_) {
     return (RGB16Color)((r << 11) | (g << 5) | b);
 }
 
+void Controller::page_drawSummary(const char* text_) {
+    /// @brief Draws a page's summary line on its own row under the title: 10x14 font, left
+    /// aligned, padded to the full row so a shorter line never leaves old characters behind.
+    char row[kPageSummaryChars + 1];
+    snprintf(row, sizeof(row), "%-*s", (int)kPageSummaryChars, text_);
+    lcd.setFont(FONT_10x14);
+    lcd.setAlignment(LEFT);
+    lcd.setBackColor(BLACK);
+    lcd.setForeColor(kThemeHeader);
+    lcd.drawText(row, kPageSummaryChars, 30, 158);
+}
+
 void Controller::page_open(PageView page_) {
     /// @brief Shows a full-screen page over the song grid and protects it from background drawing.
     if (page_ == PAGE_NONE) return;
@@ -5288,7 +5300,7 @@ void Controller::page_drawReverb() {
         lcd.setBackColor(BLACK);
         lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
         lcd.setForeColor(kThemeLine);
-        lcd.drawHLine(30, 162, 900);
+        lcd.drawHLine(30, 177, 900);
         lcd.setFont(FONT_07x09);
         lcd.setForeColor(label);
         lcd.setAlignment(LEFT);
@@ -5313,17 +5325,14 @@ void Controller::page_drawReverb() {
     lcd.setAlignment(LEFT);
     lcd.setBackColor(BLACK);
     lcd.setForeColor(on ? kThemeAccent : kThemeMid);
-    lcd.drawText(on ? "REVERB    " : "REVERB OFF", 10, 30, 139);
+    lcd.drawText(on ? "REVERB    " : "REVERB OFF", 10, 30, 136);
 
     char info[48];
     const uint16_t tailT = (uint16_t)(tail * 10.0f + 0.5f);
     const uint16_t hfT = (uint16_t)(tailHf * 10.0f + 0.5f);
-    snprintf(info, sizeof(info), "TAIL %2u.%us  HIGHS %2u.%us  PRE %3ums  WET %3u", tailT / 10, tailT % 10,
+    snprintf(info, sizeof(info), "DECAY TAIL %u.%u S   HIGHS %u.%u S   PRE-DELAY %u MS   WET %u", tailT / 10, tailT % 10,
              hfT / 10, hfT % 10, (unsigned)(preSec * 1000.0f + 0.5f), reverb.wet);
-    lcd.setFont(FONT_10x14);  // bigger summary line (was 7x9)
-    lcd.setAlignment(RIGHT);
-    lcd.setForeColor(label);
-    lcd.drawText(info, strlen(info), 930, 141);
+    page_drawSummary(info);
 
     // ---- 5. columns: each pixel of the graph written once per redraw (black, fill, edge)
     // Fills kept dark: the real panel shows these much more saturated than a monitor.
@@ -5430,7 +5439,7 @@ void Controller::page_drawFilter(uint8_t filterNum_) {
 
     // ---- 2. layout: log frequency across, dB up
     const uint16_t gx = 80, gw = 790;
-    const uint16_t gTop = 180, gBot = 400;          // +24 dB .. -36 dB
+    const uint16_t gTop = 190, gBot = 400;          // +24 dB .. -36 dB
     const float dbTop = 24.0f, dbBot = -36.0f;
     const float pxPerDb = (gBot - gTop) / (dbTop - dbBot);
     auto dbToY = [&](float db) -> int16_t {
@@ -5448,7 +5457,7 @@ void Controller::page_drawFilter(uint8_t filterNum_) {
         lcd.setBackColor(BLACK);
         lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
         lcd.setForeColor(kThemeLine);
-        lcd.drawHLine(30, 162, 900);
+        lcd.drawHLine(30, 177, 900);
         lcd.setFont(FONT_07x09);
         lcd.setForeColor(label);
         lcd.setAlignment(RIGHT);
@@ -5476,19 +5485,16 @@ void Controller::page_drawFilter(uint8_t filterNum_) {
     lcd.setForeColor(on ? kThemeAccent : kThemeMid);
     char title[16];
     snprintf(title, sizeof(title), on ? "FILTER %u    " : "FILTER %u OFF", filterNum_ + 1);
-    lcd.drawText(title, 12, 30, 139);
+    lcd.drawText(title, 12, 30, 136);
 
     const char* typeName[] = {"OFF", "LOWPASS", "HIGHPASS", "BANDPASS", "BANDSTOP"};
     char cut[10];
     (cutoff >= 1000.0f) ? snprintf(cut, sizeof(cut), "%u.%uK", (unsigned)(cutoff / 1000), (unsigned)((uint32_t)cutoff % 1000) / 100)
                         : snprintf(cut, sizeof(cut), "%u", (unsigned)cutoff);
     char info[64];
-    snprintf(info, sizeof(info), "%8s %2udB  CUT %6sHZ  RES %u.%02u  DRIVE %3u", typeName[(f.type <= 4) ? f.type : 0],
+    snprintf(info, sizeof(info), "%s  SLOPE %u DB  CUTOFF %s HZ  RESONANCE %u.%02u  DRIVE %u", typeName[(f.type <= 4) ? f.type : 0],
              f.slope ? 12 : 6, cut, (unsigned)Q, (unsigned)(Q * 100) % 100, f.drive);
-    lcd.setFont(FONT_10x14);  // bigger summary line (was 7x9)
-    lcd.setAlignment(RIGHT);
-    lcd.setForeColor(label);
-    lcd.drawText(info, strlen(info), 930, 141);
+    page_drawSummary(info);
 
     // ---- 5. response, column by column (no full clear => no flicker)
     const RGB16Color fill = page_mix(BLACK, accent, 0.28f);
@@ -5565,7 +5571,7 @@ void Controller::page_drawEq() {
     const RGB16Color label = kThemeHeader;
 
     const uint16_t gx = 80, gw = 790;
-    const uint16_t gTop = 180, gBot = 400;
+    const uint16_t gTop = 190, gBot = 400;
     const float dbTop = 24.0f, dbBot = -24.0f;
     const float pxPerDb = (gBot - gTop) / (dbTop - dbBot);
     auto dbToY = [&](float db) -> int16_t {
@@ -5587,7 +5593,7 @@ void Controller::page_drawEq() {
         lcd.setBackColor(BLACK);
         lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
         lcd.setForeColor(kThemeLine);
-        lcd.drawHLine(30, 162, 900);
+        lcd.drawHLine(30, 177, 900);
         lcd.setFont(FONT_07x09);
         lcd.setForeColor(label);
         lcd.setAlignment(RIGHT);
@@ -5613,14 +5619,11 @@ void Controller::page_drawEq() {
     lcd.setAlignment(LEFT);
     lcd.setBackColor(BLACK);
     lcd.setForeColor(on ? kThemeAccent : kThemeMid);
-    lcd.drawText(on ? "EQ    " : "EQ OFF", 6, 30, 139);
+    lcd.drawText(on ? "EQ    " : "EQ OFF", 6, 30, 136);
     char info[48];
-    snprintf(info, sizeof(info), "Q %u   LOW SHELF %+3d   HIGH SHELF %+3d", (unsigned)kEqQDataLibrary[eq.q].data,
+    snprintf(info, sizeof(info), "Q %u   LOW SHELF %+d DB   HIGH SHELF %+d DB", (unsigned)kEqQDataLibrary[eq.q].data,
              (int)kEqGainDataLibrary[eq.gainLowShelf].data, (int)kEqGainDataLibrary[eq.gainHighShelf].data);
-    lcd.setFont(FONT_10x14);  // bigger summary line (was 7x9)
-    lcd.setAlignment(RIGHT);
-    lcd.setForeColor(label);
-    lcd.drawText(info, strlen(info), 930, 141);
+    page_drawSummary(info);
 
     // ---- combined response, column by column
     const EqFilter* bands[6] = {&eq.filterLowShelf, &eq.filterPeak[0], &eq.filterPeak[1],
@@ -5712,7 +5715,7 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
     const RGB16Color ink = on ? kThemeInk : kThemeMid;
     const RGB16Color accent = on ? kThemeAccent : kThemeLine;
     const RGB16Color label = kThemeHeader;
-    const uint16_t gx = 80, gw = 790, gTop = 180, gBot = 400;
+    const uint16_t gx = 80, gw = 790, gTop = 190, gBot = 400;
     const uint16_t gh = gBot - gTop;
 
     static int16_t curveY[790];   // main curve (accent), -1 = none
@@ -5755,7 +5758,7 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
                 }
             }
             snprintf(title, sizeof(title), "DELAY %u", effectNum_ + 1);
-            snprintf(info, sizeof(info), "%4s = %4ums  FEEDBACK %3u  LEVEL %3u  DAMP %3u", trim(kDelayTimeDataLibrary[d.aTime].nameLongR),
+            snprintf(info, sizeof(info), "TIME %s = %u MS   FEEDBACK %u   LEVEL %u   DAMPING %u", trim(kDelayTimeDataLibrary[d.aTime].nameLongR),
                      (unsigned)(sec * 1000.0f + 0.5f), d.cFeedback, d.bLevel, d.dDamping);
             for (uint8_t q = 0; q < 5; q++) { snprintf(xbuf[q], 8, "%ums", (unsigned)(win * 250.0f * q + 0.5f)); xl[q] = xbuf[q]; }
             yl[0] = "100%"; yl[1] = " 50%"; yl[2] = "   0";
@@ -5770,13 +5773,13 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
                 Chorus& c = e.chorus;
                 rate = c.rate; lo = c.time * (1.0f - c.depth); hi = c.time * (1.0f + c.depth);
                 snprintf(title, sizeof(title), "CHORUS %u", effectNum_ + 1);
-                snprintf(info, sizeof(info), "DELAY %2ums  DEPTH %3u  RATE %4sHZ  FEEDBACK %3u", (unsigned)(c.time * 1000.0f + 0.5f), c.dDepth,
+                snprintf(info, sizeof(info), "DELAY %u MS   DEPTH %u   RATE %s HZ   FEEDBACK %u", (unsigned)(c.time * 1000.0f + 0.5f), c.dDepth,
                          trim(kChorusRateDataLibrary[c.cRate].nameLongR), (unsigned)(c.feedback * 100.0f + 0.5f));
             } else if (e.type == EF_FLANGER) {
                 Flanger& f = e.flanger;
                 rate = f.rate; lo = f.time * (1.0f - f.width); hi = f.time * (1.0f + f.width);
                 snprintf(title, sizeof(title), "FLANGER %u", effectNum_ + 1);
-                snprintf(info, sizeof(info), "DELAY %3sms  WIDTH %3u  RATE %4sHZ  FEEDBACK %3u", trim(kFlangerTimeDataLibrary[f.aTime].nameLongR), f.dWidth,
+                snprintf(info, sizeof(info), "DELAY %s MS   WIDTH %u   RATE %s HZ   FEEDBACK %u", trim(kFlangerTimeDataLibrary[f.aTime].nameLongR), f.dWidth,
                          trim(kFlangerRateDataLibrary[f.cRate].nameLongR), (unsigned)(f.feedback * 100.0f + 0.5f));
             } else {
                 Phaser& ph = e.phaser;
@@ -5785,7 +5788,7 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
                 if (lo < 20.0f) lo = 20.0f;
                 logY = true;
                 snprintf(title, sizeof(title), "PHASER %u", effectNum_ + 1);
-                snprintf(info, sizeof(info), "SWEEP %4s - %4sHZ  RATE %4sHZ  FEEDBACK %3u", trim(kPhaserFreqDataLibrary[ph.aStartFreq].nameLongR),
+                snprintf(info, sizeof(info), "SWEEP %s - %s HZ   RATE %s HZ   FEEDBACK %u", trim(kPhaserFreqDataLibrary[ph.aStartFreq].nameLongR),
                          trim(kPhaserFreqDataLibrary[ph.bEndFreq].nameLongR), trim(kPhaserRateDataLibrary[ph.cRate].nameLongR), ph.dFeedback);
             }
             if (rate < 0.05f) rate = 0.05f;
@@ -5841,7 +5844,7 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
             const uint8_t aIdx = comp ? e.compressor.cAttackTime : e.expander.cAttackTime;
             const uint8_t rIdx = comp ? e.compressor.dReleaseTime : e.expander.dReleaseTime;
             snprintf(title, sizeof(title), comp ? "COMPRESSOR %u" : "EXPANDER %u", effectNum_ + 1);
-            snprintf(info, sizeof(info), "THR %+3ddB  RATIO %2u:1  ATK %3ums  REL %4ums", (int)th, (unsigned)ratio,
+            snprintf(info, sizeof(info), "THRESHOLD %+d DB   RATIO %u:1   ATTACK %u MS   RELEASE %u MS", (int)th, (unsigned)ratio,
                      (unsigned)((comp ? kCompressorAttackTimeDataLibrary[aIdx].data : kExpanderAttackTimeDataLibrary[aIdx].data) * 1000.0f + 0.5f),
                      (unsigned)((comp ? kCompressorReleaseTimeDataLibrary[rIdx].data : kExpanderReleaseTimeDataLibrary[rIdx].data) * 1000.0f + 0.5f));
             xl[0] = "-48"; xl[1] = "-36"; xl[2] = "-24"; xl[3] = "-12"; xl[4] = "0DB";
@@ -5874,10 +5877,10 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
             }
             snprintf(title, sizeof(title), od ? "OVERDRIVE %u" : "DISTORTION %u", effectNum_ + 1);
             const uint8_t tone = od ? e.overdrive.cTone : e.distortion.cTone;
-            snprintf(info, sizeof(info), "GAIN %2udB  CEILING %+3ddB  TONE %4sHZ  %s %3u",
+            snprintf(info, sizeof(info), "GAIN %u DB   CEILING %+d DB   TONE %s HZ   %s %u",
                      (unsigned)(od ? kOverdriveGainDataLibrary[e.overdrive.aGain].data : kDistortionGainDataLibrary[e.distortion.aGain].data),
                      (int)(od ? kOverdriveThresholdDataLibrary[e.overdrive.bThreshold].data : kDistortionThresholdDataLibrary[e.distortion.bThreshold].data),
-                     od ? trim(kOverdriveToneDataLibrary[tone].nameLongR) : trim(kDistortionToneDataLibrary[tone].nameLongR), od ? "LOWCUT" : "  ASYM", od ? e.overdrive.dDriveColor : e.distortion.dAsym);
+                     od ? trim(kOverdriveToneDataLibrary[tone].nameLongR) : trim(kDistortionToneDataLibrary[tone].nameLongR), od ? "LOW CUT" : "ASYMMETRY", od ? e.overdrive.dDriveColor : e.distortion.dAsym);
             xl[0] = "IN -1"; xl[1] = ""; xl[2] = "0"; xl[3] = ""; xl[4] = "+1";
             yl[0] = "+1"; yl[1] = "OUT"; yl[2] = "-1";
         } break;
@@ -5914,7 +5917,7 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
                 if ((i % 4) < 2) refY[i] = yFromUnit((x + range) / (2.0f * range));
             }
             snprintf(title, sizeof(title), "BITCRUSHER %u", effectNum_ + 1);
-            snprintf(info, sizeof(info), "%2u BIT  RATE 1/%-2u  %s  THR %+3ddB  SMOOTH %3u",
+            snprintf(info, sizeof(info), "%u BIT   RATE 1/%u   %s   THRESHOLD %+d DB   SMOOTH %u",
                      (unsigned)kBitcrusherResolutionDataLibrary[b.aResolution].data, (unsigned)hold, (b.mode == BIT_FOLD) ? "FOLD" : "CLIP",
                      (int)kBitcrusherThresholdDataLibrary[b.cThreshold].data, b.dSmooth);
             xl[0] = "0"; xl[1] = ""; xl[2] = "TEST TONE"; xl[3] = ""; xl[4] = "9MS";
@@ -5932,7 +5935,7 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
         lcd.setBackColor(BLACK);
         lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
         lcd.setForeColor(kThemeLine);
-        lcd.drawHLine(30, 162, 900);
+        lcd.drawHLine(30, 177, 900);
         lcd.setFont(FONT_07x09);
         lcd.setAlignment(LEFT);
         const char hint[] = "PRESS EFFECT AGAIN: BACK TO SONG";
@@ -5950,12 +5953,8 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
     lcd.setAlignment(LEFT);
     lcd.setForeColor(on ? kThemeAccent : kThemeMid);
     snprintf(padded, sizeof(padded), "%-13s", on ? title : "EFFECT OFF");
-    lcd.drawText(padded, 13, 30, 139);
-    lcd.setFont(FONT_10x14);  // bigger summary line (was 7x9)
-    lcd.setAlignment(RIGHT);
-    lcd.setForeColor(label);
-    snprintf(padded, sizeof(padded), "%48s", info);  // 48 chars x 13 px fits beside the title
-    lcd.drawText(padded, strlen(padded), 930, 141);
+    lcd.drawText(padded, 13, 30, 136);
+    page_drawSummary(info);
     lcd.setAlignment(CENTER);
     for (uint8_t q = 0; q < 5; q++) {
         snprintf(padded, sizeof(padded), "%9s", "");

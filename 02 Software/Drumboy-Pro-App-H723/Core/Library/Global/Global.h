@@ -2166,7 +2166,8 @@ const uint16_t kPageX                               = 20;
 const uint16_t kPageY                               = 131;
 const uint16_t kPageWidth                           = 920;
 const uint16_t kPageHeight                          = 320;
-const uint32_t kPageRedrawIntervalMs                = 40;   // at most ~25 redraws/s while knobs turn
+const uint32_t kPageRedrawIntervalMs                = 40;
+const uint8_t kPageSummaryChars                     = 68;   // 68 x 13 px = 884 px: full-width summary row
 
 // The "M F P" column labels baked into Image_Menu_A (above the layer lanes). Hidden while a page
 // is open, restored from the image on close. Image-relative: x 190..250, rows 80..90.
@@ -2176,7 +2177,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.17 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.18 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;

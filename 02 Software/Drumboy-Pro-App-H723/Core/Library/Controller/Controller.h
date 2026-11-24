@@ -471,6 +471,7 @@ class Controller {
     void page_markDirty(PageView page_);
     void page_update();
     void page_draw();
+    void page_drawSummary(const char* text_);
     void page_drawReverb();
     void page_drawFilter(uint8_t filterNum_);
     void page_drawEq();
