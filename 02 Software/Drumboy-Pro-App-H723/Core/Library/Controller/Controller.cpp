@@ -1416,13 +1416,26 @@ void Controller::swing_updateTimerPeriod() {
     if ((rhythm.swing > kMinSwing) && playActive && (!metronome.precountState)) {
         const uint8_t grid = (rhythm.swingGrid <= kMaxSwingGrid) ? rhythm.swingGrid : kInitialSwingGrid;
         const uint16_t pairInterval = kSwingPairInterval[grid];
-        const uint16_t halfInterval = pairInterval / 2;
+        const uint16_t pos = playInterval % pairInterval;
 
-        // Long step = 2 * P * swing%, short step = 2 * P - long step (keeps each pair exactly in time).
-        const uint32_t longPeriod = (2UL * playTimerPeriod * rhythm.swing + 50UL) / 100UL;
-        const uint32_t shortPeriod = (2UL * playTimerPeriod) - longPeriod;
+        if (kSwingGridParts[grid] == 3) {
+            // Custom triplet shuffle: in each group of 3 the first step is stretched and the second
+            // squeezed by the same amount, so the middle note lands late and the group still ends on time.
+            // 50% = straight, 75% = middle note half a triplet late. (Boundaries are whole ticks: 267/267/266.)
+            const uint32_t delta = (playTimerPeriod * (uint32_t)(rhythm.swing - kMinSwing) + 25UL) / 50UL;   // P * d, d = 0 .. 0.5
+            const uint16_t third = (uint16_t)((pairInterval + 2) / 3);
+            if (pos < third) period = playTimerPeriod + delta;
+            else if (pos < 2 * third) period = playTimerPeriod - delta;
+            else period = playTimerPeriod;
+        } else {
+            const uint16_t halfInterval = pairInterval / 2;
 
-        period = ((playInterval % pairInterval) < halfInterval) ? longPeriod : shortPeriod;
+            // Long step = 2 * P * swing%, short step = 2 * P - long step (keeps each pair exactly in time).
+            const uint32_t longPeriod = (2UL * playTimerPeriod * rhythm.swing + 50UL) / 100UL;
+            const uint32_t shortPeriod = (2UL * playTimerPeriod) - longPeriod;
+
+            period = (pos < halfInterval) ? longPeriod : shortPeriod;
+        }
     }
 
     // Only touch the hardware when the value actually changes.
@@ -3647,7 +3660,7 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
             break;
 
         case ENC_RHYTHM_SWINGGRID:
-            rhythm_setSwingGrid((rhythm.swingGrid < kMaxSwingGrid) ? rhythm.swingGrid + 1 : kMinSwingGrid);
+            rhythm_stepSwingGrid(true);
             break;
 
             // Io functions
@@ -4280,7 +4293,7 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
             break;
 
         case ENC_RHYTHM_SWINGGRID:
-            rhythm_setSwingGrid((rhythm.swingGrid > kMinSwingGrid) ? rhythm.swingGrid - 1 : kMaxSwingGrid);
+            rhythm_stepSwingGrid(false);
             break;
 
             // Io functions
@@ -5900,7 +5913,8 @@ uint16_t Controller::groove_swingDelay(uint8_t layerNum_, uint16_t interval_) {
     if (extra == 0) return 0;
     const uint8_t grid = (rhythm.swingGrid <= kMaxSwingGrid) ? rhythm.swingGrid : kInitialSwingGrid;
     const uint16_t pair = kSwingPairInterval[grid];
-    const uint16_t half = pair / 2;
+    // custom: "half" = where the swung note sits (middle of a pair, or 1/3 into a triplet group)
+    const uint16_t half = (kSwingGridParts[grid] == 3) ? (uint16_t)((pair + 2) / 3) : (uint16_t)(pair / 2);
     const uint16_t pos = interval_ % pair;
     // "near the off note" = within a quarter pair of it
     if ((pos + (half / 2) < half) || (pos > half + (half / 2))) return 0;
@@ -5912,7 +5926,7 @@ uint16_t Controller::groove_unswing(uint8_t layerNum_, uint16_t interval_) {
     /// be without that extra, so playback doesn't swing it twice.
     const uint8_t grid = (rhythm.swingGrid <= kMaxSwingGrid) ? rhythm.swingGrid : kInitialSwingGrid;
     const uint16_t pair = kSwingPairInterval[grid];
-    const uint16_t half = pair / 2;
+    const uint16_t half = (kSwingGridParts[grid] == 3) ? (uint16_t)((pair + 2) / 3) : (uint16_t)(pair / 2);
     const uint16_t delay = groove_swingDelay(layerNum_, (uint16_t)((interval_ / pair) * pair + half));
     if (delay == 0) return interval_;
     const uint16_t pos = interval_ % pair;
@@ -6077,7 +6091,7 @@ void Controller::page_drawGroove() {
     const char* g = kSwingGridName[(rhythm.swingGrid <= kMaxSwingGrid) ? rhythm.swingGrid : kInitialSwingGrid];
     while (*g == ' ') g++;
     // Fixed-width fields so nothing jumps sideways when a value gets shorter or longer.
-    snprintf(text, sizeof(text), "MASTER SWING %2u%% ON %-4s   QUANTIZE %-5s   CORRECT %3u%%", master, g,
+    snprintf(text, sizeof(text), "MASTER SWING %2u%% ON %-5s  QUANTIZE %-5s   CORRECT %3u%%", master, g,
              (rhythm.quantize == kQuantizeOff) ? "OFF" : q, grooveCorrect);
     page_drawSummary(text);
 
@@ -18202,7 +18216,7 @@ void Controller::rhythm_menuUp() {
             break;
 
         case 5:
-            rhythm_setSwingGrid((rhythm.swingGrid < kMaxSwingGrid) ? rhythm.swingGrid + 1 : kMinSwingGrid);
+            rhythm_stepSwingGrid(true);
             break;
     }
 }
@@ -18269,7 +18283,7 @@ void Controller::rhythm_menuDown() {
             break;
 
         case 5:
-            rhythm_setSwingGrid((rhythm.swingGrid > kMinSwingGrid) ? rhythm.swingGrid - 1 : kMaxSwingGrid);
+            rhythm_stepSwingGrid(false);
             break;
     }
 }
@@ -18371,8 +18385,17 @@ void Controller::rhythm_setSwing(uint8_t swing_) {
     }
 }
 
+void Controller::rhythm_stepSwingGrid(bool up_) {
+    /// @brief Custom: swing grid knob in musical order 1:4, 1:8, 1:16, 1:32, 1:8T, 1:16T (stops at the ends).
+    uint8_t at = 2;
+    for (uint8_t i = 0; i < kSwingGridCount; i++) if (kSwingGridOrder[i] == rhythm.swingGrid) at = i;
+    if (up_ && (at < kSwingGridCount - 1)) at++;
+    else if (!up_ && (at > 0)) at--;
+    rhythm_setSwingGrid(kSwingGridOrder[at]);
+}
+
 void Controller::rhythm_setSwingGrid(uint8_t swingGrid_) {
-    /// @brief Sets which notes swing: 0 = 8th notes, 1 = 16th notes.
+    /// @brief Sets which notes swing (see kSwingGridName: 1:8, 1:16, 1:4, 1:32, 1:8T, 1:16T).
 
     if ((swingGrid_ >= kMinSwingGrid) && (swingGrid_ <= kMaxSwingGrid)) {
         rhythm.swingGrid = swingGrid_;

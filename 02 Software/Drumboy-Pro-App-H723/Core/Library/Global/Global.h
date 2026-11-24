@@ -2310,18 +2310,24 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.81 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.82 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
 const uint8_t kInitialSwing                         = 50;
 
-// Swing grid: which notes get pushed late. 0 = 8th notes, 1 = 16th notes.
+// Swing grid: which notes get pushed late. Index = value saved in song files (0 and 1 are the
+// original 8th / 16th settings, so old songs load unchanged).
+//   Straight grids swing PAIRS: the 2nd note of each pair lands late (MPC style).
+//   Triplet grids (custom "triplet shuffle") swing GROUPS OF 3: the middle note lands late.
 const uint8_t kMinSwingGrid                         = 0;
-const uint8_t kMaxSwingGrid                         = 1;
+const uint8_t kMaxSwingGrid                         = 5;
 const uint8_t kInitialSwingGrid                     = 1;
-const uint16_t kSwingPairInterval[]                 = {kMeasureInterval, kMeasureHalfInterval};  // ticks per swung pair
-const char kSwingGridName[][11]                     = {"       1:8", "      1:16"};
+const uint16_t kSwingPairInterval[]                 = {800, 400, 1600, 200, 800, 400};   // ticks per swung pair / triplet group
+const uint8_t kSwingGridParts[]                     = {2, 2, 2, 2, 3, 3};                // 2 = pair, 3 = triplet group
+const char kSwingGridName[][11]                     = {"       1:8", "      1:16", "       1:4", "      1:32", "      1:8T", "     1:16T"};
+const uint8_t kSwingGridOrder[]                     = {2, 0, 1, 3, 4, 5};                // knob order: 1:4 1:8 1:16 1:32 1:8T 1:16T
+const uint8_t kSwingGridCount                       = 6;
 
 // Rhythm menu now has 6 tabs (tempo, measure, bar, quantize, swing, swing grid).
 const uint8_t kMinRhythmTab                         = 0;

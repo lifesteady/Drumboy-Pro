@@ -489,6 +489,7 @@ class Controller {
     float noteRepeat_step();
     void noteRepeat_tick();
     void noteRepeat_stopped();
+    void rhythm_stepSwingGrid(bool up_);
     int8_t noteRepeat_pitchPad();
     void noteRepeat_pitchHit(int8_t pad_, bool record_, uint16_t at_);
     // custom: extra reverbs, CPU meter, routing page
