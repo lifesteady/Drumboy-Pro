@@ -1276,7 +1276,8 @@ typedef enum {
     ENC_RHYTHM_SWING                                = 0x62,
     ENC_RHYTHM_SWINGGRID                            = 0x63,
 
-    ENC_LFO_TARGET                                  = 0x64   // custom: LFO page target row
+    ENC_LFO_TARGET                                  = 0x64,  // custom: LFO page target row
+    ENC_LFO_SELECT                                  = 0x65   // custom: step through LFO 1-10
 } EncoderFunc;
 
 const EncoderFunc encoderLocalFunction[][8] = {
@@ -1309,7 +1310,7 @@ const EncoderFunc encoderLocalFunction[][8] = {
     // REVERB_MENU = 0x0D
     {ENC_REVERB_ACTIVE, ENC_REVERB_SIZE, ENC_REVERB_DECAY, ENC_REVERB_DAMPING, ENC_REVERB_PREDELAY, ENC_REVERB_SURROUND, ENC_REVERB_DRY, ENC_REVERB_WET},
     // LFO_MENU = 0x0E
-    {ENC_LFO_ACTIVE, ENC_LFO_TYPE, ENC_LFO_TARGET, ENC_FNC_OFF, ENC_LFO_RATE, ENC_LFO_PHASE, ENC_LFO_INVERT, ENC_LFO_DEPTH},
+    {ENC_LFO_ACTIVE, ENC_LFO_TYPE, ENC_LFO_TARGET, ENC_LFO_SELECT, ENC_LFO_RATE, ENC_LFO_PHASE, ENC_LFO_INVERT, ENC_LFO_DEPTH},
     // LAYER_INST_0_MENU = 0x0F
     {ENC_INST_0_INST, ENC_INST_0_SAMPLE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_INST_0_LEVEL, ENC_INST_0_PITCH, ENC_INST_0_DIRECT, ENC_INST_0_RESOL},
     // LAYER_INST_1_MENU = 0x10
@@ -1450,11 +1451,12 @@ const EncoderFuncData kEncoderFuncDataLibrary[] = {
     {ENC_RHYTHM_SWING,        ENC_RES_M, "SWING     ", "RHY   ", "  %", false},
     {ENC_RHYTHM_SWINGGRID,    ENC_RES_S, "SWING-GRID", "RHY   ", "   ", false},
 
-    {ENC_LFO_TARGET,          ENC_RES_S, "TARGET    ", "LFO   ", "   ", false}
+    {ENC_LFO_TARGET,          ENC_RES_S, "TARGET    ", "LFO   ", "   ", false},
+    {ENC_LFO_SELECT,          ENC_RES_S, "LFO       ", "LFO   ", "   ", false}
 };
 
 // The table above is indexed by EncoderFunc value, so every entry must sit at its own enum number.
-static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_LFO_TARGET + 1,
+static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_LFO_SELECT + 1,
               "kEncoderFuncDataLibrary must have one entry per EncoderFunc value");
 
 typedef enum {

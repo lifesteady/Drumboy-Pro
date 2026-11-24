@@ -3891,6 +3891,10 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
             lfo_stepTarget(1);
             break;
 
+        case ENC_LFO_SELECT:
+            lfo_select((uint8_t)((selectedLfoNum + 1) % kLfoLibrarySize));
+            break;
+
             // Layer inst functions
 
         case ENC_INST_0_INST:
@@ -4452,6 +4456,10 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
 
         case ENC_LFO_TARGET:
             lfo_stepTarget(-1);
+            break;
+
+        case ENC_LFO_SELECT:
+            lfo_select((uint8_t)((selectedLfoNum + kLfoLibrarySize - 1) % kLfoLibrarySize));
             break;
 
             // Layer inst functions
@@ -6256,7 +6264,7 @@ void Controller::page_drawLfo() {
         lcd.drawHLine(30, 177, 900);
         lcd.setFont(FONT_07x09);
         lcd.setAlignment(LEFT);
-        const char hint[] = "TOP KNOB 3: PICK ROW    TAP A PAD: ADD / REMOVE THAT DRUM";
+        const char hint[] = "TOP KNOB 3: ROW    TOP KNOB 4: LFO 1-10    PAD: ADD / REMOVE";
         lcd.drawText(hint, strlen(hint), 30, 438);
         lcd.setAlignment(RIGHT);
         const char hint2[] = "TAP LFO ALONE: BACK TO SONG";
@@ -6274,8 +6282,8 @@ void Controller::page_drawLfo() {
     lcd.setAlignment(LEFT);
     lcd.setBackColor(BLACK);
     lcd.setForeColor(on ? kThemeAccent : kThemeMid);
-    snprintf(text, sizeof(text), on ? "LFO %02u     " : "LFO %02u OFF ", selectedLfoNum + 1);
-    lcd.drawText(text, 11, 30, 136);
+    snprintf(text, sizeof(text), on ? "LFO %02u OF %02u    " : "LFO %02u OF %02u OFF", selectedLfoNum + 1, kLfoLibrarySize);
+    lcd.drawText(text, 16, 30, 136);
     auto trim = [](const char* t) -> const char* { while (*t == ' ') t++; return t; };
     snprintf(text, sizeof(text), "%s   RATE %s BAR   PHASE %s   INVERT %s   DEPTH %u", trim(kLfoTypeDataLibrary[lfo.type].nameLongR),
              trim(kLfoRateDataLibrary[lfo.rate].nameLongR), trim(kLfoPhaseDataLibrary[lfo.phase].nameLongR), lfo.invert ? "ON" : "OFF", lfo.depth);
@@ -19690,6 +19698,7 @@ void Controller::lfo_select(uint8_t lfoNum_) {
         ledLayerPlayMode = false;
         ledLayerSelectFlag = true;
         ledLayerSelectData = 0x01 << selectedLfoNum;
+        page_markDirty(PAGE_LFO);   // custom: the LFO page follows the newly chosen LFO
     }
 }
 
