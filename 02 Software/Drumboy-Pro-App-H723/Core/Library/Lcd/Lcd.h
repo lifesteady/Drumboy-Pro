@@ -155,6 +155,7 @@ class Lcd {
         return !((x_ + w_ - 1 < protectX0) || (x_ > protectX1) || (y_ + h_ - 1 < protectY0) || (y_ > protectY1));
     }
     uint16_t getFontWidth() const { return fontWidth; }
+    void drawColumn(uint16_t x, uint16_t y, uint16_t h, const RGB16Color* colors);   // custom: one column of ready-made pixels
     uint16_t getFontHeight() const { return fontHeight; }
 
     void invertDisplay(bool invert);

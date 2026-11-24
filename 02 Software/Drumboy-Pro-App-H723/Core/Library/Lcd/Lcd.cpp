@@ -1575,6 +1575,26 @@ void Lcd::clearRect(uint16_t x, uint16_t y, uint32_t w, uint32_t h) {
     }
 }
 
+void Lcd::drawColumn(uint16_t x, uint16_t y, uint16_t h, const RGB16Color* colors) {
+    /// @brief Custom: writes h pixels straight down from (x, y). Colors are final RGB565 (no theme mapping).
+    if ((h == 0) || (x >= width) || (y >= height)) return;
+    if (y + h > height) h = height - y;
+    if (isProtected(x, y, 1, h)) return;
+    setAddressWindow(x, y, x, y + h - 1);
+    LCD_CS_LOW;
+    LCD_RS_DATA;
+    volatile uint32_t* dataReg = &(LCD_DATA_GPIO_Port->ODR);
+    volatile uint32_t* wrReg = &(LCD_WR_GPIO_Port->BSRR);
+    const uint32_t wrSet = LCD_WR_Pin;
+    const uint32_t wrReset = LCD_WR_Pin << 16U;
+    for (uint16_t i = 0; i < h; i++) {
+        *dataReg = colors[i];
+        *wrReg = wrReset;
+        *wrReg = wrSet;
+    }
+    LCD_CS_HIGH;
+}
+
 void Lcd::drawRGB16Image(const RGB16Color* indexPtr, const uint8_t* pixelPtr, uint8_t indexSize, uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
     if (isProtected(x, y, w, h)) return;  // custom: protected page area
     /// @brief Draws an indexed RGB565 image.

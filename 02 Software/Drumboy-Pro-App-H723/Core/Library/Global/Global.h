@@ -2202,8 +2202,20 @@ typedef enum {
     PAGE_EFFECT_1                                   = 0x06,
     PAGE_LFO                                        = 0x07,
     PAGE_GROOVE                                     = 0x08,  // Rhythm key twice: per-drum swing + timing correct
-    PAGE_SAMPLE                                     = 0x09   // Layer Inst tapped alone: waveform, trim, envelope
+    PAGE_SAMPLE                                     = 0x09,  // Layer Inst tapped alone: waveform, trim, envelope
+    PAGE_MAIN                                       = 0x0A   // custom main screen: zoomed lanes, decay hits, focus lane
 } PageView;
+
+// Custom main screen (replaces the stock 10 lanes whenever no other page is open).
+const bool kMainView                                = true;
+const uint16_t kMainGridX                           = 236;
+const uint16_t kMainGridW                           = 692;
+const uint16_t kMainTop                             = 131;
+const uint16_t kMainRuler                           = 14;
+const uint16_t kMainHeight                          = 310;   // ruler + lanes (page area is 320)
+const uint16_t kMainSmallLane                       = 22;
+const uint16_t kMainEvenLane                        = 29;
+const uint32_t kMainFrameMs                         = 15;
 
 // Custom sample envelope (per drum). Values are 0-100 knob steps; times grow with the square of
 // the value so small settings are fine-grained. HOLD 100 = FULL (play to the end, no decay).
@@ -2239,7 +2251,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.34 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.40 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;

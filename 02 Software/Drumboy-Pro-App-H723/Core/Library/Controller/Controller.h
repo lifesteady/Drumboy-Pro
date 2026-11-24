@@ -479,6 +479,15 @@ class Controller {
     void page_drawSample();
     void page_drawSampleKnobs();
     void page_restoreInstMenu();
+    void page_drawMain();
+    void main_update();
+    void main_buildLane(uint8_t lane_);
+    void main_renderColumn(uint16_t col_, uint16_t row0_ = 0, uint16_t rows_ = kMainHeight);
+    void main_drawStripColumn(uint16_t col_);
+    void main_drawLabels(uint8_t lane_);
+    void main_drawTransport();
+    uint32_t main_laneKey(uint8_t lane_);
+    void page_close(bool toStock_);
     uint16_t groove_swingDelay(uint8_t layerNum_, uint16_t interval_);
     uint16_t groove_unswing(uint8_t layerNum_, uint16_t interval_);
     void groove_setDrumSwing(uint8_t layerNum_, int16_t value_);
@@ -519,6 +528,17 @@ class Controller {
     bool textUndoFlag = false;
     char undoText[6] = "UNDO ";
     int16_t currentFileNum = -1;                                        // project shown top-right (-1 = new, unsaved)
+    // Custom main screen state
+    uint32_t mainKey = 0;                                               // layout/window fingerprint (change = full redraw)
+    uint32_t mainLaneKey[kLayerLibrarySize] = {0};                      // per-lane fingerprint (change = redraw that lane)
+    uint32_t mainLastTick = 0;
+    int16_t mainPlayCol = -1;                                           // column the playhead is drawn in (-1 = none)
+    uint32_t mainViewStart = 0;                                         // first tick on screen
+    uint32_t mainViewLen = 1;                                           // ticks on screen
+    int8_t mainExpanded = -1;
+    uint16_t mainLaneY[kLayerLibrarySize] = {0};
+    uint16_t mainLaneH[kLayerLibrarySize] = {0};
+    char mainCounter[24] = "";
     uint32_t savedHash = 0;                                             // unsaved-changes marker: project hash at last load/save/new
     bool savedHashValid = false;
     bool projectDirty = false;

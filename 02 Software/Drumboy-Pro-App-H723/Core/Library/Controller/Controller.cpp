@@ -391,6 +391,9 @@ void Controller::update() {
         // Custom: unsaved-changes marker (FILE_006*).
         project_checkDirty();
 
+        // Custom: main screen.
+        main_update();
+
         // 4. FILESYSTEM MAINTENANCE
         // Recover SD subsystem if media access is lost.
         if (!sd.ready) {
@@ -5308,30 +5311,53 @@ void Controller::page_drawSummary(const char* text_) {
 void Controller::page_open(PageView page_) {
     /// @brief Shows a full-screen page over the song grid and protects it from background drawing.
     if (page_ == PAGE_NONE) return;
+    const bool fromStock = (page == PAGE_NONE);
     page = page_;
     pageFullRedraw = true;
+    if (!fromStock) {   // custom: switching between pages (incl. the main screen): just redraw
+        lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
+        if (page_ == PAGE_SAMPLE) encoder_update();
+        page_draw();
+        return;
+    }
 
     // Hide the M F P lane labels: they belong to the song grid, not to the page.
     lcd.setBackColor(BLACK);
     lcd.clearRect(kImageMenuAX + kPageMfpImageX, kImageMenuAY + kPageMfpImageRow, kPageMfpWidth, kPageMfpHeight);
 
     // Start marker for the playhead line, so it doesn't look like it floats once M F P is gone.
-    lcd.setForeColor(kThemeInk);
-    lcd.fillRect(kPlayX - 4, kPlayY - 5, 2, 11);
+    if (!kMainView) {
+        lcd.setForeColor(kThemeInk);
+        lcd.fillRect(kPlayX - 4, kPlayY - 5, 2, 11);
+    } else {
+        lcd.setBackColor(BLACK);   // custom main screen owns the row above the lanes
+        lcd.clearRect(kPlayX - 6, kPlayY - 6, kPlayWidth + 8, 13);
+        mainCounter[0] = 0;
+    }
 
     lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
     if (page_ == PAGE_SAMPLE) encoder_update();   // custom: sample page knob layout
     page_draw();
 }
 
-void Controller::page_close() {
-    /// @brief Removes the page and redraws the 10 layer lanes exactly as the stock main page does.
+void Controller::page_close() { page_close(false); }
+
+void Controller::page_close(bool toStock_) {
+    /// @brief Removes the page. With the custom main screen on, closing a page goes back to it;
+    /// toStock_ (alerts) brings back the stock 10 lanes instead.
     if (page == PAGE_NONE) return;
     const bool wasSample = (page == PAGE_SAMPLE);
+    const bool wasMain = (page == PAGE_MAIN);
     page = PAGE_NONE;
     if (wasSample) {
         encoder_update();
         if ((menu == LAYER_INST_0_MENU) || (menu == LAYER_INST_1_MENU) || (menu == LAYER_INST_2_MENU)) page_restoreInstMenu();
+    }
+    if (kMainView && !toStock_ && !wasMain) {
+        page = PAGE_MAIN;            // protection stays on; just redraw the main screen
+        pageFullRedraw = true;
+        page_draw();
+        return;
     }
     pageDirty = false;
     lcd.setProtect(false);
@@ -6041,6 +6067,436 @@ void Controller::page_drawSample() {
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////
+/* Custom: main screen (zoomed lanes, decay-shaped hits, expanded focus lane) */
+////////////////////////////////////////////////////////////////////////////////
+// Drawn column by column from a small per-lane picture (attack + tail heights), so the
+// playhead only needs two columns redrawn per frame and a page flip is one fast sweep.
+
+static uint8_t mainAtt[kLayerLibrarySize][kMainGridW];     // attack line height 0-255 (velocity)
+static uint8_t mainTail[kLayerLibrarySize][kMainGridW];    // decay tail height 0-255
+static int16_t mainSelCol = -1;                            // selected hit column (SEQ menu), drawn violet
+static uint16_t stripBits[kMainGridW];                     // overview strip: which lanes have a hit in each column
+static bool stripDirty = true;
+static int16_t stripPlay = -1;
+
+static inline RGB16Color rgb565(uint8_t r, uint8_t g, uint8_t b) { return (RGB16Color)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)); }
+static inline RGB16Color mix565(RGB16Color a, RGB16Color b, float t) {
+    const int ar = (a >> 11) & 0x1F, ag = (a >> 5) & 0x3F, ab = a & 0x1F;
+    const int br = (b >> 11) & 0x1F, bg = (b >> 5) & 0x3F, bb = b & 0x1F;
+    return (RGB16Color)(((int)(ar + (br - ar) * t) << 11) | ((int)(ag + (bg - ag) * t) << 5) | (int)(ab + (bb - ab) * t));
+}
+
+uint32_t Controller::main_laneKey(uint8_t lane_) {
+    const Layer& L = layerLibrary[lane_];
+    const Bank& bank = L.bankLibrary[activeSongBank];
+    uint32_t h = 2166136261u;
+    auto mix = [&h](uint32_t v) { h ^= v; h *= 16777619u; };
+    mix((uint32_t)(uint8_t)bank.lastActiveBeatNum);
+    for (int16_t j = 0; j <= bank.lastActiveBeatNum; j++) {
+        mix(bank.beatLibrary[j].data);
+        mix(((uint32_t)bank.beatLibrary[j].startInterval << 16) | bank.beatLibrary[j].endInterval);
+        mix(bank.beatLibrary[j].fillTarget);
+    }
+    mix(L.mute | (L.fill << 1) | (L.style << 2) | (L.samplePlay << 3));
+    mix(L.playSampleSector); mix(L.start); mix(L.end);
+    mix(L.envAttack | (L.envHold << 8) | (L.envDecay << 16)); mix(L.swingExtra);
+    mix(L.lfoLevel | (L.lfoPitch << 4) | (L.lfoStart << 8) | (L.lfoTiming << 12));
+    for (uint8_t k = 0; k < 12; k++) mix((uint8_t)L.instLoadedData.nameShortL[k]);
+    if ((L.playSampleSector >= 0) && (L.playSampleSector < kSampleSectorLibrarySize)) mix(sampleSectorLibrary[L.playSampleSector].size);
+    if ((int8_t)lane_ == mainExpanded) { mix(0xABCDu); mix((uint32_t)(int32_t)selectedBeatNum); mix(rhythm.swing); }
+    return h;
+}
+
+void Controller::main_buildLane(uint8_t lane_) {
+    /// @brief Turns one drum's hits in the visible window into attack / tail heights per column.
+    memset(mainAtt[lane_], 0, kMainGridW);
+    memset(mainTail[lane_], 0, kMainGridW);
+    if ((int8_t)lane_ == mainExpanded) mainSelCol = -1;
+    const Layer& L = layerLibrary[lane_];
+    const Bank& bank = L.bankLibrary[activeSongBank];
+    if (bank.lastActiveBeatNum < 0) return;
+
+    // How long one hit sounds, in ticks: sample window, cut by the envelope.
+    float soundMs = 120.0f;
+    if ((L.playSampleSector >= 0) && (L.playSampleSector < kSampleSectorLibrarySize) && sampleSectorLibrary[L.playSampleSector].active) {
+        soundMs = (float)sampleSectorLibrary[L.playSampleSector].size * (float)(L.end - L.start) / 100.0f * 1000.0f / AUDIO_SAMPLE_RATE;
+    }
+    if (L.envHold < 100) {
+        const float a = (float)L.envAttack / 100.0f, hh = (float)L.envHold / 100.0f, d = (float)L.envDecay / 100.0f;
+        const float envMs = a * a * kEnvAttackMaxMs + hh * hh * kEnvHoldMaxMs + d * d * kEnvDecayMaxMs;
+        if (envMs < soundMs) soundMs = envMs;
+    }
+    const float msPerTick = 60000.0f / ((float)(rhythm.tempo ? rhythm.tempo : 90) * (float)kMeasureInterval);
+    const uint32_t soundTicks = (uint32_t)(soundMs / msPerTick) + 1;
+    const uint32_t v0 = mainViewStart, v1 = mainViewStart + mainViewLen;
+
+    // Collect hit times + velocities (simple beats, ghosts, and every step of rolls/fills).
+    static uint16_t hT[kBeatLibrarySize * 4];
+    static uint8_t hV[kBeatLibrarySize * 4];
+    static int8_t hBeat[kBeatLibrarySize * 4];
+    uint16_t n = 0;
+    for (int16_t j = 0; (j <= bank.lastActiveBeatNum) && (n < kBeatLibrarySize * 4 - 1); j++) {
+        const Beat& b = bank.beatLibrary[j];
+        if (!b.getActive()) continue;
+        if ((b.getFillType() == 0) && (b.getFillPattern() <= 2) && (b.getFillTarget() == NULL_FILL_TARGET)) {
+            const uint8_t p = b.getFillPattern();
+            hT[n] = b.getStartInterval(); hV[n] = (p == 0) ? 255 : ((p == 1) ? 128 : 40); hBeat[n] = (int8_t)j; n++;
+        } else if (b.getFillTarget() != NULL_FILL_TARGET) {
+            const BeatFill& f = bank.beatFillLibrary[b.getFillTarget()];
+            for (uint8_t k = 0; (k < f.getStepSize()) && (k < kBeatMicroLibrarySize) && (n < kBeatLibrarySize * 4 - 1); k++) {
+                const BeatMicro& m = f.beatMicroLibrary[k];
+                uint32_t lv = (uint32_t)m.getLevel() * 255 / 100; if (lv > 255) lv = 255;
+                hT[n] = m.getInterval(); hV[n] = (uint8_t)(lv ? lv : 30); hBeat[n] = (k == 0) ? (int8_t)j : -1; n++;
+            }
+        } else {
+            hT[n] = b.getStartInterval(); hV[n] = 255; hBeat[n] = (int8_t)j; n++;
+        }
+    }
+    for (uint16_t i = 0; i < n; i++) {
+        const uint32_t t = hT[i];
+        uint32_t tEnd = t + soundTicks;
+        // a new hit on the same drum cuts the previous sound
+        uint32_t next = 0xFFFFFFFFu;
+        for (uint16_t k = 0; k < n; k++) if ((hT[k] > t) && (hT[k] < next)) next = hT[k];
+        if (next < tEnd) tEnd = next;
+        if ((tEnd <= v0) || (t >= v1)) continue;
+        const int32_t c0 = (int32_t)(((int64_t)((int32_t)t - (int32_t)v0) * kMainGridW) / (int32_t)mainViewLen);
+        const int32_t c1 = (int32_t)(((int64_t)((int32_t)tEnd - (int32_t)v0) * kMainGridW) / (int32_t)mainViewLen);
+        const int32_t len = (c1 > c0) ? (c1 - c0) : 1;
+        for (int32_t c = (c0 < 0 ? 0 : c0); (c <= c1) && (c < kMainGridW); c++) {
+            const float f = 1.0f - (float)(c - c0) / (float)len;
+            const uint8_t th = (uint8_t)(hV[i] * f * f);
+            if (th > mainTail[lane_][c]) mainTail[lane_][c] = th;
+        }
+        if ((c0 >= 0) && (c0 < kMainGridW)) {
+            if (hV[i] > mainAtt[lane_][c0]) mainAtt[lane_][c0] = hV[i];
+            if ((c0 + 1 < kMainGridW) && (hV[i] > mainAtt[lane_][c0 + 1])) mainAtt[lane_][c0 + 1] = hV[i];
+            if (((int8_t)lane_ == mainExpanded) && (menu == LAYER_SONG_MENU) && (hBeat[i] >= 0) && (hBeat[i] == selectedBeatNum)) mainSelCol = (int16_t)c0;
+        }
+    }
+}
+
+void Controller::main_renderColumn(uint16_t col_, uint16_t row0_, uint16_t rows_) {
+    /// @brief Builds and writes one full-height column of the grid (ruler + all lanes + playhead).
+    static RGB16Color buf[kMainHeight];
+    const RGB16Color cBlack = 0x0000;
+    const RGB16Color cLine = kThemeLine, cInk = kThemeInk, cAcc = kThemeAccent, cHead = kThemeHeader, cMid = kThemeMid;
+    const RGB16Color cShade = rgb565(10, 13, 9), cSelBg = rgb565(16, 11, 6), cSep = mix565(cBlack, cLine, 0.6f);
+    const RGB16Color cBeatDot = mix565(cBlack, cLine, 0.75f), cSixDot = mix565(cBlack, cLine, 0.4f);
+
+    // where is this column in musical time?
+    const uint32_t tCol = mainViewStart + (uint32_t)(((uint64_t)col_ * mainViewLen) / kMainGridW);
+    const uint32_t tNext = mainViewStart + (uint32_t)(((uint64_t)(col_ + 1) * mainViewLen) / kMainGridW);
+    const uint32_t six = kMeasureInterval / 4;
+    auto crosses = [&](uint32_t step) -> bool { return (tCol % step == 0) || ((tCol / step) != ((tNext - 1) / step)); };
+    const bool barLine = crosses(barInterval);
+    const bool beatLine = !barLine && crosses(kMeasureInterval);
+    const bool sixLine = !barLine && !beatLine && crosses(six) && ((mainViewLen / six) <= 64);
+    const bool shadeBar = ((tCol / barInterval) % 2) == 1;
+    const bool pastEnd = (tCol >= songInterval);
+    const bool playCol = ((int16_t)col_ == mainPlayCol);
+
+    // ruler
+    for (uint16_t r = 0; r < kMainRuler; r++) buf[r] = cBlack;
+    if (barLine) for (uint16_t r = 0; r < kMainRuler; r++) buf[r] = cAcc;
+    else if (beatLine) for (uint16_t r = 6; r < kMainRuler; r++) buf[r] = cLine;
+
+    // lanes
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
+        const uint16_t y0 = mainLaneY[l] - kMainTop, h = mainLaneH[l];
+        const bool sel = ((int8_t)l == mainExpanded);
+        const Layer& L = layerLibrary[l];
+        const RGB16Color base = sel ? cAcc : (L.mute ? cMid : cInk);
+        const RGB16Color bg = pastEnd ? cBlack : (sel ? cSelBg : (shadeBar ? cShade : cBlack));
+        for (uint16_t r = 0; r < h; r++) {
+            RGB16Color c = bg;
+            if (!pastEnd) {
+                if (barLine) c = cLine;
+                else if (beatLine && ((r % 3) == 0)) c = cBeatDot;
+                else if (sixLine && ((r % 6) == 0)) c = cSixDot;
+            }
+            buf[y0 + r] = c;
+        }
+        // tail then attack, measured up from the lane floor
+        const uint16_t floor = y0 + h - 3;
+        const uint16_t room = h - (sel ? 10 : 6);
+        const uint8_t tv = mainTail[l][col_];
+        if (tv) {
+            const uint16_t th = (uint16_t)((uint32_t)room * tv / 255);
+            const RGB16Color tc = mix565(cBlack, base, 0.15f + 0.30f * (tv / 255.0f));
+            for (uint16_t r = 0; r <= th; r++) buf[floor - r] = tc;
+        }
+        const uint8_t av = mainAtt[l][col_];
+        if (av) {
+            const uint16_t ah = (uint16_t)((uint32_t)room * av / 255);
+            RGB16Color ac = mix565(cBlack, base, 0.6f + 0.4f * (av / 255.0f));
+            if (sel && (mainSelCol >= 0) && ((col_ == (uint16_t)mainSelCol) || (col_ == (uint16_t)mainSelCol + 1))) ac = kThemeSelect;
+            for (uint16_t r = 0; r <= ah; r++) buf[floor - r] = ac;
+        }
+        buf[y0 + h - 1] = cSep;   // lane separator
+    }
+    for (uint16_t r = mainLaneY[kLayerLibrarySize - 1] + mainLaneH[kLayerLibrarySize - 1] - kMainTop; r < kMainHeight; r++) buf[r] = cBlack;
+
+    // playhead (lanes only: the ruler keeps its labels; a small tick marks it there)
+    if (playCol) {
+        for (uint16_t r = kMainRuler; r < kMainHeight; r++) buf[r] = cAcc;
+        for (uint16_t r = kMainRuler - 4; r < kMainRuler; r++) buf[r] = cAcc;
+    }
+    (void)cHead;
+    if (row0_ >= kMainHeight) return;
+    if (row0_ + rows_ > kMainHeight) rows_ = kMainHeight - row0_;
+    lcd.drawColumn(kMainGridX + col_, kMainTop + row0_, rows_, buf + row0_);
+}
+
+void Controller::main_drawLabels(uint8_t lane_) {
+    /// @brief Left side of one lane: number, drum name, M F P (bigger + details for the focus lane).
+    const Layer& L = layerLibrary[lane_];
+    const bool sel = ((int8_t)lane_ == mainExpanded);
+    const uint16_t y = mainLaneY[lane_], h = mainLaneH[lane_];
+    const RGB16Color bg = sel ? rgb565(16, 11, 6) : 0x0000;
+    lcd.setBackColor(bg);
+    lcd.clearRect(kPageX, y, kMainGridX - kPageX, h - 1);
+    lcd.setBackColor(BLACK);
+    lcd.setForeColor(mix565(0x0000, kThemeLine, 0.6f));
+    lcd.drawHLine(kPageX, y + h - 1, kMainGridX - kPageX);
+
+    char name[13];
+    memcpy(name, L.instLoadedData.nameShortL, 12);
+    name[12] = 0;
+    for (int8_t k = 11; (k >= 0) && (name[k] == ' '); k--) name[k] = 0;
+    const char* nm = name;
+    while (*nm == ' ') nm++;
+    const bool empty = (*nm == 0) || (*nm == '-');
+    char num[4];
+    snprintf(num, sizeof(num), "%02u", lane_ + 1);
+    auto mfp = [&](uint16_t yy) {
+        const bool on[3] = {L.mute, L.fill, L.style};
+        for (uint8_t k = 0; k < 3; k++) {
+            lcd.setFont(FONT_07x09);
+            lcd.setForeColor(on[k] ? ((k == 0) ? kThemeAmber : kThemeHeader) : mix565(0x0000, kThemeLine, 0.6f));
+            lcd.drawText(&"MFP"[k], 1, 182 + k * 15, yy);
+        }
+    };
+    lcd.setAlignment(LEFT);
+    lcd.setBackColor(bg);
+    if (sel) {
+        lcd.setFont(FONT_14x18);
+        lcd.setSpacing(2);
+        lcd.setForeColor(kThemeAccent);
+        lcd.drawText(num, 2, 28, y + 6);
+        const char* big = empty ? "------" : nm;
+        lcd.drawText(big, strlen(big) > 10 ? 10 : strlen(big), 72, y + 6);
+        lcd.setFont(FONT_07x09);
+        lcd.setForeColor(kThemeInk);
+        char line[40];
+        if (L.samplePlay) {
+            char smp[kFileNameSize + 1] = {0};
+            strncpy(smp, L.sampleLoadedData.nameLong, kFileNameSize);
+            char* dot = strrchr(smp, '.'); if (dot) *dot = 0;
+            snprintf(line, sizeof(line), "%-.17s", smp);
+        } else snprintf(line, sizeof(line), "NO SAMPLE");
+        lcd.drawText(line, strlen(line), 28, y + 34);
+        lcd.setForeColor(kThemeHeader);
+        uint8_t sw = rhythm.swing + L.swingExtra; if (sw > kMaxTotalSwing) sw = kMaxTotalSwing;
+        snprintf(line, sizeof(line), "SWING %u", sw);
+        lcd.drawText(line, strlen(line), 28, y + 50);
+        uint8_t lfo = L.lfoLevel ? L.lfoLevel : (L.lfoPitch ? L.lfoPitch : (L.lfoStart ? L.lfoStart : (L.lfoTiming ? L.lfoTiming : (L.lfoProbability ? L.lfoProbability : (L.lfoDirection ? L.lfoDirection : (L.lfoResolution ? L.lfoResolution : L.lfoEnd))))));
+        if (lfo) snprintf(line, sizeof(line), "LFO %u", lfo); else snprintf(line, sizeof(line), "NO LFO");
+        lcd.drawText(line, strlen(line), 28, y + 64);
+        if (h > 80) mfp(y + 50);
+    } else {
+        lcd.setFont(FONT_10x14);
+        lcd.setSpacing(2);
+        const uint16_t ty = y + (h - 14) / 2;
+        lcd.setForeColor(kThemeHeader);
+        lcd.drawText(num, 2, 28, ty);
+        lcd.setSpacing(1);
+        lcd.setForeColor(empty ? kThemeLine : (L.mute ? kThemeMid : kThemeInk));
+        const char* shown = empty ? "------" : nm;
+        lcd.drawText(shown, strlen(shown) > 10 ? 10 : strlen(shown), 62, ty);
+        mfp(y + (h - 9) / 2);
+    }
+    lcd.setBackColor(BLACK);
+}
+
+void Controller::main_drawTransport() {
+    /// @brief Row above the lanes: BAR / BEAT counter and an overview of the whole song with the visible window framed.
+    const uint32_t pos = playActive ? playInterval : mainViewStart;
+    const uint16_t beatsPerBar = (barInterval / kMeasureInterval) ? (barInterval / kMeasureInterval) : 4;
+    const uint16_t bar = (uint16_t)(pos / barInterval) + 1;
+    const uint16_t beat = (uint16_t)((pos % barInterval) / kMeasureInterval) + 1;
+    char text[24];
+    snprintf(text, sizeof(text), "%u.%u", bar, beat);
+    (void)beatsPerBar;
+    if (strcmp(text, mainCounter) != 0) {
+        strncpy(mainCounter, text, sizeof(mainCounter) - 1);
+        // counter lives in the empty left end of the ruler row (inside the page area)
+        const uint16_t cy = kMainTop;
+        lcd.setBackColor(BLACK);
+        lcd.clearRect(kPageX, cy, kMainGridX - kPageX - 2, kMainRuler);
+        lcd.setAlignment(LEFT);
+        lcd.setFont(FONT_07x09);
+        lcd.setSpacing(2);
+        lcd.setForeColor(kThemeHeader);
+        lcd.drawText("BAR", 3, 28, cy + 3);
+        lcd.setFont(FONT_10x14);
+        lcd.setSpacing(1);
+        lcd.setForeColor(kThemeAccent);
+        snprintf(text, sizeof(text), "%u", bar);
+        lcd.drawText(text, strlen(text), 58, cy);
+        lcd.setFont(FONT_07x09);
+        lcd.setSpacing(2);
+        lcd.setForeColor(kThemeHeader);
+        lcd.drawText("BEAT", 4, 100, cy + 3);
+        lcd.setFont(FONT_10x14);
+        lcd.setSpacing(1);
+        lcd.setForeColor(kThemeAccent);
+        snprintf(text, sizeof(text), "%u", beat);
+        lcd.drawText(text, strlen(text), 138, cy);
+    }
+    // overview strip (whole song): cached hit bits per column; full redraw only when hits/window change
+    const int32_t px = (playActive && songInterval) ? (int32_t)(((uint64_t)playInterval * kMainGridW) / songInterval) : -10;
+    if (stripDirty) {
+        for (uint16_t c = 0; c < kMainGridW; c++) stripBits[c] = 0;
+        for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
+            const Bank& bank = layerLibrary[l].bankLibrary[activeSongBank];
+            for (int16_t j = 0; j <= bank.lastActiveBeatNum; j++) {
+                const uint32_t st = bank.beatLibrary[j].getStartInterval();
+                const uint32_t c = songInterval ? (uint32_t)(((uint64_t)st * kMainGridW) / songInterval) : 0;
+                if (c < kMainGridW) stripBits[c] |= (uint16_t)(1u << l);
+            }
+        }
+        stripDirty = false;
+        stripPlay = (int16_t)px;
+        for (uint16_t c = 0; c < kMainGridW; c++) main_drawStripColumn(c);
+    } else if ((int16_t)px != stripPlay) {
+        const int16_t old = stripPlay;
+        stripPlay = (int16_t)px;
+        if ((old >= 0) && (old < kMainGridW)) main_drawStripColumn((uint16_t)old);
+        if ((px >= 0) && (px < kMainGridW)) main_drawStripColumn((uint16_t)px);
+    }
+}
+
+void Controller::main_drawStripColumn(uint16_t c) {
+    static RGB16Color col[18];
+    const uint32_t song = songInterval ? songInterval : 1;
+    const int32_t wx0 = (int32_t)(((uint64_t)mainViewStart * kMainGridW) / song);
+    const int32_t wx1 = (int32_t)(((uint64_t)(mainViewStart + mainViewLen) * kMainGridW) / song);
+    for (uint8_t r = 0; r < 18; r++) col[r] = 0x0000;
+    const RGB16Color dot = mix565(0x0000, kThemeInk, 0.55f);
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) if (stripBits[c] & (1u << l)) col[4 + l] = dot;
+    const uint32_t t0 = (uint32_t)(((uint64_t)song * c) / kMainGridW), t1 = (uint32_t)(((uint64_t)song * (c + 1)) / kMainGridW);
+    if (barInterval && ((t0 % barInterval) == 0 || (t0 / barInterval) != ((t1 ? t1 - 1 : 0) / barInterval))) { col[15] = kThemeLine; col[16] = kThemeLine; }
+    if (((int32_t)c == wx0) || ((int32_t)c == wx1 - 1)) for (uint8_t r = 0; r < 18; r++) col[r] = kThemeAccent;
+    else if (((int32_t)c > wx0) && ((int32_t)c < wx1 - 1)) { col[0] = kThemeAccent; col[17] = kThemeAccent; }
+    if ((int16_t)c == stripPlay) for (uint8_t r = 2; r < 16; r++) col[r] = kThemeAccent;
+    lcd.drawColumn(kMainGridX + c, 102, 18, col);
+}
+
+void Controller::page_drawMain() {
+    /// @brief Custom main screen. Incremental: full sweep when the layout/window changes, single
+    /// lanes when their hits change, two columns when only the playhead moves.
+    // ---- window: the whole song if it is 2 bars or less, else 2 bars that follow the playhead
+    const uint32_t song = songInterval ? songInterval : kMeasureInterval;
+    const uint32_t twoBars = (uint32_t)barInterval * 2;
+    const uint32_t viewLen = (song <= twoBars) ? song : twoBars;
+    uint32_t anchor = 0;
+    if (playActive) anchor = playInterval;
+    else if ((menu == LAYER_SONG_MENU) && (selectedLayerNum >= 0) && (selectedBeatNum >= 0))
+        anchor = layerLibrary[selectedLayerNum].bankLibrary[activeSongBank].beatLibrary[selectedBeatNum].getStartInterval();
+    else anchor = mainViewStart;
+    uint32_t viewStart = (anchor / viewLen) * viewLen;
+    if (viewStart >= song) viewStart = 0;
+    const int8_t expanded = ((selectedLayerNum >= 0) && (selectedLayerNum < kLayerLibrarySize) &&
+                             ((menu == LAYER_INST_0_MENU) || (menu == LAYER_INST_1_MENU) || (menu == LAYER_INST_2_MENU) || (menu == LAYER_SONG_MENU)))
+                                ? selectedLayerNum : -1;
+
+    uint32_t key = 2166136261u;
+    auto mixk = [&key](uint32_t v) { key ^= v; key *= 16777619u; };
+    mixk(viewStart); mixk(viewLen); mixk((uint32_t)(int32_t)expanded); mixk(activeSongBank); mixk(song); mixk(barInterval); mixk(rhythm.tempo);
+    const bool full = pageFullRedraw || (key != mainKey);
+
+    if (full) {
+        mainKey = key;
+        mainViewStart = viewStart;
+        mainViewLen = viewLen;
+        mainExpanded = expanded;
+        // lane layout
+        uint16_t y = kMainTop + kMainRuler;
+        const uint16_t lanesH = kMainHeight - kMainRuler;
+        for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
+            uint16_t h = (expanded < 0) ? kMainEvenLane : ((l == expanded) ? (lanesH - (kLayerLibrarySize - 1) * kMainSmallLane) : kMainSmallLane);
+            mainLaneY[l] = y; mainLaneH[l] = h; y += h;
+        }
+        if (pageFullRedraw) {
+            lcd.setBackColor(BLACK);
+            lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
+            pageFullRedraw = false;
+        }
+        for (uint8_t l = 0; l < kLayerLibrarySize; l++) { mainLaneKey[l] = main_laneKey(l); main_buildLane(l); main_drawLabels(l); }
+        // ruler labels
+        lcd.setBackColor(BLACK);
+        lcd.clearRect(kPageX, kMainTop, kMainGridX - kPageX, kMainRuler);
+        mainPlayCol = -1;
+        if (playActive && (playInterval >= mainViewStart) && (playInterval < mainViewStart + mainViewLen))
+            mainPlayCol = (int16_t)(((uint64_t)(playInterval - mainViewStart) * kMainGridW) / mainViewLen);
+        for (uint16_t c = 0; c < kMainGridW; c++) main_renderColumn(c);
+        lcd.setFont(FONT_07x09);
+        lcd.setSpacing(2);
+        lcd.setAlignment(LEFT);
+        for (uint32_t t = (mainViewStart / kMeasureInterval) * kMeasureInterval; t < mainViewStart + mainViewLen; t += kMeasureInterval) {
+            if (t < mainViewStart) continue;
+            const uint16_t x = kMainGridX + (uint16_t)(((uint64_t)(t - mainViewStart) * kMainGridW) / mainViewLen);
+            char lab[12];
+            if ((t % barInterval) == 0) { snprintf(lab, sizeof(lab), "BAR %u", (unsigned)(t / barInterval) + 1); lcd.setForeColor(kThemeAccent); }
+            else { snprintf(lab, sizeof(lab), "%u", (unsigned)((t % barInterval) / kMeasureInterval) + 1); lcd.setForeColor(kThemeHeader); }
+            lcd.setBackColor(BLACK);
+            lcd.drawText(lab, strlen(lab), x + 3, kMainTop + 2);
+        }
+        mainCounter[0] = 0;
+        stripDirty = true;
+        main_drawTransport();
+        return;
+    }
+
+    // ---- lanes whose hits / settings changed
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
+        const uint32_t k = main_laneKey(l);
+        if (k == mainLaneKey[l]) continue;
+        mainLaneKey[l] = k;
+        main_buildLane(l);
+        main_drawLabels(l);
+        const uint16_t r0 = mainLaneY[l] - kMainTop;
+        for (uint16_t c = 0; c < kMainGridW; c++) main_renderColumn(c, r0, mainLaneH[l]);
+        stripDirty = true;
+        break;                       // at most one lane per frame keeps the frame short
+    }
+
+    // ---- playhead
+    int16_t pc = -1;
+    if (playActive && (playInterval >= mainViewStart) && (playInterval < mainViewStart + mainViewLen))
+        pc = (int16_t)(((uint64_t)(playInterval - mainViewStart) * kMainGridW) / mainViewLen);
+    if (pc != mainPlayCol) {
+        const int16_t old = mainPlayCol;
+        mainPlayCol = pc;
+        if (old >= 0) main_renderColumn((uint16_t)old, kMainRuler - 4, kMainHeight);
+        if (pc >= 0) main_renderColumn((uint16_t)pc, kMainRuler - 4, kMainHeight);
+    }
+    main_drawTransport();
+}
+
+void Controller::main_update() {
+    /// @brief Main loop: keeps the custom main screen alive and refreshed.
+    if (!kMainView) return;
+    if (alertFlag) return;
+    if (page == PAGE_NONE) { page_open(PAGE_MAIN); return; }
+    if (page != PAGE_MAIN) return;
+    if ((HAL_GetTick() - mainLastTick) < kMainFrameMs) return;
+    mainLastTick = HAL_GetTick();
+    page_draw();
+}
+
 void Controller::preview_schedule(uint8_t layerNum_) {
     /// @brief Custom: asks for the selected sample to be auditioned once the knob stops moving.
     if (!kSamplePreview) return;
@@ -6272,6 +6728,9 @@ void Controller::page_draw() {
             break;
         case PAGE_SAMPLE:
             page_drawSample();
+            break;
+        case PAGE_MAIN:
+            page_drawMain();
             break;
         default:
             break;
@@ -9787,7 +10246,7 @@ void Controller::lcd_drawAlert() {
     /// @brief Draws alert notification box and message based on current alert type.
 
     // Custom: alerts sit in the song-grid area; close any page so the alert can be seen.
-    if (page != PAGE_NONE) page_close();
+    if (page != PAGE_NONE) page_close(true);
 
     // 1. STYLE SETUP
     // Configure text alignment, font, and colors for alert rendering.
@@ -10491,7 +10950,8 @@ void Controller::lcd_transitionMenu() {
     auto isInst = [](Menu m) { return (m == LAYER_INST_0_MENU) || (m == LAYER_INST_1_MENU) || (m == LAYER_INST_2_MENU); };
     const bool instToInst = (page == PAGE_SAMPLE) && isInst(menu) && isInst(preMenu);
     if (instToInst) page_markDirty(PAGE_SAMPLE);
-    if ((page != PAGE_NONE) && !lfoToLfo && !instToInst) page_close();
+    if ((page != PAGE_NONE) && (page != PAGE_MAIN) && !lfoToLfo && !instToInst) page_close();
+    if (page == PAGE_MAIN) pageDirty = true;
 
     // 1. PREVIOUS MENU CLEANUP
     // Clear UI artifacts based on previous menu type.
@@ -14518,7 +14978,7 @@ void Controller::lcd_drawPlay() {
         if (((playInterval / playXRatio) > playX) && (playX < kPlayWidth)) {
             // Draw playhead line
             lcd.setForeColor(playColor);
-            lcd.drawVLine(kPlayX + playX, kPlayY, 1);
+            if (page == PAGE_NONE) lcd.drawVLine(kPlayX + playX, kPlayY, 1);   // custom: main screen draws its own
             playX += 1;
         }
     }
@@ -14695,7 +15155,7 @@ void Controller::lcd_resetPlay() {
     // 3. BASELINE REDRAW
     // Redraw full baseline bar in default foreground color.
     lcd.setForeColor(kPlayColor1);
-    lcd.drawHLine(kPlayX, kPlayY, kPlayWidth);
+    if (page == PAGE_NONE) lcd.drawHLine(kPlayX, kPlayY, kPlayWidth);   // custom: hidden under the main screen
 
     // 4. COLOR STATE RESET
     // Restore deterministic color state for subsequent updates.
@@ -14713,7 +15173,7 @@ void Controller::lcd_redrawPlay() {
     // 2. BAR REDRAW
     // Draw full playback bar with current active play color.
     lcd.setForeColor(playColor);
-    lcd.drawHLine(kPlayX, kPlayY, kPlayWidth);
+    if (page == PAGE_NONE) lcd.drawHLine(kPlayX, kPlayY, kPlayWidth);   // custom: hidden under the main screen
 
     // 3. NEXT-FRAME COLOR FLIP
     // Toggle color for alternating visual update behavior.
