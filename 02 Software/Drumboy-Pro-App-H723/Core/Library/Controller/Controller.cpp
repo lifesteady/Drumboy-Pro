@@ -7605,17 +7605,18 @@ void Controller::page_drawEq() {
     lcd.setBackColor(BLACK);
     lcd.setForeColor(on ? kThemeAccent : kThemeMid);
     lcd.drawText(on ? "EQ    " : "EQ OFF", 6, 30, 136);
-    {   // custom: preset name in yellow next to the title
-        const int8_t p = eq_matchPreset();
-        char pn[16];
-        snprintf(pn, sizeof(pn), "%-10s", on ? ((p >= 0) ? kEqPresets[p].name : "CUSTOM") : "");
-        lcd.setForeColor(kThemeAmber);
-        lcd.drawText(pn, 10, 30 + 6 * 18, 136);
-    }
-    char info[48];
-    snprintf(info, sizeof(info), "Q %u   LOW SHELF %+d DB   HIGH SHELF %+d DB", (unsigned)kEqQDataLibrary[eq.q].data,
+    // custom: the preset name leads the summary line, in yellow (same look as the filter type)
+    const int8_t presetNum = eq_matchPreset();
+    const char* presetName = on ? ((presetNum >= 0) ? kEqPresets[presetNum].name : "CUSTOM") : "OFF";
+    char info[72];
+    snprintf(info, sizeof(info), "%-8s   Q %u   LOW SHELF %+3d DB   HIGH SHELF %+3d DB", presetName, (unsigned)kEqQDataLibrary[eq.q].data,
              (int)kEqGainDataLibrary[eq.gainLowShelf].data, (int)kEqGainDataLibrary[eq.gainHighShelf].data);
     page_drawSummary(info);
+    lcd.setFont(FONT_10x14);
+    lcd.setAlignment(LEFT);
+    lcd.setBackColor(BLACK);
+    lcd.setForeColor(kThemeAmber);
+    lcd.drawText(presetName, strlen(presetName), 30, 158);
 
     // ---- combined response, column by column
     const EqFilter* bands[6] = {&eq.filterLowShelf, &eq.filterPeak[0], &eq.filterPeak[1],
