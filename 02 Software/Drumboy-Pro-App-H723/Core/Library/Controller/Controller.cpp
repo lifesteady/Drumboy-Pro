@@ -6768,11 +6768,23 @@ void Controller::page_drawPitch() {
 
 void Controller::pitch_saveNotes(uint8_t fileNum_) {
     /// @brief Writes every hit that has a note to File_XXX.rwn (stock firmware ignores this file).
+    /// Streamed through a small buffer (internal RAM is nearly full).
     char fileName[50];
     snprintf(fileName, sizeof(fileName), "%s%03d%s", kFileStart, fileNum_ + 1, kPitchFileEnd);
-    static uint8_t buf[5 * kLayerLibrarySize * kBankLibrarySize * kBeatLibrarySize + 8];
     uint16_t n = 0;
-    uint32_t pos = 6;
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++)
+        for (uint8_t b = 0; b < kBankLibrarySize; b++) {
+            const Bank& bank = layerLibrary[l].bankLibrary[b];
+            for (int16_t j = 0; j <= bank.lastActiveBeatNum; j++)
+                if (bank.beatLibrary[j].getActive() && (bank.beatLibrary[j].note != 0)) n++;
+        }
+    f_close(&sd.file);
+    if (n == 0) { f_unlink(fileName); return; }
+    if (f_open(&sd.file, fileName, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK) return;
+    uint8_t buf[160];
+    uint16_t pos = 0;
+    buf[pos++] = 'R'; buf[pos++] = 'W'; buf[pos++] = 'N'; buf[pos++] = '1';
+    buf[pos++] = (uint8_t)(n >> 8); buf[pos++] = (uint8_t)(n & 0xFF);
     for (uint8_t l = 0; l < kLayerLibrarySize; l++)
         for (uint8_t b = 0; b < kBankLibrarySize; b++) {
             const Bank& bank = layerLibrary[l].bankLibrary[b];
@@ -6782,16 +6794,11 @@ void Controller::pitch_saveNotes(uint8_t fileNum_) {
                 buf[pos++] = l; buf[pos++] = b;
                 buf[pos++] = (uint8_t)(beat.startInterval >> 8); buf[pos++] = (uint8_t)(beat.startInterval & 0xFF);
                 buf[pos++] = (uint8_t)beat.note;
-                n++;
+                if (pos > sizeof(buf) - 5) { f_write(&sd.file, buf, pos, &sd.byteswritten); pos = 0; }
             }
         }
+    if (pos) f_write(&sd.file, buf, pos, &sd.byteswritten);
     f_close(&sd.file);
-    if (n == 0) { f_unlink(fileName); return; }
-    buf[0] = 'R'; buf[1] = 'W'; buf[2] = 'N'; buf[3] = '1'; buf[4] = (uint8_t)(n >> 8); buf[5] = (uint8_t)(n & 0xFF);
-    if (f_open(&sd.file, fileName, FA_WRITE | FA_CREATE_ALWAYS) == FR_OK) {
-        f_write(&sd.file, buf, pos, &sd.byteswritten);
-        f_close(&sd.file);
-    }
 }
 
 void Controller::pitch_loadNotes(uint8_t fileNum_) {
