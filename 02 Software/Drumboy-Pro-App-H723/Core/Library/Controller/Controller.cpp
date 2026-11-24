@@ -10298,15 +10298,20 @@ void Controller::lcd_drawProjectName() {
     const LcdAlign align = lcd.getAlignment();
     const uint16_t spacing = lcd.getSpacing();
     char text[12];
-    if (currentFileNum >= 0) snprintf(text, sizeof(text), projectDirty ? "FILE_%03d*" : "FILE_%03d ", currentFileNum + 1);
-    else snprintf(text, sizeof(text), projectDirty ? "  NEW*   " : "  NEW    ");
+    // The LCD font has no '*', so unsaved changes show as a small orange square after the name.
+    if (currentFileNum >= 0) snprintf(text, sizeof(text), "FILE_%03d", currentFileNum + 1);
+    else snprintf(text, sizeof(text), "NEW");
     lcd.setBackColor(BLACK);
     lcd.clearRect(kMenuIconRightX - 46, kMenuIconRightY - 4, 96, 22);
     lcd.setFont(FONT_10x14);
     lcd.setSpacing(0);
     lcd.setAlignment(CENTER);
     lcd.setForeColor(kThemeDark ? kThemeAccent : WHITE);
-    lcd.drawText(text, strlen(text), kMenuIconRightX + 2, kMenuIconRightY);
+    lcd.drawText(text, strlen(text), kMenuIconRightX - 2, kMenuIconRightY);
+    if (projectDirty) {
+        const uint16_t right = (kMenuIconRightX - 2) + (strlen(text) * 10) / 2;
+        lcd.fillRect(right + 3, kMenuIconRightY + 9, 5, 5);
+    }
     lcd.setFont(font);
     lcd.setAlignment(align);
     lcd.setSpacing(spacing);
