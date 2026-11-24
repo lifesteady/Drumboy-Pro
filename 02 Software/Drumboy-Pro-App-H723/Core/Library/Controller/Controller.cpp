@@ -6678,7 +6678,7 @@ int8_t Controller::pitch_padNote(uint8_t pad_) {
     const int16_t d = (int16_t)pad_ - (int16_t)pitchRootPad;
     const int16_t octs = (d >= 0) ? (d / len) : -((-d + len - 1) / len);   // floor division
     const int16_t idx = d - octs * len;                                       // 0 .. len-1
-    int16_t n = (int16_t)pitchRoot + 12 * pitchOctave + 12 * octs + kPitchScaleSteps[sc][idx];
+    int16_t n = (int16_t)pitchRoot + 6 * pitchOctave + 12 * octs + kPitchScaleSteps[sc][idx];
     if (n < -36) n = -36;
     if (n > 36) n = 36;
     return (int8_t)n;
@@ -6714,9 +6714,9 @@ void Controller::pitch_knob(uint8_t which_, int8_t step_) {
         case 1: pitchRoot = (uint8_t)((pitchRoot + 12 + step_) % 12); break;
         case 2: pitchScale = (uint8_t)((pitchScale + kPitchScaleCount + step_) % kPitchScaleCount); break;
         case 3: {
-            int8_t o = pitchOctave + step_;
-            if (o < -2) o = -2;
-            if (o > 2) o = 2;
+            int8_t o = pitchOctave + step_;   // half-octave steps (6 semitones), +-2 octaves
+            if (o < -4) o = -4;
+            if (o > 4) o = 4;
             pitchOctave = o;
         } break;
     }
@@ -6763,7 +6763,12 @@ void Controller::lcd_drawIo_PitchData() {
     lcd.drawText(text, kMenuDataTextSize, kMenuDataX[1], kMenuDataY[1]);
     snprintf(text, sizeof(text), "%10.10s", kPitchScaleName[pitchScale % kPitchScaleCount]);
     lcd.drawText(text, kMenuDataTextSize, kMenuDataX[2], kMenuDataY[2]);
-    snprintf(text, sizeof(text), "%+10d", pitchOctave);
+    {   // shown in octaves with halves: -2, -1.5 ... +1.5, +2 (no float printf)
+        char o[8];
+        const int8_t a = (pitchOctave < 0) ? -pitchOctave : pitchOctave;
+        snprintf(o, sizeof(o), "%c%d%s", (pitchOctave < 0) ? '-' : '+', a / 2, (a % 2) ? ".5" : "");
+        snprintf(text, sizeof(text), "%10s", o);
+    }
     lcd.drawText(text, kMenuDataTextSize, kMenuDataX[3], kMenuDataY[3]);
     snprintf(text, sizeof(text), "%10u", pitchRootPad + 1);
     lcd.drawText(text, kMenuDataTextSize, kMenuDataX[4], kMenuDataY[4]);
@@ -6804,7 +6809,8 @@ void Controller::page_drawPitch() {
     snprintf(text, sizeof(text), "NOTES  DRUM %02u %-12.12s", pitchLayer + 1, (*nm) ? nm : "-");
     lcd.drawText(text, strlen(text), 30, 136);
     lcd_drawIo_PitchData();
-    snprintf(text, sizeof(text), "ROOT %-2s ON PAD %-2u   SCALE %-11s   OCTAVE %+d", kPitchNoteName[pitchRoot % 12], pitchRootPad + 1, kPitchScaleName[pitchScale % kPitchScaleCount], pitchOctave);
+    snprintf(text, sizeof(text), "ROOT %-2s ON PAD %-2u   SCALE %-11s   OCTAVE %c%d%s  ", kPitchNoteName[pitchRoot % 12], pitchRootPad + 1, kPitchScaleName[pitchScale % kPitchScaleCount],
+             (pitchOctave < 0) ? '-' : '+', ((pitchOctave < 0) ? -pitchOctave : pitchOctave) / 2, (((pitchOctave < 0) ? -pitchOctave : pitchOctave) % 2) ? ".5" : "");
     page_drawSummary(text);
 
     // one box per pad: note name big, semitones small
