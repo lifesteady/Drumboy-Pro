@@ -5662,7 +5662,8 @@ void Controller::page_drawGroove() {
     while (*q == ' ') q++;
     const char* g = kSwingGridName[(rhythm.swingGrid <= kMaxSwingGrid) ? rhythm.swingGrid : kInitialSwingGrid];
     while (*g == ' ') g++;
-    snprintf(text, sizeof(text), "MASTER SWING %u%% ON %s   QUANTIZE %s   CORRECT %u%%", master, g,
+    // Fixed-width fields so nothing jumps sideways when a value gets shorter or longer.
+    snprintf(text, sizeof(text), "MASTER SWING %2u%% ON %-4s   QUANTIZE %-5s   CORRECT %3u%%", master, g,
              (rhythm.quantize == kQuantizeOff) ? "OFF" : q, grooveCorrect);
     page_drawSummary(text);
 
