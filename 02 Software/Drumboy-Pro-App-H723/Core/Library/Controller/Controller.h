@@ -471,6 +471,7 @@ class Controller {
     void lfo_toggleTarget(uint8_t layerNum_);
     void preview_schedule(uint8_t layerNum_);
     void lcd_drawProjectName();
+    void lcd_drawMenuLabel(Menu menu_, int16_t num_);
     uint32_t undo_slotAddress(uint8_t pos_);
     void undo_save(uint8_t pos_);
     bool undo_slotEqualsLive(uint8_t pos_);

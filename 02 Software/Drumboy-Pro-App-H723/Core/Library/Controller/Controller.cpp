@@ -9587,89 +9587,60 @@ void Controller::lcd_drawMenuIcon(Menu menu_) {
     lcd.setSpacing(4);
 
     // 2. LEFT ICON DRAW
-    // Draw left icon as grid for global menu or two-letter code otherwise.
-    if (menu_ == GLOBAL_MENU) {
-        lcd.clearRect(kMenuIconLeftX - 14, kMenuIconLeftY - 2, 25, 20);
-        for (uint8_t k = 0; k < 4; k++) {
-            lcd.fillRect(kMenuIconLeftX - 6 + (k % 2 * 8), kMenuIconLeftY + 1 + (k / 2 * 8), 4, 4);
-        }
-    } else {
-        const char* iconStr = "";
-        switch (menu_) {
-            case FILE_MENU:
-                iconStr = "FI";
-                break;
-
-            case FILTER_0_MENU:
-
-            case FILTER_1_MENU:
-                iconStr = "FL";
-                break;
-
-            case RHYTHM_MENU:
-                iconStr = "RH";
-                break;
-
-            case REVERB_MENU:
-                iconStr = "RE";
-                break;
-
-            case EQ_MENU:
-                iconStr = "PE";
-                break;
-
-            case EFFECT_0_MENU:
-
-            case EFFECT_1_MENU:
-                iconStr = "EF";
-                break;
-
-            case IO_MENU:
-                iconStr = "SY";
-                break;
-
-            case LAYER_SONG_MENU:
-                iconStr = "SO";
-                break;
-
-            case LAYER_INST_0_MENU:
-
-            case LAYER_INST_1_MENU:
-
-            case LAYER_INST_2_MENU:
-                iconStr = "IN";
-                break;
-
-            case DRUMKIT_MENU:
-                iconStr = "DR";
-                break;
-
-            case MIXER_MENU:
-                iconStr = "MX";
-                break;
-
-            case METRO_MENU:
-                iconStr = "ME";
-                break;
-
-            case LFO_MENU:
-                iconStr = "LF";
-                break;
-
-            default:
-                iconStr = "  ";
-                break;
-        }
-
-        if (iconStr[0] != '\0') {
-            lcd.drawText(iconStr, 1, kMenuIconLeftX, kMenuIconLeftY);
-        }
-    }
+    // Custom: a short word for the menu (FILE, FX1, LFO3, INST7 ...) instead of one letter.
+    lcd_drawMenuLabel(menu_, -1);
 
     // 3. RIGHT ICON DRAW
     // Custom: the stock four-square icon is replaced by the current project name.
     lcd.setSpacing(2);
     lcd_drawProjectName();
+}
+
+void Controller::lcd_drawMenuLabel(Menu menu_, int16_t num_) {
+    /// @brief Custom: draws the menu name in the top-left box. num_ < 0 = work it out from the
+    /// current selection (filter/effect 1-2, LFO 1-10, drum 1-10).
+    const char* word = "";
+    int16_t num = -1;
+    switch (menu_) {
+        case GLOBAL_MENU:       word = "MAIN"; break;
+        case FILE_MENU:         word = "FILE"; break;
+        case DRUMKIT_MENU:      word = "KIT"; break;
+        case MIXER_MENU:        word = "MIX"; break;
+        case RHYTHM_MENU:       word = "RHYTHM"; break;
+        case METRO_MENU:        word = "METRO"; break;
+        case IO_MENU:           word = "SYNC"; break;
+        case EQ_MENU:           word = "EQ"; break;
+        case REVERB_MENU:       word = "REVERB"; break;
+        case FILTER_0_MENU:     word = "FILT"; num = 1; break;
+        case FILTER_1_MENU:     word = "FILT"; num = 2; break;
+        case EFFECT_0_MENU:     word = "FX"; num = 1; break;
+        case EFFECT_1_MENU:     word = "FX"; num = 2; break;
+        case LFO_MENU:          word = "LFO"; num = selectedLfoNum + 1; break;
+        case LAYER_INST_0_MENU:
+        case LAYER_INST_1_MENU:
+        case LAYER_INST_2_MENU: word = "INST"; num = selectedLayerNum + 1; break;
+        case LAYER_SONG_MENU:   word = "SEQ"; num = selectedLayerNum + 1; break;
+        default:                word = ""; break;
+    }
+    if (num_ >= 0) num = num_;
+    char text[12];
+    if ((num >= 1) && (num <= 99)) snprintf(text, sizeof(text), "%s%d", word, num);
+    else snprintf(text, sizeof(text), "%s", word);
+
+    const LcdFont font = lcd.getFont();
+    const LcdAlign align = lcd.getAlignment();
+    const uint16_t spacing = lcd.getSpacing();
+    lcd.setBackColor(BLACK);
+    lcd.clearRect(kMenuNumX, kMenuNumY, 7, 9);                            // old small number spot
+    lcd.clearRect(kMenuIconLeftX - 48, kMenuIconLeftY - 4, 96, 22);
+    lcd.setFont(FONT_10x14);
+    lcd.setSpacing(1);
+    lcd.setAlignment(CENTER);
+    lcd.setForeColor(WHITE);
+    if (text[0] != 0) lcd.drawText(text, strlen(text), kMenuIconLeftX, kMenuIconLeftY);
+    lcd.setFont(font);
+    lcd.setAlignment(align);
+    lcd.setSpacing(spacing);
 }
 
 void Controller::lcd_drawProjectName() {
@@ -11784,7 +11755,7 @@ void Controller::lcd_drawFilterMenu(uint8_t filterNum_) {
     // 2. FILTER NUMBER DRAW
     // Draw selected filter number marker.
     lcd_setMenuHeaderState(CYAN);
-    lcd.drawText(kDataMenuNum + filterNum_, 1, kMenuNumX, kMenuNumY);
+    lcd_drawMenuLabel(filterNum_ ? FILTER_1_MENU : FILTER_0_MENU, filterNum_ + 1);
 
     // 3. HEADER DRAW
     // Draw headers for filter parameters.
@@ -12078,7 +12049,7 @@ void Controller::lcd_drawEffectMenu(uint8_t effectNum_) {
     // 2. EFFECT NUMBER DRAW
     // Draw selected effect number marker.
     lcd_setMenuHeaderState(CYAN);
-    lcd.drawText(kDataMenuNum + effectNum_, 1, kMenuNumX, kMenuNumY);
+    lcd_drawMenuLabel(effectNum_ ? EFFECT_1_MENU : EFFECT_0_MENU, effectNum_ + 1);
 
     // 3. HEADER DRAW
     // Draw active header and parameter labels.
@@ -12650,7 +12621,7 @@ void Controller::lcd_drawLfoMenu(uint8_t lfoNum_) {
     // 2. LFO NUMBER DRAW
     // Draw selected LFO number marker.
     lcd_setMenuHeaderState(CYAN);
-    lcd.drawText(kDataMenuNum + lfoNum_, 1, kMenuNumX, kMenuNumY);
+    lcd_drawMenuLabel(LFO_MENU, lfoNum_ + 1);
 
     // 3. HEADER DRAW
     // Draw headers for LFO parameter columns.
@@ -12846,7 +12817,7 @@ void Controller::lcd_drawLayerInst0Menu(uint8_t layerNum_, bool graph_) {
     // 2. LAYER NUMBER DRAW
     // Draw selected layer number marker.
     lcd_setMenuHeaderState(CYAN);
-    lcd.drawText(kDataMenuNum + layerNum_, 1, kMenuNumX, kMenuNumY);
+    lcd_drawMenuLabel(LAYER_INST_0_MENU, layerNum_ + 1);
 
     // 3. HEADER DRAW
     // Draw headers for instrument and playback fields.
@@ -13340,7 +13311,7 @@ void Controller::lcd_drawLayerSongMenu(uint8_t layerNum_) {
     // 2. LAYER NUMBER DRAW
     // Draw selected layer number marker.
     lcd_setMenuHeaderState(CYAN);
-    lcd.drawText(kDataMenuNum + layerNum_, 1, kMenuNumX, kMenuNumY);
+    lcd_drawMenuLabel(LAYER_SONG_MENU, layerNum_ + 1);
 
     // 3. HEADER DRAW
     // Draw headers for type/pattern/timing/velocity fields.
