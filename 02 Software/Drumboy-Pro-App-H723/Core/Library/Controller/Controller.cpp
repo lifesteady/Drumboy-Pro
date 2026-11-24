@@ -9683,7 +9683,9 @@ void Controller::lcd_transitionMenu() {
     /// @brief Applies menu transition cleanup and prepares target menu layout.
 
     // Custom: leaving a menu closes its full-screen page and brings the song grid back.
-    if (page != PAGE_NONE) page_close();
+    // Exception: switching from one LFO to another keeps the LFO page up (it just redraws).
+    const bool lfoToLfo = (page == PAGE_LFO) && (menu == LFO_MENU) && (preMenu == LFO_MENU);
+    if ((page != PAGE_NONE) && !lfoToLfo) page_close();
 
     // 1. PREVIOUS MENU CLEANUP
     // Clear UI artifacts based on previous menu type.
