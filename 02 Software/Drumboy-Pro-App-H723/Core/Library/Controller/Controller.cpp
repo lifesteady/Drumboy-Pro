@@ -25269,6 +25269,7 @@ void Controller::processAudioLayer() {
 
             for (uint16_t j = 0; j < copySize; j++) {
                 float sample = localCache[j];
+                if (!(sample > -4.0f && sample < 4.0f)) sample = 0.0f;   // custom: NaN / garbage guard
 
                 // Apply Bitcrush effect if the resolution coefficient is modified
                 if (bitCrushActive) {
@@ -25333,12 +25334,15 @@ void Controller::processAudioLayer() {
                 };
 
                 float currentSample;
-                if (counterDiff == 0.0f) {
+                if ((counterDiff == 0.0f) || ((counterInt + 1) >= aBD.counterMax)) {
+                    // custom: never read past the last sample of the sound (that memory can hold
+                    // leftovers or garbage, and one bad value can silence the whole effect chain)
                     currentSample = getSample(ramAddress);
                 } else {
                     // Linear interpolation between two samples
                     currentSample = getSample(ramAddress) + ((getSample(ramAddress + 4) - getSample(ramAddress)) * counterDiff);
                 }
+                if (!(currentSample > -4.0f && currentSample < 4.0f)) currentSample = 0.0f;   // custom: NaN / garbage guard
 
                 // Handle Fading Triggers
                 if ((aBD.newBeatFlag) && (!aBD.fadeAction)) aBD.fadeAction = true;
