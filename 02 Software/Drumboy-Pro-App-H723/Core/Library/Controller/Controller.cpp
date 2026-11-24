@@ -1865,9 +1865,7 @@ void Controller::keyboard_action() {
                                             break;
 
                                         case MIXER_MENU:
-                                            // Custom: on the Routing page UP / DOWN switch CHAIN / 2 LANES.
-                                            if (page == PAGE_ROUTE) route_setMode(ROUTE_LANES);
-                                            else mixer_menuUp();
+                                            mixer_menuUp();   // custom: Routing menu (see mixer_menuUp)
                                             break;
 
                                         case METRO_MENU:
@@ -1938,8 +1936,7 @@ void Controller::keyboard_action() {
                                             break;
 
                                         case MIXER_MENU:
-                                            if (page == PAGE_ROUTE) route_setMode(ROUTE_CHAIN);
-                                            else mixer_menuDown();
+                                            mixer_menuDown();
                                             break;
 
                                         case METRO_MENU:
@@ -2007,9 +2004,7 @@ void Controller::keyboard_action() {
                                             break;
 
                                         case MIXER_MENU:
-                                            // Custom: on the Routing page LEFT moves the drum's entry earlier in the chain.
-                                            if (page == PAGE_ROUTE) route_shift(false);
-                                            else mixer_menuLeft();
+                                            mixer_menuLeft();
                                             break;
 
                                         case METRO_MENU:
@@ -2077,8 +2072,7 @@ void Controller::keyboard_action() {
                                             break;
 
                                         case MIXER_MENU:
-                                            if (page == PAGE_ROUTE) route_shift(true);
-                                            else mixer_menuRight();
+                                            mixer_menuRight();
                                             break;
 
                                         case METRO_MENU:
@@ -2263,9 +2257,21 @@ void Controller::keyboard_action() {
                                             startLongKeyTimer();
                                             break;
 
-                                        case MIXER_MENU:
+                                        case MIXER_MENU:   // custom: Routing menu, LINE IN VOL knob
                                             switch (menuTab) {
-                                                case 0:
+                                                case 5:
+                                                    if (mixer.liMute) {
+                                                        liUnmuteKeyFlag = true;
+                                                        liMuteKeyFlag = false;
+                                                        startLongKeyTimer();
+                                                    }
+                                                    break;
+                                            }
+                                            break;
+
+                                        case METRO_MENU:   // custom: MIX menu, volumes on the bottom knobs
+                                            switch (menuTab) {
+                                                case 4:
                                                     if (mixer.masterMute) {
                                                         masterUnmuteKeyFlag = true;
                                                         masterMuteKeyFlag = false;
@@ -2273,7 +2279,7 @@ void Controller::keyboard_action() {
                                                     }
                                                     break;
 
-                                                case 1:
+                                                case 5:
                                                     if (mixer.hpMute) {
                                                         hpUnmuteKeyFlag = true;
                                                         hpMuteKeyFlag = false;
@@ -2281,7 +2287,7 @@ void Controller::keyboard_action() {
                                                     }
                                                     break;
 
-                                                case 2:
+                                                case 6:
                                                     if (mixer.loMute) {
                                                         loUnmuteKeyFlag = true;
                                                         loMuteKeyFlag = false;
@@ -2289,13 +2295,6 @@ void Controller::keyboard_action() {
                                                     }
                                                     break;
 
-                                                case 3:
-                                                    if (mixer.liMute) {
-                                                        liUnmuteKeyFlag = true;
-                                                        liMuteKeyFlag = false;
-                                                        startLongKeyTimer();
-                                                    }
-                                                    break;
                                             }
                                             break;
 
@@ -2359,9 +2358,21 @@ void Controller::keyboard_action() {
                                             startLongKeyTimer();
                                             break;
 
-                                        case MIXER_MENU:
+                                        case MIXER_MENU:   // custom: Routing menu, LINE IN VOL knob
                                             switch (menuTab) {
-                                                case 0:
+                                                case 5:
+                                                    if (!mixer.liMute) {
+                                                        liUnmuteKeyFlag = false;
+                                                        liMuteKeyFlag = true;
+                                                        startLongKeyTimer();
+                                                    }
+                                                    break;
+                                            }
+                                            break;
+
+                                        case METRO_MENU:   // custom: MIX menu
+                                            switch (menuTab) {
+                                                case 4:
                                                     if (!mixer.masterMute) {
                                                         masterUnmuteKeyFlag = false;
                                                         masterMuteKeyFlag = true;
@@ -2369,7 +2380,7 @@ void Controller::keyboard_action() {
                                                     }
                                                     break;
 
-                                                case 1:
+                                                case 5:
                                                     if (!mixer.hpMute) {
                                                         hpUnmuteKeyFlag = false;
                                                         hpMuteKeyFlag = true;
@@ -2377,7 +2388,7 @@ void Controller::keyboard_action() {
                                                     }
                                                     break;
 
-                                                case 2:
+                                                case 6:
                                                     if (!mixer.loMute) {
                                                         loUnmuteKeyFlag = false;
                                                         loMuteKeyFlag = true;
@@ -2385,13 +2396,6 @@ void Controller::keyboard_action() {
                                                     }
                                                     break;
 
-                                                case 3:
-                                                    if (!mixer.liMute) {
-                                                        liUnmuteKeyFlag = false;
-                                                        liMuteKeyFlag = true;
-                                                        startLongKeyTimer();
-                                                    }
-                                                    break;
                                             }
                                             break;
 
@@ -4077,6 +4081,12 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
         case ENC_PITCH_LEVEL: pitch_knob(5, 1); break;
         case ENC_PITCH_TUNE: pitch_knob(6, 1); break;
         case ENC_PITCH_GATE: pitch_knob(7, 1); break;
+        case ENC_ROUTE_LAYOUT: route_knob(0, 1); break;
+        case ENC_ROUTE_DRUM: route_knob(1, 1); break;
+        case ENC_ROUTE_DEST: route_knob(2, 1); break;
+        case ENC_ROUTE_EQ: route_knob(3, 1); break;
+        case ENC_ROUTE_METRO: route_knob(6, 1); break;
+        case ENC_ROUTE_LANEREV: route_knob(7, 1); break;
 
         case ENC_SMP_HOLD:
             sample_setEnv(1, (int16_t)layerLibrary[selectedLayerNum].envHold + 1);
@@ -4681,6 +4691,12 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
         case ENC_PITCH_LEVEL: pitch_knob(5, -1); break;
         case ENC_PITCH_TUNE: pitch_knob(6, -1); break;
         case ENC_PITCH_GATE: pitch_knob(7, -1); break;
+        case ENC_ROUTE_LAYOUT: route_knob(0, -1); break;
+        case ENC_ROUTE_DRUM: route_knob(1, -1); break;
+        case ENC_ROUTE_DEST: route_knob(2, -1); break;
+        case ENC_ROUTE_EQ: route_knob(3, -1); break;
+        case ENC_ROUTE_METRO: route_knob(6, -1); break;
+        case ENC_ROUTE_LANEREV: route_knob(7, -1); break;
 
         case ENC_SMP_HOLD:
             sample_setEnv(1, (int16_t)layerLibrary[selectedLayerNum].envHold - 1);
@@ -5609,6 +5625,95 @@ MixerInMode Controller::route_laneCode(uint8_t layerNum_) {
     }
 }
 
+void Controller::route_knob(uint8_t slot_, int8_t step_) {
+    /// @brief Custom: Routing menu knobs (also keyboard UP / DOWN on a selected knob).
+    switch (slot_) {
+        case 0: route_setMode((step_ > 0) ? ROUTE_LANES : ROUTE_CHAIN); break;
+        case 1: {
+            int16_t d = (int16_t)routeLayer + step_;
+            if (d < 0) d = 0;
+            if (d >= kLayerLibrarySize) d = kLayerLibrarySize - 1;
+            routeLayer = (uint8_t)d;
+        } break;
+        case 2: route_shift(step_ > 0); break;
+        case 3:
+            if (routeMode == ROUTE_LANES) {
+                route_laneDest(routeLayer);
+                layerLibrary[routeLayer].laneEq = (step_ > 0);
+                layerInst_calculateMixMode(routeLayer);
+            }
+            break;
+        case 6: {
+            int16_t m = (int16_t)metronome.mixerInMode + step_;
+            if (m < MIXER_IN_EQ) m = MIXER_IN_EQ;
+            if (m > MIXER_IN_SEND) m = MIXER_IN_SEND;
+            metronome.mixerInMode = (MixerInMode)m;
+        } break;
+        case 7: {
+            int16_t r = (int16_t)routeLaneRev + step_;
+            if (r < 0) r = 0;
+            if (r > 3) r = 3;
+            routeLaneRev = (uint8_t)r;
+        } break;
+        default: break;
+    }
+    if (menu == MIXER_MENU) {
+        lcd_drawRoute_Data(0);
+        lcd_drawRoute_Data(1);
+        lcd_drawRoute_Data(2);
+        lcd_drawRoute_Data(3);
+        lcd_drawRoute_Data(6);
+        lcd_drawRoute_Data(7);
+    }
+    page_markDirty(PAGE_ROUTE);
+}
+
+void Controller::lcd_drawRoute_Data(uint8_t slot_) {
+    /// @brief Custom: one value box of the Routing menu (10 characters, right aligned).
+    if (menu != MIXER_MENU) return;
+    const bool lanes = (routeMode == ROUTE_LANES);
+    char t[16];
+    switch (slot_) {
+        case 0: snprintf(t, sizeof(t), "%10s", lanes ? "2 LANES" : "CHAIN"); break;
+        case 1: {
+            char nm[13];
+            memcpy(nm, layerLibrary[routeLayer].instLoadedData.nameShortL, 12);
+            nm[12] = 0;
+            for (int8_t k = 11; (k >= 0) && (nm[k] == ' '); k--) nm[k] = 0;
+            const char* p = nm;
+            while (*p == ' ') p++;
+            char both[24];
+            snprintf(both, sizeof(both), "%02u %.6s", routeLayer + 1, (*p && (*p != '-')) ? p : "");
+            snprintf(t, sizeof(t), "%10s", both);
+        } break;
+        case 2: {
+            static const char* const chainName[7] = {"EQ", "FILTER 1", "FILTER 2", "EFFECT 1", "EFFECT 2", "REVERB", "DRY"};
+            static const char* const laneName[4] = {"LANE A", "LANE B", "REVERB", "DRY"};
+            if (lanes) snprintf(t, sizeof(t), "%10s", laneName[route_laneDest(routeLayer) & 0x03]);
+            else {
+                uint8_t e = (uint8_t)layerLibrary[routeLayer].mixerInMode;
+                if (e > MIXER_IN_SEND) e = MIXER_IN_SEND;
+                snprintf(t, sizeof(t), "%10s", chainName[e]);
+            }
+        } break;
+        case 3: snprintf(t, sizeof(t), "%10s", lanes ? (layerLibrary[routeLayer].laneEq ? "ON" : "OFF") : "IN CHAIN"); break;
+        case 4: lcd_drawMixer_LiInData(); return;
+        case 5: lcd_drawMixer_LiVolumeData(); return;
+        case 6: {
+            uint8_t m = (uint8_t)metronome.mixerInMode;
+            if (m > MIXER_IN_SEND) m = MIXER_IN_SEND;
+            snprintf(t, sizeof(t), "%s", kMixerLiMixerInDataLibrary[m].nameLongR);
+        } break;
+        case 7: {
+            static const char* const rv[4] = {"A + B", "A ONLY", "B ONLY", "OFF"};
+            snprintf(t, sizeof(t), "%10s", lanes ? rv[routeLaneRev & 0x03] : "IN CHAIN");
+        } break;
+        default: return;
+    }
+    lcd_setMenuDataState(lanes || (slot_ < 3) || (slot_ == 6) ? WHITE : GRAY_60);
+    lcd.drawText(t, kMenuDataTextSize, kMenuDataX[slot_], kMenuDataY[slot_]);
+}
+
 void Controller::route_setMode(uint8_t mode_) {
     /// @brief CHAIN (stock) or 2 LANES. Every drum's routing is recalculated; each layout keeps its own settings.
     mode_ = (mode_ == ROUTE_LANES) ? ROUTE_LANES : ROUTE_CHAIN;
@@ -5616,6 +5721,7 @@ void Controller::route_setMode(uint8_t mode_) {
     routeMode = mode_;
     for (uint8_t l = 0; l < kLayerLibrarySize; l++) layerInst_calculateMixMode(l);
     if (page == PAGE_ROUTE) { pageFullRedraw = true; page_markDirty(PAGE_ROUTE); }
+    for (uint8_t k = 0; k < 8; k++) lcd_drawRoute_Data(k);
 }
 
 void Controller::route_shift(bool later_) {
@@ -5640,11 +5746,13 @@ void Controller::route_pad(uint8_t layerNum_) {
         layerLibrary[layerNum_].laneEq = !layerLibrary[layerNum_].laneEq;
         layerInst_calculateMixMode(layerNum_);
         page_markDirty(PAGE_ROUTE);
+        lcd_drawRoute_Data(3);
         return;
     }
     Layer& layer = layerLibrary[layerNum_];
     if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(layerNum_, 1.0f);
     page_markDirty(PAGE_ROUTE);
+    for (uint8_t k = 1; k < 4; k++) lcd_drawRoute_Data(k);
 }
 
 void Controller::page_drawRoute() {
@@ -5718,9 +5826,9 @@ void Controller::page_drawRoute() {
         }
         switch (code_) {
             case MIXER_IN_LANE_A_EQ: visit_[0] = true;   // fall through
-            case MIXER_IN_LANE_A: visit_[1] = visit_[3] = visit_[5] = true; break;
+            case MIXER_IN_LANE_A: visit_[1] = visit_[3] = true; visit_[5] = (routeLaneRev == 0) || (routeLaneRev == 1); break;
             case MIXER_IN_LANE_B_EQ: visit_[0] = true;   // fall through
-            case MIXER_IN_LANE_B: visit_[2] = visit_[4] = visit_[5] = true; break;
+            case MIXER_IN_LANE_B: visit_[2] = visit_[4] = true; visit_[5] = (routeLaneRev == 0) || (routeLaneRev == 2); break;
             case MIXER_IN_REVERB_EQ: visit_[0] = true;   // fall through
             case MIXER_IN_REVERB: visit_[5] = true; break;
             case MIXER_IN_SEND_EQ: visit_[0] = true; break;
@@ -5736,14 +5844,11 @@ void Controller::page_drawRoute() {
         lcd.setFont(FONT_07x09);
         lcd.setAlignment(LEFT);
         lcd.setForeColor(label);
-        const char* h1 = lanes ? "PAD: PICK DRUM    LEFT / RIGHT: LANE A, LANE B, REVERB ONLY, DRY    ADD + PAD: EQ ON / OFF"
-                               : "PAD: PICK DRUM    LEFT / RIGHT: ENTER EARLIER / LATER";
-        lcd.drawText(h1, strlen(h1), 30, 422);
-        const char h2[] = "UP / DOWN: 2 LANES / CHAIN    FILLED: STAGE ON   HOLLOW: BYPASSED";
-        lcd.drawText(h2, strlen(h2), 30, 438);
-        lcd.setAlignment(RIGHT);
-        const char h3[] = "MIXER: NEXT";
-        lcd.drawText(h3, strlen(h3), 930, 438);
+        lcd.setFont(FONT_07x09);
+        lcd.setAlignment(LEFT);
+        lcd.setForeColor(label);
+        const char h1[] = "PADS OR KNOB 2: PICK A DRUM";
+        lcd.drawText(h1, strlen(h1), 30, 438);
         if (lanes) {   // lane labels over their boxes
             lcd.setAlignment(CENTER);
             lcd.setForeColor(kThemeAmber);
@@ -9388,7 +9493,12 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
                     }
 
                     // custom: routing layout (older files: CHAIN). Drums are recalculated as they load.
-                    routeMode = ((data[179] & 0xF0) == kRouteModeFileMark) ? ((data[179] & 0x0F) ? ROUTE_LANES : ROUTE_CHAIN) : ROUTE_CHAIN;
+                    routeMode = ((data[179] & 0xF0) == kRouteModeFileMark) ? ((data[179] & 0x01) ? ROUTE_LANES : ROUTE_CHAIN) : ROUTE_CHAIN;
+                    routeLaneRev = ((data[179] & 0xF0) == kRouteModeFileMark) ? ((data[179] >> 2) & 0x03) : 0;
+                    if ((data[500 + kMetroRouteFileOffset] & 0xF0) == kMetroRouteFileMark) {
+                        const uint8_t mr = data[500 + kMetroRouteFileOffset] & 0x0F;
+                        metronome.mixerInMode = (MixerInMode)((mr <= MIXER_IN_SEND) ? mr : MIXER_IN_REVERB);
+                    }
 
                     // Reverb processor parameters
                     reverb_setActive(data[167]);
@@ -9773,7 +9883,8 @@ void Controller::sd_encodeProject(uint8_t* data) {
     // 2.9 REVERB SETTINGS
     data[167] = reverb.active;
     data[178] = kReverbTypeFileMark | reverb.type;   // custom: reverb type
-    data[179] = kRouteModeFileMark | (routeMode & 0x0F);   // custom: CHAIN / 2 LANES
+    data[179] = kRouteModeFileMark | (uint8_t)((routeLaneRev & 0x03) << 2) | (routeMode & 0x01);   // custom: layout + lane reverb
+    data[500 + kMetroRouteFileOffset] = kMetroRouteFileMark | ((uint8_t)metronome.mixerInMode & 0x0F);   // custom: where the metronome goes
     data[168] = reverb.size;
     data[169] = reverb.decay;
     data[170] = reverb.damping;
@@ -10249,7 +10360,12 @@ SdResult Controller::sd_loadDrumkit(uint8_t kitNum_) {
                     }
 
                     // custom: routing layout (older files: CHAIN). Drums are recalculated as they load.
-                    routeMode = ((data[179] & 0xF0) == kRouteModeFileMark) ? ((data[179] & 0x0F) ? ROUTE_LANES : ROUTE_CHAIN) : ROUTE_CHAIN;
+                    routeMode = ((data[179] & 0xF0) == kRouteModeFileMark) ? ((data[179] & 0x01) ? ROUTE_LANES : ROUTE_CHAIN) : ROUTE_CHAIN;
+                    routeLaneRev = ((data[179] & 0xF0) == kRouteModeFileMark) ? ((data[179] >> 2) & 0x03) : 0;
+                    if ((data[500 + kMetroRouteFileOffset] & 0xF0) == kMetroRouteFileMark) {
+                        const uint8_t mr = data[500 + kMetroRouteFileOffset] & 0x0F;
+                        metronome.mixerInMode = (MixerInMode)((mr <= MIXER_IN_SEND) ? mr : MIXER_IN_REVERB);
+                    }
 
                     // Reverb processor parameters
                     reverb_setActive(data[167]);
@@ -10573,7 +10689,8 @@ SdResult Controller::sd_saveDrumkit(uint8_t kitNum_) {
     // 2.9 REVERB SETTINGS
     data[167] = reverb.active;
     data[178] = kReverbTypeFileMark | reverb.type;   // custom: reverb type
-    data[179] = kRouteModeFileMark | (routeMode & 0x0F);   // custom: CHAIN / 2 LANES
+    data[179] = kRouteModeFileMark | (uint8_t)((routeLaneRev & 0x03) << 2) | (routeMode & 0x01);   // custom: layout + lane reverb
+    data[500 + kMetroRouteFileOffset] = kMetroRouteFileMark | ((uint8_t)metronome.mixerInMode & 0x0F);   // custom: where the metronome goes
     data[168] = reverb.size;
     data[169] = reverb.decay;
     data[170] = reverb.damping;
@@ -11952,9 +12069,9 @@ void Controller::lcd_drawMenuLabel(Menu menu_, int16_t num_) {
         case GLOBAL_MENU:       word = "MAIN"; break;
         case FILE_MENU:         word = "FILE"; break;
         case DRUMKIT_MENU:      word = "KIT"; break;
-        case MIXER_MENU:        word = "MIX"; break;
+        case MIXER_MENU:        word = "ROUTE"; break;   // custom: Mixer key, first press
         case RHYTHM_MENU:       word = "RHYTHM"; break;
-        case METRO_MENU:        word = "METRO"; break;
+        case METRO_MENU:        word = "MIX"; break;     // custom: mix volumes + metronome
         case IO_MENU:           word = (page == PAGE_PITCH) ? "NOTES" : "SYNC"; break;
         case EQ_MENU:           word = "EQ"; break;
         case REVERB_MENU:       word = "REVERB"; break;
@@ -12210,7 +12327,8 @@ void Controller::lcd_transitionMenu() {
             break;
 
         case MIXER_MENU:
-            for (uint8_t i = 0; i <= kMaxMenu4Tab; i++) {
+        case METRO_MENU:   // custom: MUTE boxes now sit under knobs 5-8 too
+            for (uint8_t i = 0; i <= kMaxMenu8Tab; i++) {
                 lcd_clearTextBox(i);
             }
             break;
@@ -13623,51 +13741,23 @@ void Controller::lcd_drawDrumkit_ClearData() {
 /* Lcd Mixer Menu Functions --------------------------------------------------*/
 
 void Controller::lcd_drawMixerMenu() {
-    /// @brief Draws Mixer menu layout with level, routing, and utility fields.
-
-    // 1. MENU ICON DRAW
-    // Draw mixer menu icon area.
+    /// @brief Custom: the Mixer key's first menu is ROUTING. Top knobs: layout, drum, where it goes,
+    /// its EQ. Bottom knobs: where Line In goes, Line In volume, where the metronome goes, lane reverb.
     lcd_drawMenuIcon(MIXER_MENU);
-
-    // 2. MENU NUMBER CLEAR
-    // Clear menu-number area for this menu.
     lcd_setMenuHeaderState(CYAN);
     lcd.clearRect(kMenuNumX, kMenuNumY, 7, 9);
-
-    // 3. HEADER DRAW
-    // Draw headers for all mixer parameters.
     lcd_setMenuHeaderState(CYAN);
-    lcd.drawText("MAS-VOL   ", kMenuHeaderTextSize, kMenuHeaderX[0], kMenuHeaderY[0]);
-    lcd.drawText("HP-VOL    ", kMenuHeaderTextSize, kMenuHeaderX[1], kMenuHeaderY[1]);
-    lcd.drawText("LO-VOL    ", kMenuHeaderTextSize, kMenuHeaderX[2], kMenuHeaderY[2]);
-    lcd.drawText("LI-VOL    ", kMenuHeaderTextSize, kMenuHeaderX[3], kMenuHeaderY[3]);
-    lcd.drawText("LI-IN     ", kMenuHeaderTextSize, kMenuHeaderX[4], kMenuHeaderY[4]);
-    lcd.drawText(kHeaderPan, kMenuHeaderTextSize, kMenuHeaderX[5], kMenuHeaderY[5]);
-    lcd.drawText(kHeaderLimiter, kMenuHeaderTextSize, kMenuHeaderX[6], kMenuHeaderY[6]);
-    lcd.drawText(kHeaderNormalize, kMenuHeaderTextSize, kMenuHeaderX[7], kMenuHeaderY[7]);
-
-    // 4. SIGN/UNIT DRAW
-    // Draw unit/sign text for each parameter slot.
+    lcd.drawText("LAYOUT    ", kMenuHeaderTextSize, kMenuHeaderX[0], kMenuHeaderY[0]);
+    lcd.drawText("DRUM      ", kMenuHeaderTextSize, kMenuHeaderX[1], kMenuHeaderY[1]);
+    lcd.drawText("GOES TO   ", kMenuHeaderTextSize, kMenuHeaderX[2], kMenuHeaderY[2]);
+    lcd.drawText("DRUM EQ   ", kMenuHeaderTextSize, kMenuHeaderX[3], kMenuHeaderY[3]);
+    lcd.drawText("LINE IN TO", kMenuHeaderTextSize, kMenuHeaderX[4], kMenuHeaderY[4]);
+    lcd.drawText("LINE IN VOL", 11, kMenuHeaderX[5], kMenuHeaderY[5]);
+    lcd.drawText("METRO TO  ", kMenuHeaderTextSize, kMenuHeaderX[6], kMenuHeaderY[6]);
+    lcd.drawText("LANE REVERB", 11, kMenuHeaderX[7], kMenuHeaderY[7]);
     lcd_setMenuSignState(CYAN);
-    lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[0], kMenuSignBoxY[0]);
-    lcd.drawText(" DB", kMenuSignTextSize, kMenuSignBoxX[1], kMenuSignBoxY[1]);
-    lcd.drawText(" DB", kMenuSignTextSize, kMenuSignBoxX[2], kMenuSignBoxY[2]);
-    lcd.drawText(" DB", kMenuSignTextSize, kMenuSignBoxX[3], kMenuSignBoxY[3]);
-    lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[4], kMenuSignBoxY[4]);
-    lcd.drawText(" LR", kMenuSignTextSize, kMenuSignBoxX[5], kMenuSignBoxY[5]);
-    lcd.drawText(" DB", kMenuSignTextSize, kMenuSignBoxX[6], kMenuSignBoxY[6]);
-    lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[7], kMenuSignBoxY[7]);
-
-    // 5. DATA DRAW
-    // Draw value rows for all mixer controls.
-    lcd_drawMixer_MasterVolumeData();
-    lcd_drawMixer_HpVolumeData();
-    lcd_drawMixer_LoVolumeData();
-    lcd_drawMixer_LiVolumeData();
-    lcd_drawMixer_LiInData();
-    lcd_drawMixer_PanData();
-    lcd_drawMixer_LimiterData();
-    lcd_drawMixer_NormalizeData();
+    for (uint8_t k = 0; k < 8; k++) lcd.drawText((k == 5) ? " DB" : "   ", kMenuSignTextSize, kMenuSignBoxX[k], kMenuSignBoxY[k]);
+    for (uint8_t k = 0; k < 8; k++) lcd_drawRoute_Data(k);
 }
 
 void Controller::lcd_drawMixer_MasterVolumeData() {
@@ -13679,12 +13769,12 @@ void Controller::lcd_drawMixer_MasterVolumeData() {
 
     // 2. VALUE DRAW
     // Draw current master volume value.
-    lcd.drawText(kNumberDataLibrary[mixer.masterVolume].nameLongR, kMenuDataTextSize, kMenuDataX[0], kMenuDataY[0]);
+    lcd.drawText(kNumberDataLibrary[mixer.masterVolume].nameLongR, kMenuDataTextSize, kMenuDataX[4], kMenuDataY[4]);
 
     // 3. MUTE INDICATOR DRAW
     // Draw mute status with active/inactive color.
     (mixer.masterMute) ? lcd_setMenuNumState(MAGENTA) : lcd_setMenuNumState(BLACK);
-    lcd.drawText("    MUTE", kMenuTextBoxTextSize, kMenuTextBoxX[0], kMenuTextBoxY[0]);
+    lcd.drawText("    MUTE", kMenuTextBoxTextSize, kMenuTextBoxX[4], kMenuTextBoxY[4]);
 }
 
 void Controller::lcd_drawMixer_HpVolumeData() {
@@ -13696,12 +13786,12 @@ void Controller::lcd_drawMixer_HpVolumeData() {
 
     // 2. VALUE DRAW
     // Draw current headphone volume value.
-    lcd.drawText(kMixerHpVolumeDataLibrary[mixer.hpVolume].nameLongR, kMenuDataTextSize, kMenuDataX[1], kMenuDataY[1]);
+    lcd.drawText(kMixerHpVolumeDataLibrary[mixer.hpVolume].nameLongR, kMenuDataTextSize, kMenuDataX[5], kMenuDataY[5]);
 
     // 3. MUTE INDICATOR DRAW
     // Draw mute status with active/inactive color.
     (mixer.hpMute) ? lcd_setMenuNumState(MAGENTA) : lcd_setMenuNumState(BLACK);
-    lcd.drawText("    MUTE", kMenuTextBoxTextSize, kMenuTextBoxX[1], kMenuTextBoxY[1]);
+    lcd.drawText("    MUTE", kMenuTextBoxTextSize, kMenuTextBoxX[5], kMenuTextBoxY[5]);
 }
 
 void Controller::lcd_drawMixer_LoVolumeData() {
@@ -13713,12 +13803,12 @@ void Controller::lcd_drawMixer_LoVolumeData() {
 
     // 2. VALUE DRAW
     // Draw current line output volume value.
-    lcd.drawText(kMixerLoVolumeDataLibrary[mixer.loVolume].nameLongR, kMenuDataTextSize, kMenuDataX[2], kMenuDataY[2]);
+    lcd.drawText(kMixerLoVolumeDataLibrary[mixer.loVolume].nameLongR, kMenuDataTextSize, kMenuDataX[6], kMenuDataY[6]);
 
     // 3. MUTE INDICATOR DRAW
     // Draw mute status with active/inactive color.
     (mixer.loMute) ? lcd_setMenuNumState(MAGENTA) : lcd_setMenuNumState(BLACK);
-    lcd.drawText("    MUTE", kMenuTextBoxTextSize, kMenuTextBoxX[2], kMenuTextBoxY[2]);
+    lcd.drawText("    MUTE", kMenuTextBoxTextSize, kMenuTextBoxX[6], kMenuTextBoxY[6]);
 }
 
 void Controller::lcd_drawMixer_LiVolumeData() {
@@ -13730,12 +13820,12 @@ void Controller::lcd_drawMixer_LiVolumeData() {
 
     // 2. VALUE DRAW
     // Draw current line input volume value.
-    lcd.drawText(kMixerLiVolumeDataLibrary[mixer.liVolume].nameLongR, kMenuDataTextSize, kMenuDataX[3], kMenuDataY[3]);
+    lcd.drawText(kMixerLiVolumeDataLibrary[mixer.liVolume].nameLongR, kMenuDataTextSize, kMenuDataX[5], kMenuDataY[5]);
 
     // 3. MUTE INDICATOR DRAW
     // Draw mute status with active/inactive color.
     (mixer.liMute) ? lcd_setMenuNumState(MAGENTA) : lcd_setMenuNumState(BLACK);
-    lcd.drawText("    MUTE", kMenuTextBoxTextSize, kMenuTextBoxX[3], kMenuTextBoxY[3]);
+    lcd.drawText("    MUTE", kMenuTextBoxTextSize, kMenuTextBoxX[5], kMenuTextBoxY[5]);
 }
 
 void Controller::lcd_drawMixer_LiInData() {
@@ -13771,7 +13861,7 @@ void Controller::lcd_drawMixer_LimiterData() {
 
     // 2. VALUE DRAW
     // Draw current limiter value.
-    lcd.drawText(kMixerLimiterDataLibrary[mixer.limiter].nameLongR, kMenuDataTextSize, kMenuDataX[6], kMenuDataY[6]);
+    lcd.drawText(kMixerLimiterDataLibrary[mixer.limiter].nameLongR, kMenuDataTextSize, kMenuDataX[7], kMenuDataY[7]);
 }
 
 void Controller::lcd_drawMixer_NormalizeData() {
@@ -13976,6 +14066,11 @@ void Controller::lcd_drawMetroMenu() {
     lcd.drawText(kHeaderPrecount, kMenuHeaderTextSize, kMenuHeaderX[1], kMenuHeaderY[1]);
     lcd.drawText(kHeaderSample, kMenuHeaderTextSize, kMenuHeaderX[2], kMenuHeaderY[2]);
     lcd.drawText(kHeaderVolume, kMenuHeaderTextSize, kMenuHeaderX[3], kMenuHeaderY[3]);
+    // custom: the mix volumes share this menu (bottom knobs)
+    lcd.drawText("MASTER VOL", kMenuHeaderTextSize, kMenuHeaderX[4], kMenuHeaderY[4]);
+    lcd.drawText("PHONES VOL", kMenuHeaderTextSize, kMenuHeaderX[5], kMenuHeaderY[5]);
+    lcd.drawText("LINE OUT  ", kMenuHeaderTextSize, kMenuHeaderX[6], kMenuHeaderY[6]);
+    lcd.drawText(kHeaderLimiter, kMenuHeaderTextSize, kMenuHeaderX[7], kMenuHeaderY[7]);
 
     // 4. SIGN/UNIT DRAW
     // Draw unit/sign text for each parameter slot.
@@ -13984,9 +14079,14 @@ void Controller::lcd_drawMetroMenu() {
     lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[1], kMenuSignBoxY[1]);
     lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[2], kMenuSignBoxY[2]);
     lcd.drawText("  %", kMenuSignTextSize, kMenuSignBoxX[3], kMenuSignBoxY[3]);
-
-    // 5. DATA DRAW
-    // Draw metronome parameter values.
+    lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[4], kMenuSignBoxY[4]);
+    lcd.drawText(" DB", kMenuSignTextSize, kMenuSignBoxX[5], kMenuSignBoxY[5]);
+    lcd.drawText(" DB", kMenuSignTextSize, kMenuSignBoxX[6], kMenuSignBoxY[6]);
+    lcd.drawText(" DB", kMenuSignTextSize, kMenuSignBoxX[7], kMenuSignBoxY[7]);
+    lcd_drawMixer_MasterVolumeData();
+    lcd_drawMixer_HpVolumeData();
+    lcd_drawMixer_LoVolumeData();
+    lcd_drawMixer_LimiterData();
     lcd_drawMetro_ActiveData();
     lcd_drawMetro_PrecountData();
     lcd_drawMetro_SampleData();
@@ -17695,6 +17795,7 @@ void Controller::mixer_select() {
 
 void Controller::mixer_reset() {
     route_setMode(ROUTE_CHAIN);   // custom
+    routeLaneRev = 0;
     /// @brief Restores mixer mute, level, routing, and dynamics parameters to default values.
 
     // 1. MUTE STATE RESET
@@ -17743,109 +17844,31 @@ void Controller::mixer_menuLeft() {
 }
 
 void Controller::mixer_menuUp() {
-    /// @brief Increments the parameter mapped to the active Mixer tab.
-
-    // 1. TAB-BASED PARAMETER DISPATCH
-    // Route encoder-up action to tab-specific mixer parameter with upper-bound checks.
+    /// @brief Custom: Routing menu, keyboard UP on the selected knob.
     switch (menuTab) {
-        case 0:
-            if (mixer.masterVolume < kMaxMixerMasterVolume) {
-                mixer_setMasterVolume(mixer.masterVolume + 1);
-            }
-            break;
-
-        case 1:
-            if (mixer.hpVolume < kMaxMixerHpVolume) {
-                mixer_setHpVolume(mixer.hpVolume + 1);
-            }
-            break;
-
-        case 2:
-            if (mixer.loVolume < kMaxMixerLoVolume) {
-                mixer_setLoVolume(mixer.loVolume + 1);
-            }
-            break;
-
-        case 3:
-            if (mixer.liVolume < kMaxMixerLiVolume) {
-                mixer_setLiVolume(mixer.liVolume + 1);
-            }
-            break;
-
         case 4:
-            if (mixer.liMixerIn < kMaxMixerLiMixerIn) {
-                mixer_setLiIn(mixer.liMixerIn + 1);
-            }
+            if (mixer.liMixerIn < kMaxMixerLiMixerIn) mixer_setLiIn(mixer.liMixerIn + 1);
             break;
-
         case 5:
-            if (mixer.pan < kMaxMixerPan) {
-                mixer_setPan(mixer.pan + 1);
-            }
+            if (mixer.liVolume < kMaxMixerLiVolume) mixer_setLiVolume(mixer.liVolume + 1);
             break;
-
-        case 6:
-            if (mixer.limiter < kMaxMixerLimiter) {
-                mixer_setLimiter(mixer.limiter + 1);
-            }
-            break;
-
-        case 7:
-            mixer_setNormalize(!mixer.normalize);
+        default:
+            route_knob((uint8_t)menuTab, 1);
             break;
     }
 }
 
 void Controller::mixer_menuDown() {
-    /// @brief Decrements the parameter mapped to the active Mixer tab.
-
-    // 1. TAB-BASED PARAMETER DISPATCH
-    // Route encoder-down action to tab-specific mixer parameter with lower-bound checks.
+    /// @brief Custom: Routing menu, keyboard DOWN on the selected knob.
     switch (menuTab) {
-        case 0:
-            if (mixer.masterVolume > kMinMixerMasterVolume) {
-                mixer_setMasterVolume(mixer.masterVolume - 1);
-            }
-            break;
-
-        case 1:
-            if (mixer.hpVolume > kMinMixerHpVolume) {
-                mixer_setHpVolume(mixer.hpVolume - 1);
-            }
-            break;
-
-        case 2:
-            if (mixer.loVolume > kMinMixerLoVolume) {
-                mixer_setLoVolume(mixer.loVolume - 1);
-            }
-            break;
-
-        case 3:
-            if (mixer.liVolume > kMinMixerLiVolume) {
-                mixer_setLiVolume(mixer.liVolume - 1);
-            }
-            break;
-
         case 4:
-            if (mixer.liMixerIn > kMinMixerLiMixerIn) {
-                mixer_setLiIn(mixer.liMixerIn - 1);
-            }
+            if (mixer.liMixerIn > kMinMixerLiMixerIn) mixer_setLiIn(mixer.liMixerIn - 1);
             break;
-
         case 5:
-            if (mixer.pan > kMinMixerPan) {
-                mixer_setPan(mixer.pan - 1);
-            }
+            if (mixer.liVolume > kMinMixerLiVolume) mixer_setLiVolume(mixer.liVolume - 1);
             break;
-
-        case 6:
-            if (mixer.limiter > kMinMixerLimiter) {
-                mixer_setLimiter(mixer.limiter - 1);
-            }
-            break;
-
-        case 7:
-            mixer_setNormalize(!mixer.normalize);
+        default:
+            route_knob((uint8_t)menuTab, -1);
             break;
     }
 }
@@ -17864,7 +17887,7 @@ void Controller::mixer_setMasterVolume(uint8_t volume_) {
 
         // 3. UI & GLOBAL REFRESH
         // Refresh Mixer tab data (if visible) and global summary field.
-        if (menu == MIXER_MENU) lcd_drawMixer_MasterVolumeData();
+        if (menu == METRO_MENU) lcd_drawMixer_MasterVolumeData();   // custom: MIX menu
         lcd_updateGlobalMenuData(ENC_MIXER_MASTERVOLUME);
 
         // 4. DEFERRED PRESET PERSISTENCE
@@ -17889,7 +17912,7 @@ void Controller::mixer_setHpVolume(uint8_t volume_) {
 
         // 3. UI & GLOBAL REFRESH
         // Refresh Mixer tab data (if visible) and global summary field.
-        if (menu == MIXER_MENU) lcd_drawMixer_HpVolumeData();
+        if (menu == METRO_MENU) lcd_drawMixer_HpVolumeData();   // custom: MIX menu
         lcd_updateGlobalMenuData(ENC_MIXER_HPVOLUME);
 
         // 4. DEFERRED PRESET PERSISTENCE
@@ -17914,7 +17937,7 @@ void Controller::mixer_setLoVolume(uint8_t volume_) {
 
         // 3. UI & GLOBAL REFRESH
         // Refresh Mixer tab data (if visible) and global summary field.
-        if (menu == MIXER_MENU) lcd_drawMixer_LoVolumeData();
+        if (menu == METRO_MENU) lcd_drawMixer_LoVolumeData();   // custom: MIX menu
         lcd_updateGlobalMenuData(ENC_MIXER_LOVOLUME);
 
         // 4. DEFERRED PRESET PERSISTENCE
@@ -17995,6 +18018,7 @@ void Controller::mixer_setLiIn(uint8_t mode_) {
         // 4. UI & GLOBAL REFRESH
         // Refresh Mixer tab data (if visible) and global summary field.
         if (menu == MIXER_MENU) lcd_drawMixer_LiInData();
+        if (menu == MIXER_MENU) lcd_drawRoute_Data(4);
         lcd_updateGlobalMenuData(ENC_MIXER_LIMIXERIN);
         page_markDirty(PAGE_ROUTE);   // custom
 
@@ -18022,7 +18046,7 @@ void Controller::mixer_setPan(uint8_t pan_) {
 
         // 3. UI & GLOBAL REFRESH
         // Refresh Mixer tab data (if visible) and global summary field.
-        if (menu == MIXER_MENU) lcd_drawMixer_PanData();
+        // custom: PAN has no knob box any more (assign it to a MAIN knob if needed)
         lcd_updateGlobalMenuData(ENC_MIXER_PAN);
 
         // 4. DEFERRED PRESET PERSISTENCE
@@ -18046,7 +18070,7 @@ void Controller::mixer_setLimiter(uint8_t limiter_) {
 
         // 3. UI & GLOBAL REFRESH
         // Refresh Mixer tab data (if visible) and global summary field.
-        if (menu == MIXER_MENU) {
+        if (menu == METRO_MENU) {   // custom: MIX menu
             lcd_drawMixer_LimiterData();
         }
         lcd_updateGlobalMenuData(ENC_MIXER_LIMITER);
@@ -18069,7 +18093,7 @@ void Controller::mixer_setNormalize(bool active_) {
 
     // 2. UI & GLOBAL REFRESH
     // Refresh Mixer tab data (if visible) and global summary field.
-    if (menu == MIXER_MENU) lcd_drawMixer_NormalizeData();
+    // custom: NORMALIZE has no knob box any more (assign it to a MAIN knob if needed)
     lcd_updateGlobalMenuData(ENC_MIXER_NORMALIZE);
 
     // 3. DEFERRED PRESET PERSISTENCE
@@ -18092,7 +18116,7 @@ void Controller::mixer_setMasterMute(bool mute_) {
 
         // 3. UI & GLOBAL REFRESH
         // Refresh Mixer tab data (if visible) and global summary field.
-        if (menu == MIXER_MENU) lcd_drawMixer_MasterVolumeData();
+        if (menu == METRO_MENU) lcd_drawMixer_MasterVolumeData();   // custom: MIX menu
         lcd_updateGlobalMenuData(ENC_MIXER_MASTERVOLUME);
 
         // 4. DEFERRED PRESET PERSISTENCE
@@ -18123,7 +18147,7 @@ void Controller::mixer_setHpMute(bool mute_) {
 
         // 4. UI & GLOBAL REFRESH
         // Refresh Mixer tab data (if visible) and global summary field.
-        if (menu == MIXER_MENU) lcd_drawMixer_HpVolumeData();
+        if (menu == METRO_MENU) lcd_drawMixer_HpVolumeData();   // custom: MIX menu
         lcd_updateGlobalMenuData(ENC_MIXER_HPVOLUME);
 
         // 5. DEFERRED PRESET PERSISTENCE
@@ -18154,7 +18178,7 @@ void Controller::mixer_setLoMute(bool mute_) {
 
         // 4. UI & GLOBAL REFRESH
         // Refresh Mixer tab data (if visible) and global summary field.
-        if (menu == MIXER_MENU) lcd_drawMixer_LoVolumeData();
+        if (menu == METRO_MENU) lcd_drawMixer_LoVolumeData();   // custom: MIX menu
         lcd_updateGlobalMenuData(ENC_MIXER_LOVOLUME);
 
         // 5. DEFERRED PRESET PERSISTENCE
@@ -18691,7 +18715,7 @@ void Controller::metro_menuRight() {
     // 1. TAB STATE UPDATE
     // Advance tab index and wrap to first tab at upper boundary.
     preMenuTab = menuTab;
-    menuTab = (menuTab < kMaxMenu4Tab) ? (menuTab + 1) : kMinMenu4Tab;
+    menuTab = (menuTab < kMaxMenu8Tab) ? (menuTab + 1) : kMinMenu8Tab;
 
     // 2. UI TRANSITION
     // Trigger selection transition animation for tab change.
@@ -18704,7 +18728,7 @@ void Controller::metro_menuLeft() {
     // 1. TAB STATE UPDATE
     // Decrement tab index and wrap to last tab at lower boundary.
     preMenuTab = menuTab;
-    menuTab = (menuTab > kMinMenu4Tab) ? (menuTab - 1) : kMaxMenu4Tab;
+    menuTab = (menuTab > kMinMenu8Tab) ? (menuTab - 1) : kMaxMenu8Tab;
 
     // 2. UI TRANSITION
     // Trigger selection transition animation for tab change.
@@ -18732,6 +18756,10 @@ void Controller::metro_menuUp() {
         case 3:
             if (metronome.volume < kMaxMetroVolume) metro_setVolume(metronome.volume + 1);
             break;
+        case 4: if (mixer.masterVolume < kMaxMixerMasterVolume) mixer_setMasterVolume(mixer.masterVolume + 1); break;   // custom
+        case 5: if (mixer.hpVolume < kMaxMixerHpVolume) mixer_setHpVolume(mixer.hpVolume + 1); break;
+        case 6: if (mixer.loVolume < kMaxMixerLoVolume) mixer_setLoVolume(mixer.loVolume + 1); break;
+        case 7: if (mixer.limiter < kMaxMixerLimiter) mixer_setLimiter(mixer.limiter + 1); break;
     }
 }
 
@@ -18756,6 +18784,10 @@ void Controller::metro_menuDown() {
         case 3:
             if (metronome.volume > kMinMetroVolume) metro_setVolume(metronome.volume - 1);
             break;
+        case 4: if (mixer.masterVolume > kMinMixerMasterVolume) mixer_setMasterVolume(mixer.masterVolume - 1); break;   // custom
+        case 5: if (mixer.hpVolume > kMinMixerHpVolume) mixer_setHpVolume(mixer.hpVolume - 1); break;
+        case 6: if (mixer.loVolume > kMinMixerLoVolume) mixer_setLoVolume(mixer.loVolume - 1); break;
+        case 7: if (mixer.limiter > kMinMixerLimiter) mixer_setLimiter(mixer.limiter - 1); break;
     }
 }
 
@@ -26818,7 +26850,15 @@ void Controller::processAudioLanes() {
         for (uint16_t i = 0; i < I2S_BLOCK_SIZE; i++) audioEffect[0][i] = processAudioEffectHelper(0, audioEffect[0][i]);
     if ((effect[1].active) || (effect[1].genTransition.active))
         for (uint16_t i = 0; i < I2S_BLOCK_SIZE; i++) audioEffect[1][i] = processAudioEffectHelper(1, audioEffect[1][i]);
-    for (uint16_t i = 0; i < I2S_BLOCK_SIZE; i++) audioEffect[1][i] += audioEffect[0][i];
+    // Lanes into the reverb stage (bus 1) or straight out (LANE REVERB knob)
+    const uint8_t lr = routeLaneRev;
+    const bool revA = (lr == 0) || (lr == 1);
+    const bool revB = (lr == 0) || (lr == 2);
+    for (uint16_t i = 0; i < I2S_BLOCK_SIZE; i++) {
+        const float a = audioEffect[0][i], b = audioEffect[1][i];
+        audioEffect[1][i] = (revA ? a : 0.0f) + (revB ? b : 0.0f);
+        laneEqDry[i] += (revA ? 0.0f : a) + (revB ? 0.0f : b);
+    }
 }
 
 void Controller::processAudioReverb() {

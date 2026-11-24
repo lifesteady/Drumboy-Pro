@@ -1320,7 +1320,13 @@ typedef enum {
     ENC_KIT_TAB1                                    = 0x77,
     ENC_KIT_TAB2                                    = 0x78,
     ENC_KIT_TAB3                                    = 0x79,
-    ENC_PITCH_GATE                                  = 0x7A
+    ENC_PITCH_GATE                                  = 0x7A,
+    ENC_ROUTE_LAYOUT                                = 0x7B,  // custom: Routing menu (Mixer key)
+    ENC_ROUTE_DRUM                                  = 0x7C,
+    ENC_ROUTE_DEST                                  = 0x7D,
+    ENC_ROUTE_EQ                                    = 0x7E,
+    ENC_ROUTE_METRO                                 = 0x7F,
+    ENC_ROUTE_LANEREV                               = 0x80
 } EncoderFunc;
 
 const EncoderFunc encoderLocalFunction[][8] = {
@@ -1333,11 +1339,13 @@ const EncoderFunc encoderLocalFunction[][8] = {
     // DRUMKIT_MENU = 0x03
     {ENC_KIT_TAB0, ENC_KIT_TAB1, ENC_KIT_TAB2, ENC_KIT_TAB3, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE},
     // MIXER_MENU = 0x04
-    {ENC_MIXER_MASTERVOLUME, ENC_MIXER_HPVOLUME, ENC_MIXER_LOVOLUME, ENC_MIXER_LIVOLUME, ENC_MIXER_LIMIXERIN, ENC_MIXER_PAN, ENC_MIXER_LIMITER, ENC_MIXER_NORMALIZE},
+    // custom: the Mixer menu is now ROUTING (signal chain); the mix volumes moved to the Metronome menu
+    {ENC_ROUTE_LAYOUT, ENC_ROUTE_DRUM, ENC_ROUTE_DEST, ENC_ROUTE_EQ, ENC_MIXER_LIMIXERIN, ENC_MIXER_LIVOLUME, ENC_ROUTE_METRO, ENC_ROUTE_LANEREV},
     // RHYTHM_MENU = 0x05
     {ENC_RHYTHM_TEMPO, ENC_RHYTHM_MEASURE, ENC_RHYTHM_BAR, ENC_RHYTHM_QUANTIZE, ENC_RHYTHM_SWING, ENC_RHYTHM_SWINGGRID, ENC_GROOVE_DRUMSWING, ENC_GROOVE_CORRECT},
     // METRO_MENU = 0x06
-    {ENC_METRO_ACTIVE, ENC_METRO_PRECOUNT, ENC_METRO_SAMPLE, ENC_METRO_VOLUME, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE},
+    // custom: MIX menu = metronome on the top knobs, master / headphone / line out volume and limiter below
+    {ENC_METRO_ACTIVE, ENC_METRO_PRECOUNT, ENC_METRO_SAMPLE, ENC_METRO_VOLUME, ENC_MIXER_MASTERVOLUME, ENC_MIXER_HPVOLUME, ENC_MIXER_LOVOLUME, ENC_MIXER_LIMITER},
     // IO_MENU = 0x07
     {ENC_IO_SYNCIN, ENC_IO_SYNCOUT, ENC_IO_MIDIIN, ENC_IO_MIDIOUT, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE},
     // FILTER_0_MENU = 0x08
@@ -1516,7 +1524,13 @@ const EncoderFuncData kEncoderFuncDataLibrary[] = {
     {ENC_KIT_TAB1,            ENC_RES_S, "LOAD      ", "KIT   ", "   ", false},
     {ENC_KIT_TAB2,            ENC_RES_S, "SAVE      ", "KIT   ", "   ", false},
     {ENC_KIT_TAB3,            ENC_RES_S, "CLEAR     ", "KIT   ", "   ", false},
-    {ENC_PITCH_GATE,          ENC_RES_S, "GATE      ", "PITCH ", "   ", false}
+    {ENC_PITCH_GATE,          ENC_RES_S, "GATE      ", "PITCH ", "   ", false},
+    {ENC_ROUTE_LAYOUT,        ENC_RES_S, "LAYOUT    ", "ROUTE ", "   ", false},
+    {ENC_ROUTE_DRUM,          ENC_RES_S, "DRUM      ", "ROUTE ", "   ", false},
+    {ENC_ROUTE_DEST,          ENC_RES_S, "GOES TO   ", "ROUTE ", "   ", false},
+    {ENC_ROUTE_EQ,            ENC_RES_S, "DRUM EQ   ", "ROUTE ", "   ", false},
+    {ENC_ROUTE_METRO,         ENC_RES_S, "METRO TO  ", "ROUTE ", "   ", false},
+    {ENC_ROUTE_LANEREV,       ENC_RES_S, "REVERB    ", "ROUTE ", "   ", false}
 };
 
 // Knobs while the Pitch page is open (all 8 belong to Pitch mode).
@@ -1528,7 +1542,7 @@ const EncoderFunc kSamplePageFunctions[8] = {ENC_INST_0_INST, ENC_INST_0_SAMPLE,
                                              ENC_INST_1_START, ENC_INST_1_END, ENC_SMP_DECAY, ENC_FNC_NONE};
 
 // The table above is indexed by EncoderFunc value, so every entry must sit at its own enum number.
-static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_PITCH_GATE + 1,
+static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_ROUTE_LANEREV + 1,
               "kEncoderFuncDataLibrary must have one entry per EncoderFunc value");
 
 typedef enum {
@@ -1988,6 +2002,8 @@ enum RouteMode : uint8_t { ROUTE_CHAIN = 0, ROUTE_LANES = 1 };
 enum LaneDest : uint8_t { LANE_DEST_A = 0, LANE_DEST_B = 1, LANE_DEST_REVERB = 2, LANE_DEST_DRY = 3, LANE_DEST_AUTO = 0xFF };
 const uint8_t kRouteModeFileMark                    = 0xC0;   // song byte 179 = 0xC0 | mode
 const uint8_t kLaneFileMark                         = 0xD0;   // drum byte 24 = 0xD0 | eq << 2 | dest
+const uint8_t kMetroRouteFileMark                   = 0xE0;   // byte 500 + 88 = 0xE0 | metronome route
+const uint16_t kMetroRouteFileOffset                = 88;     // inside drum 1's asset block (unused bytes)
 
 const MixerInMode kInitialMixerLiMixerInMode        = MIXER_IN_EQ;
 
@@ -2328,7 +2344,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.85 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.86 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;

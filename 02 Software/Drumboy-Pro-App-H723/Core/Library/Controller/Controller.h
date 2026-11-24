@@ -504,6 +504,8 @@ class Controller {
     void page_drawCpu(uint16_t x_, uint16_t y_);
     void processAudioLanes();
     void route_setMode(uint8_t mode_);
+    void route_knob(uint8_t slot_, int8_t step_);
+    void lcd_drawRoute_Data(uint8_t slot_);
     uint8_t route_laneDest(uint8_t layerNum_);
     MixerInMode route_laneCode(uint8_t layerNum_);
     void sd_encodeProject(uint8_t* data);
@@ -600,6 +602,7 @@ class Controller {
     volatile float cpuPeak = 0.0f;                                      // audio CPU peak, slowly falling
     uint8_t routeLayer = 0;                                             // Routing page: selected drum
     volatile uint8_t routeMode = ROUTE_CHAIN;                           // CHAIN (stock) or 2 LANES
+    volatile uint8_t routeLaneRev = 0;                                  // 2 LANES reverb: 0 A+B, 1 A only, 2 B only, 3 none
     bool routeLanesBlock = false;                                       // audio: this block uses 2 LANES
     float laneEqRev[I2S_BLOCK_SIZE] = {0};                              // 2 LANES: EQ'd drums going to the reverb only
     float laneEqDry[I2S_BLOCK_SIZE] = {0};                              // 2 LANES: EQ'd drums going straight out
