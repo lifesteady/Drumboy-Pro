@@ -1653,6 +1653,7 @@ void Controller::keyboard_action() {
                             if (keyboard.shiftKeyPress) {   // custom: ADD + pad = put the root on this pad
                                 pitchRootPad = layerNum;
                                 page_markDirty(PAGE_PITCH);
+                                lcd_drawIo_PitchData();
                             } else {
                                 pitch_pad(layerNum);   // custom: pads play one drum in a scale
                             }
@@ -2652,7 +2653,7 @@ void Controller::keyboard_action() {
                             case KEY_IO:
                                 // Custom: Sync key = Pitch mode (Sync settings: Mixer key, three presses).
                                 if (!alertFlag) {
-                                    if (page == PAGE_PITCH) page_close();
+                                    if (page == PAGE_PITCH) { page_close(); global_select(); }
                                     else {
                                         if (menu != IO_MENU) io_select();
                                         page_open(PAGE_PITCH);
@@ -3376,6 +3377,7 @@ void Controller::encoder_update() {
             enc.function = encoderLocalFunction[menuSafe][i];
             if ((page == PAGE_SAMPLE) && ((menuSafe == LAYER_INST_0_MENU) || (menuSafe == LAYER_INST_1_MENU) || (menuSafe == LAYER_INST_2_MENU)))
                 enc.function = kSamplePageFunctions[i];   // custom
+            if ((page == PAGE_PITCH) && (menuSafe == IO_MENU)) enc.function = kPitchPageFunctions[i];   // custom
         }
 
         // 2. COUNTER STATE RESET
@@ -4019,6 +4021,9 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
         case ENC_PITCH_ROOT: pitch_knob(1, 1); break;
         case ENC_PITCH_SCALE: pitch_knob(2, 1); break;
         case ENC_PITCH_OCTAVE: pitch_knob(3, 1); break;
+        case ENC_PITCH_ROOTPAD: pitch_knob(4, 1); break;
+        case ENC_PITCH_LEVEL: pitch_knob(5, 1); break;
+        case ENC_PITCH_TUNE: pitch_knob(6, 1); break;
 
         case ENC_SMP_HOLD:
             sample_setEnv(1, (int16_t)layerLibrary[selectedLayerNum].envHold + 1);
@@ -4611,6 +4616,9 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
         case ENC_PITCH_ROOT: pitch_knob(1, -1); break;
         case ENC_PITCH_SCALE: pitch_knob(2, -1); break;
         case ENC_PITCH_OCTAVE: pitch_knob(3, -1); break;
+        case ENC_PITCH_ROOTPAD: pitch_knob(4, -1); break;
+        case ENC_PITCH_LEVEL: pitch_knob(5, -1); break;
+        case ENC_PITCH_TUNE: pitch_knob(6, -1); break;
 
         case ENC_SMP_HOLD:
             sample_setEnv(1, (int16_t)layerLibrary[selectedLayerNum].envHold - 1);
@@ -5381,7 +5389,7 @@ void Controller::page_open(PageView page_) {
     pageFullRedraw = true;
     if (!fromStock) {   // custom: switching between pages (incl. the main screen): just redraw
         lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
-        if (page_ == PAGE_SAMPLE) encoder_update();
+        if ((page_ == PAGE_SAMPLE) || (page_ == PAGE_PITCH)) encoder_update();
         page_draw();
         return;
     }
@@ -5401,7 +5409,7 @@ void Controller::page_open(PageView page_) {
     }
 
     lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
-    if (page_ == PAGE_SAMPLE) encoder_update();   // custom: sample page knob layout
+    if ((page_ == PAGE_SAMPLE) || (page_ == PAGE_PITCH)) encoder_update();   // custom: page knob layouts
     page_draw();
 }
 
@@ -5412,11 +5420,20 @@ void Controller::page_close(bool toStock_) {
     /// toStock_ (alerts) brings back the stock 10 lanes instead.
     if (page == PAGE_NONE) return;
     const bool wasSample = (page == PAGE_SAMPLE);
+    const bool wasPitch = (page == PAGE_PITCH);
     const bool wasMain = (page == PAGE_MAIN);
     page = PAGE_NONE;
     if (wasSample) {
         encoder_update();
         if ((menu == LAYER_INST_0_MENU) || (menu == LAYER_INST_1_MENU) || (menu == LAYER_INST_2_MENU)) page_restoreInstMenu();
+    }
+    if (wasPitch) {
+        encoder_update();
+        if (menu == IO_MENU) {   // put the Sync menu's own boxes back
+            lcd.setBackColor(BLACK);
+            for (uint8_t k = 4; k < 8; k++) lcd_clearMenuTab(k);
+            lcd_drawIoMenu();
+        }
     }
     if (kMainView && !toStock_ && !wasMain) {
         page = PAGE_MAIN;            // protection stays on; just redraw the main screen
@@ -6645,12 +6662,16 @@ int8_t Controller::pitch_padNote(uint8_t pad_) {
 }
 
 void Controller::pitch_knob(uint8_t which_, int8_t step_) {
-    if (page != PAGE_PITCH) { page_open(PAGE_PITCH); return; }   // first turn shows the page
+    if (page != PAGE_PITCH) return;
+    Layer& L = layerLibrary[pitchLayer];
     switch (which_) {
+        case 4: pitchRootPad = (uint8_t)((pitchRootPad + kLayerLibrarySize + step_) % kLayerLibrarySize); break;
+        case 5: { int16_t v = (int16_t)L.level + step_; if (v < 0) v = 0; if (v > kMaxLayerLevel) v = kMaxLayerLevel; layerInst_setLevel(pitchLayer, (uint8_t)v); } break;
+        case 6: { int16_t v = (int16_t)L.pitch + step_; if (v < kMinLayerPitch) v = kMinLayerPitch; if (v > kMaxLayerPitch) v = kMaxLayerPitch; layerInst_setPitch(pitchLayer, (uint8_t)v); } break;
         case 0: pitchLayer = (uint8_t)((pitchLayer + kLayerLibrarySize + step_) % kLayerLibrarySize); break;
         case 1: pitchRoot = (uint8_t)((pitchRoot + 12 + step_) % 12); break;
         case 2: pitchScale = (uint8_t)((pitchScale + kPitchScaleCount + step_) % kPitchScaleCount); break;
-        default: {
+        case 3: {
             int8_t o = pitchOctave + step_;
             if (o < -2) o = -2;
             if (o > 2) o = 2;
@@ -6680,23 +6701,33 @@ void Controller::pitch_pad(uint8_t pad_) {
 }
 
 void Controller::lcd_drawIo_PitchData() {
-    /// @brief Sync menu, bottom row: the Pitch mode knobs.
-    if (menu != IO_MENU) return;
+    /// @brief Pitch page: all 8 knob boxes belong to Pitch mode (drawn over the Sync menu).
+    if (page != PAGE_PITCH) return;
     char text[16];
+    const Layer& L = layerLibrary[pitchLayer];
+    const char* hdr[8] = {"PITCH-DRUM", "ROOT      ", "SCALE     ", "OCTAVE    ", "ROOT-PAD  ", "LEVEL     ", "TUNE      ", "          "};
     lcd_setMenuHeaderState(CYAN);
-    lcd.drawText("PITCH-DRUM", kMenuHeaderTextSize, kMenuHeaderX[4], kMenuHeaderY[4]);
-    lcd.drawText("ROOT      ", kMenuHeaderTextSize, kMenuHeaderX[5], kMenuHeaderY[5]);
-    lcd.drawText("SCALE     ", kMenuHeaderTextSize, kMenuHeaderX[6], kMenuHeaderY[6]);
-    lcd.drawText("OCTAVE    ", kMenuHeaderTextSize, kMenuHeaderX[7], kMenuHeaderY[7]);
+    for (uint8_t k = 0; k < 8; k++) lcd.drawText(hdr[k], kMenuHeaderTextSize, kMenuHeaderX[k], kMenuHeaderY[k]);
+    lcd_setMenuSignState(CYAN);
+    for (uint8_t k = 0; k < 8; k++) lcd.drawText((k == 5) ? "  %" : "   ", kMenuSignTextSize, kMenuSignBoxX[k], kMenuSignBoxY[k]);
     lcd_setMenuDataState(WHITE);
-    snprintf(text, sizeof(text), "%10u", pitchLayer + 1);
-    lcd.drawText(text, kMenuDataTextSize, kMenuDataX[4], kMenuDataY[4]);
+    char name[13];
+    memcpy(name, L.instLoadedData.nameShortL, 12); name[12] = 0;
+    for (int8_t k = 11; (k >= 0) && (name[k] == ' '); k--) name[k] = 0;
+    const char* nm = name; while (*nm == ' ') nm++;
+    snprintf(text, sizeof(text), "%02u %7.7s", pitchLayer + 1, (*nm) ? nm : "-");
+    lcd.drawText(text, kMenuDataTextSize, kMenuDataX[0], kMenuDataY[0]);
     snprintf(text, sizeof(text), "%10s", kPitchNoteName[pitchRoot % 12]);
-    lcd.drawText(text, kMenuDataTextSize, kMenuDataX[5], kMenuDataY[5]);
+    lcd.drawText(text, kMenuDataTextSize, kMenuDataX[1], kMenuDataY[1]);
     snprintf(text, sizeof(text), "%10.10s", kPitchScaleName[pitchScale % kPitchScaleCount]);
-    lcd.drawText(text, kMenuDataTextSize, kMenuDataX[6], kMenuDataY[6]);
+    lcd.drawText(text, kMenuDataTextSize, kMenuDataX[2], kMenuDataY[2]);
     snprintf(text, sizeof(text), "%+10d", pitchOctave);
-    lcd.drawText(text, kMenuDataTextSize, kMenuDataX[7], kMenuDataY[7]);
+    lcd.drawText(text, kMenuDataTextSize, kMenuDataX[3], kMenuDataY[3]);
+    snprintf(text, sizeof(text), "%10u", pitchRootPad + 1);
+    lcd.drawText(text, kMenuDataTextSize, kMenuDataX[4], kMenuDataY[4]);
+    lcd.drawText(kNumberDataLibrary[L.level].nameLongR, kMenuDataTextSize, kMenuDataX[5], kMenuDataY[5]);
+    lcd.drawText(kLayerPitchDataLibrary[L.pitch].nameLongR, kMenuDataTextSize, kMenuDataX[6], kMenuDataY[6]);
+    lcd.drawText("          ", kMenuDataTextSize, kMenuDataX[7], kMenuDataY[7]);
 }
 
 void Controller::page_drawPitch() {
@@ -6712,7 +6743,7 @@ void Controller::page_drawPitch() {
         lcd.setForeColor(kThemeHeader);
         const char h1[] = "PADS PLAY THE DRUM AT THESE NOTES    REC ON: HITS GO INTO THAT DRUM LANE WITH THEIR NOTE";
         lcd.drawText(h1, strlen(h1), 30, 420);
-        const char h2[] = "BOTTOM KNOBS: DRUM / ROOT / SCALE / OCTAVE    HOLD ADD + TAP PAD: ROOT ON THAT PAD";
+        const char h2[] = "KNOBS: DRUM / ROOT / SCALE / OCTAVE, ROOT PAD / LEVEL / TUNE    ADD + PAD: ROOT ON THAT PAD";
         lcd.drawText(h2, strlen(h2), 30, 438);
         lcd.setAlignment(RIGHT);
         const char h3[] = "SYNC: BACK";
@@ -6730,6 +6761,7 @@ void Controller::page_drawPitch() {
     lcd.setForeColor(kThemeAccent);
     snprintf(text, sizeof(text), "PITCH  DRUM %02u %-12.12s", pitchLayer + 1, (*nm) ? nm : "-");
     lcd.drawText(text, strlen(text), 30, 136);
+    lcd_drawIo_PitchData();
     snprintf(text, sizeof(text), "ROOT %-2s ON PAD %-2u   SCALE %-11s   OCTAVE %+d", kPitchNoteName[pitchRoot % 12], pitchRootPad + 1, kPitchScaleName[pitchScale % kPitchScaleCount], pitchOctave);
     page_drawSummary(text);
 
@@ -13123,7 +13155,6 @@ void Controller::lcd_drawIoMenu() {
     lcd_drawIo_SyncOutData();
     lcd_drawIo_MidiInData();
     lcd_drawIo_MidiOutData();
-    lcd_drawIo_PitchData();   // custom
 }
 
 void Controller::lcd_drawIo_SyncInData() {

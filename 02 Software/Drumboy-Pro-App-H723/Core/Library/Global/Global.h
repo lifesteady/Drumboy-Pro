@@ -1297,7 +1297,10 @@ typedef enum {
     ENC_PITCH_DRUM                                  = 0x6B,  // custom: Pitch mode knobs (Sync menu, bottom row)
     ENC_PITCH_ROOT                                  = 0x6C,
     ENC_PITCH_SCALE                                 = 0x6D,
-    ENC_PITCH_OCTAVE                                = 0x6E
+    ENC_PITCH_OCTAVE                                = 0x6E,
+    ENC_PITCH_ROOTPAD                               = 0x6F,
+    ENC_PITCH_LEVEL                                 = 0x70,
+    ENC_PITCH_TUNE                                  = 0x71
 } EncoderFunc;
 
 const EncoderFunc encoderLocalFunction[][8] = {
@@ -1316,7 +1319,7 @@ const EncoderFunc encoderLocalFunction[][8] = {
     // METRO_MENU = 0x06
     {ENC_METRO_ACTIVE, ENC_METRO_PRECOUNT, ENC_METRO_SAMPLE, ENC_METRO_VOLUME, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE},
     // IO_MENU = 0x07
-    {ENC_IO_SYNCIN, ENC_IO_SYNCOUT, ENC_IO_MIDIIN, ENC_IO_MIDIOUT, ENC_PITCH_DRUM, ENC_PITCH_ROOT, ENC_PITCH_SCALE, ENC_PITCH_OCTAVE},
+    {ENC_IO_SYNCIN, ENC_IO_SYNCOUT, ENC_IO_MIDIIN, ENC_IO_MIDIOUT, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE},
     // FILTER_0_MENU = 0x08
     {ENC_FILTER_0_ACTIVE, ENC_FILTER_0_TYPE, ENC_FILTER_0_SLOPE, ENC_FILTER_0_FREQ, ENC_FILTER_0_RESON, ENC_FILTER_0_DRIVE, ENC_FILTER_0_DRY, ENC_FILTER_0_WET},
     // FILTER_1_MENU = 0x09
@@ -1481,15 +1484,22 @@ const EncoderFuncData kEncoderFuncDataLibrary[] = {
     {ENC_PITCH_DRUM,          ENC_RES_S, "DRUM      ", "PITCH ", "   ", false},
     {ENC_PITCH_ROOT,          ENC_RES_S, "ROOT      ", "PITCH ", "   ", false},
     {ENC_PITCH_SCALE,         ENC_RES_S, "SCALE     ", "PITCH ", "   ", false},
-    {ENC_PITCH_OCTAVE,        ENC_RES_S, "OCTAVE    ", "PITCH ", "   ", false}
+    {ENC_PITCH_OCTAVE,        ENC_RES_S, "OCTAVE    ", "PITCH ", "   ", false},
+    {ENC_PITCH_ROOTPAD,       ENC_RES_S, "ROOT-PAD  ", "PITCH ", "   ", false},
+    {ENC_PITCH_LEVEL,         ENC_RES_F, "LEVEL     ", "PITCH ", "  %", false},
+    {ENC_PITCH_TUNE,          ENC_RES_F, "TUNE      ", "PITCH ", "   ", false}
 };
+
+// Knobs while the Pitch page is open (all 8 belong to Pitch mode).
+const EncoderFunc kPitchPageFunctions[8] = {ENC_PITCH_DRUM, ENC_PITCH_ROOT, ENC_PITCH_SCALE, ENC_PITCH_OCTAVE,
+                                            ENC_PITCH_ROOTPAD, ENC_PITCH_LEVEL, ENC_PITCH_TUNE, ENC_FNC_NONE};
 
 // Knob layout while the Sample page is open (any of the three Layer Inst menus).
 const EncoderFunc kSamplePageFunctions[8] = {ENC_INST_0_INST, ENC_INST_0_SAMPLE, ENC_SMP_ATTACK, ENC_SMP_HOLD,
                                              ENC_INST_1_START, ENC_INST_1_END, ENC_SMP_DECAY, ENC_FNC_NONE};
 
 // The table above is indexed by EncoderFunc value, so every entry must sit at its own enum number.
-static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_PITCH_OCTAVE + 1,
+static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_PITCH_TUNE + 1,
               "kEncoderFuncDataLibrary must have one entry per EncoderFunc value");
 
 typedef enum {
@@ -2273,7 +2283,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.50 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.51 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
