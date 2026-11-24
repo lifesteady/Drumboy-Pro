@@ -5390,6 +5390,7 @@ void Controller::undo_checkpoint(UndoKind kind_) {
 
 void Controller::undo_undo() {
     undoLastKind = UNDO_NONE;
+    undoTakeSaved = false;   // hits recorded after an undo/redo start a new step
     if (undoPos == 0) { undo_showText("NONE "); return; }
     undo_save(undoPos);                  // keep the current song so REDO can return to it
     int16_t target = (int16_t)undoPos - 1;
@@ -5402,6 +5403,7 @@ void Controller::undo_undo() {
 
 void Controller::undo_redo() {
     undoLastKind = UNDO_NONE;
+    undoTakeSaved = false;   // hits recorded after an undo/redo start a new step
     if (undoPos >= undoMax) { undo_showText("NONE "); return; }
     undo_save(undoPos);
     int16_t target = (int16_t)undoPos + 1;
