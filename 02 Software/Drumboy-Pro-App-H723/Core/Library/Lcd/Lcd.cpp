@@ -1411,7 +1411,9 @@ void Lcd::drawText(const char text[], uint16_t textLength, uint16_t x, uint16_t 
 
     // Custom: smooth Liberation Sans. Same box as the pixel font (so layouts and overwrites are
     // unchanged); every pixel of the box is written once, blended from back to fore colour.
-    if (kSansText) {
+    // Only the larger sizes inside the page area (titles, page text, drum names). Knob boxes and
+    // the small sizes stay in the crisp pixel font, which reads better that small.
+    if (kSansText && ((font == FONT_10x14) || (font == FONT_14x18)) && (y >= kPageY) && (y < kPageY + kPageHeight)) {
         const SansFont* sf = &kSansFont_07x09;
         switch (font) {
             case FONT_05x07: sf = &kSansFont_05x07; break;

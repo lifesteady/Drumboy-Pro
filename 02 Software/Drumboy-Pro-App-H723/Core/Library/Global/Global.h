@@ -1340,7 +1340,7 @@ const EncoderFunc encoderLocalFunction[][8] = {
     {ENC_KIT_TAB0, ENC_KIT_TAB1, ENC_KIT_TAB2, ENC_KIT_TAB3, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE},
     // MIXER_MENU = 0x04
     // custom: the Mixer menu is now ROUTING (signal chain); the mix volumes moved to the Metronome menu
-    {ENC_ROUTE_LAYOUT, ENC_ROUTE_DRUM, ENC_ROUTE_DEST, ENC_ROUTE_EQ, ENC_MIXER_LIMIXERIN, ENC_MIXER_LIVOLUME, ENC_ROUTE_METRO, ENC_ROUTE_LANEREV},
+    {ENC_ROUTE_LAYOUT, ENC_ROUTE_DRUM, ENC_ROUTE_DEST, ENC_ROUTE_EQ, ENC_MIXER_LIMIXERIN, ENC_MIXER_LIVOLUME, ENC_FNC_NONE, ENC_ROUTE_LANEREV},
     // RHYTHM_MENU = 0x05
     {ENC_RHYTHM_TEMPO, ENC_RHYTHM_MEASURE, ENC_RHYTHM_BAR, ENC_RHYTHM_QUANTIZE, ENC_RHYTHM_SWING, ENC_RHYTHM_SWINGGRID, ENC_GROOVE_DRUMSWING, ENC_GROOVE_CORRECT},
     // METRO_MENU = 0x06
@@ -2344,7 +2344,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.86 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.87 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -2427,7 +2427,7 @@ const bool kInitialMetroPrecount                    = true;
 const uint8_t kInitialMetroSample                   = 0;
 const uint8_t kInitialMetroVolume                   = 75;
 
-const MixerInMode kInitialMetronomeMixerInMode      = MIXER_IN_REVERB;
+const MixerInMode kInitialMetronomeMixerInMode      = MIXER_IN_SEND;   // custom: metronome always dry (stock: reverb)
 
 const uint32_t kMetroSize                           = 4410;                     // 0.1 seconds
 

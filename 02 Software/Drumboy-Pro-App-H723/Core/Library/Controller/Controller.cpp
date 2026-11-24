@@ -5662,7 +5662,6 @@ void Controller::route_knob(uint8_t slot_, int8_t step_) {
         lcd_drawRoute_Data(1);
         lcd_drawRoute_Data(2);
         lcd_drawRoute_Data(3);
-        lcd_drawRoute_Data(6);
         lcd_drawRoute_Data(7);
     }
     page_markDirty(PAGE_ROUTE);
@@ -5699,11 +5698,7 @@ void Controller::lcd_drawRoute_Data(uint8_t slot_) {
         case 3: snprintf(t, sizeof(t), "%10s", lanes ? (layerLibrary[routeLayer].laneEq ? "ON" : "OFF") : "IN CHAIN"); break;
         case 4: lcd_drawMixer_LiInData(); return;
         case 5: lcd_drawMixer_LiVolumeData(); return;
-        case 6: {
-            uint8_t m = (uint8_t)metronome.mixerInMode;
-            if (m > MIXER_IN_SEND) m = MIXER_IN_SEND;
-            snprintf(t, sizeof(t), "%s", kMixerLiMixerInDataLibrary[m].nameLongR);
-        } break;
+        case 6: snprintf(t, sizeof(t), "%10s", ""); break;   // free knob
         case 7: {
             static const char* const rv[4] = {"A + B", "A ONLY", "B ONLY", "OFF"};
             snprintf(t, sizeof(t), "%10s", lanes ? rv[routeLaneRev & 0x03] : "IN CHAIN");
@@ -5944,7 +5939,7 @@ void Controller::page_drawRoute() {
             snprintf(name, sizeof(name), "   LINE IN    ");
             dim = mixer.liMute;
         } else {
-            code = (uint8_t)metronome.mixerInMode;
+            code = (uint8_t)MIXER_IN_SEND;   // the metronome is always dry
             snprintf(name, sizeof(name), "   METRONOME  ");
             dim = !metronome.active;
         }
@@ -13753,7 +13748,7 @@ void Controller::lcd_drawMixerMenu() {
     lcd.drawText("DRUM EQ   ", kMenuHeaderTextSize, kMenuHeaderX[3], kMenuHeaderY[3]);
     lcd.drawText("LINE IN TO", kMenuHeaderTextSize, kMenuHeaderX[4], kMenuHeaderY[4]);
     lcd.drawText("LINE IN VOL", 11, kMenuHeaderX[5], kMenuHeaderY[5]);
-    lcd.drawText("METRO TO  ", kMenuHeaderTextSize, kMenuHeaderX[6], kMenuHeaderY[6]);
+    lcd.drawText("          ", kMenuHeaderTextSize, kMenuHeaderX[6], kMenuHeaderY[6]);   // (metronome is always dry)
     lcd.drawText("LANE REVERB", 11, kMenuHeaderX[7], kMenuHeaderY[7]);
     lcd_setMenuSignState(CYAN);
     for (uint8_t k = 0; k < 8; k++) lcd.drawText((k == 5) ? " DB" : "   ", kMenuSignTextSize, kMenuSignBoxX[k], kMenuSignBoxY[k]);
@@ -27922,7 +27917,7 @@ void Controller::interruptPlay() {
                 metroPlayData.counter = 0;
                 metroPlayData.counterMax = kMetroSize - 1;
                 metroPlayData.volumeMultiplier = kLayerVolumeCoef * metronome.volumeFloat * mixer.masterVolumeFloat;
-                metroPlayData.mixerInMode = metronome.mixerInMode;
+                metroPlayData.mixerInMode = MIXER_IN_SEND;   // custom: the metronome is always dry
                 metronome.countDownFlag = true;
             } else if ((metronome.precounter % measureInterval == 0) && (!io.sync.slaveMode)) {
                 // Initialize Measure Click (Standard Pitch)
@@ -27932,7 +27927,7 @@ void Controller::interruptPlay() {
                 metroPlayData.counter = 0;
                 metroPlayData.counterMax = kMetroSize - 1;
                 metroPlayData.volumeMultiplier = kLayerVolumeCoef * metronome.volumeFloat * mixer.masterVolumeFloat;
-                metroPlayData.mixerInMode = metronome.mixerInMode;
+                metroPlayData.mixerInMode = MIXER_IN_SEND;   // custom: the metronome is always dry
                 metronome.countDownFlag = true;
             }
 
