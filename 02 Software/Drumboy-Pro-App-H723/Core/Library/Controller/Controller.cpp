@@ -3780,7 +3780,7 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
             // Eq functions
 
         case ENC_EQ_ACTIVE:
-            eq_setActive(!eq.active);
+            eq_stepPreset(1);   // custom: PRESET knob
             break;
 
         case ENC_EQ_Q:
@@ -4402,7 +4402,7 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
             // Eq functions
 
         case ENC_EQ_ACTIVE:
-            eq_setActive(!eq.active);
+            eq_stepPreset(-1);   // custom: PRESET knob
             break;
 
         case ENC_EQ_Q:
@@ -7459,6 +7459,14 @@ void Controller::page_drawFilter(uint8_t filterNum_) {
         snprintf(info, sizeof(info), "%s  SLOPE %2u DB  CUTOFF %5s HZ  RESONANCE %u.%02u  DRIVE %3u", typeName[(f.type <= 6) ? f.type : 0],
                  f.slope ? 12 : 6, cut, (unsigned)Q, (unsigned)(Q * 100) % 100, f.drive);
     page_drawSummary(info);
+    {   // custom: the filter type (first word of the summary) in yellow so it stands out
+        const char* tn = vintage ? "VINTAGE" : typeName[(f.type <= 6) ? f.type : 0];
+        lcd.setFont(FONT_10x14);
+        lcd.setAlignment(LEFT);
+        lcd.setBackColor(BLACK);
+        lcd.setForeColor(kThemeAmber);
+        lcd.drawText(tn, strlen(tn), 30, 158);
+    }
 
     // ---- 5. response, column by column (no full clear => no flicker)
     const RGB16Color fill = page_mix(BLACK, accent, 0.28f);
@@ -7583,10 +7591,10 @@ void Controller::page_drawEq() {
         for (uint8_t i = 0; i < 5; i++) lcd.drawText(hzl[i], strlen(hzl[i]), (i == 4) ? gx + gw : freqToX(hzv[i]), gBot + 8);
         lcd.setAlignment(LEFT);
         lcd.setForeColor(kThemeLine);
-        const char hint[] = "PRESS EQ AGAIN: BACK TO SONG";
+        const char hint[] = "KNOB 1: PRESET    BAND KNOBS: GAIN    HOLD ADD + BAND KNOB: FREQUENCY";
         lcd.drawText(hint, strlen(hint), 30, 436);
         lcd.setAlignment(RIGHT);
-        const char hint2[] = "KNOBS: BOXES ABOVE / BELOW";
+        const char hint2[] = "EQ: BACK";
         lcd.drawText(hint2, strlen(hint2), 930, 436);
         pageFullRedraw = false;
     }
@@ -7597,6 +7605,13 @@ void Controller::page_drawEq() {
     lcd.setBackColor(BLACK);
     lcd.setForeColor(on ? kThemeAccent : kThemeMid);
     lcd.drawText(on ? "EQ    " : "EQ OFF", 6, 30, 136);
+    {   // custom: preset name in yellow next to the title
+        const int8_t p = eq_matchPreset();
+        char pn[16];
+        snprintf(pn, sizeof(pn), "%-10s", on ? ((p >= 0) ? kEqPresets[p].name : "CUSTOM") : "");
+        lcd.setForeColor(kThemeAmber);
+        lcd.drawText(pn, 10, 30 + 6 * 18, 136);
+    }
     char info[48];
     snprintf(info, sizeof(info), "Q %u   LOW SHELF %+d DB   HIGH SHELF %+d DB", (unsigned)kEqQDataLibrary[eq.q].data,
              (int)kEqGainDataLibrary[eq.gainLowShelf].data, (int)kEqGainDataLibrary[eq.gainHighShelf].data);
@@ -13548,7 +13563,7 @@ void Controller::lcd_drawEqMenu() {
     // 3. HEADER DRAW
     // Draw headers for EQ bands and controls.
     lcd_setMenuHeaderState(CYAN);
-    lcd.drawText(kHeaderActive, kMenuHeaderTextSize, kMenuHeaderX[0], kMenuHeaderY[0]);
+    lcd.drawText("PRESET    ", kMenuHeaderTextSize, kMenuHeaderX[0], kMenuHeaderY[0]);   // custom
     lcd.drawText(kHeaderQfactor, kMenuHeaderTextSize, kMenuHeaderX[1], kMenuHeaderY[1]);
     lcd.drawText(kHeaderLowshelf, kMenuHeaderTextSize, kMenuHeaderX[2], kMenuHeaderY[2]);
     lcd.drawText(kHeaderHighshelf, kMenuHeaderTextSize, kMenuHeaderX[3], kMenuHeaderY[3]);
@@ -13605,17 +13620,45 @@ void Controller::lcd_drawEqMenu() {
 }
 
 void Controller::lcd_drawEq_ActiveData() {
-    /// @brief Draws EQ active state value.
-
-    // 1. STYLE SETUP
-    // Configure data style for active field.
+    /// @brief Custom: the first EQ knob is PRESET (OFF, FLAT, SMILE ... or CUSTOM once you tweak).
     lcd_setMenuDataState(WHITE);
+    char text[12];
+    if (!eq.active) snprintf(text, sizeof(text), "%10s", "OFF");
+    else {
+        const int8_t p = eq_matchPreset();
+        snprintf(text, sizeof(text), "%10s", (p >= 0) ? kEqPresets[p].name : "CUSTOM");
+    }
+    lcd.drawText(text, kMenuDataTextSize, kMenuDataX[0], kMenuDataY[0]);
+}
 
-    // 2. VALUE DRAW
-    // Draw ON/OFF state.
-    const char* textPtr;
-    (eq.active) ? textPtr = kDataOn : textPtr = kDataOff;
-    lcd.drawText(textPtr, kMenuDataTextSize, kMenuDataX[0], kMenuDataY[0]);
+int8_t Controller::eq_matchPreset() {
+    /// @brief Which preset the EQ currently matches exactly (-1 = custom settings).
+    for (uint8_t p = 0; p < kEqPresetCount; p++) {
+        const EqPreset& P = kEqPresets[p];
+        bool same = (eq.freqLowShelf == P.lsF) && (eq.gainLowShelf == P.lsG) && (eq.freqHighShelf == P.hsF) && (eq.gainHighShelf == P.hsG) && (eq.q == P.q);
+        for (uint8_t i = 0; same && (i < 4); i++) same = (eq.freqPeak[i] == P.pF[i]) && (eq.gainPeak[i] == P.pG[i]);
+        if (same) return (int8_t)p;
+    }
+    return -1;
+}
+
+void Controller::eq_stepPreset(int8_t step_) {
+    /// @brief PRESET knob: OFF, then each preset in turn. Picking a preset loads all its settings.
+    const int8_t count = (int8_t)kEqPresetCount + 1;   // + OFF
+    int8_t pos = eq.active ? ((eq_matchPreset() >= 0) ? (int8_t)(eq_matchPreset() + 1) : eqPresetPos) : 0;
+    pos = (int8_t)((pos + count + step_) % count);
+    eqPresetPos = pos;
+    if (pos == 0) { if (eq.active) eq_setActive(false); lcd_drawEq_ActiveData(); page_markDirty(PAGE_EQ); return; }
+    const EqPreset& P = kEqPresets[pos - 1];
+    eq_setFreqLowShelf(P.lsF);
+    eq_setGainLowShelf(P.lsG);
+    eq_setFreqHighShelf(P.hsF);
+    eq_setGainHighShelf(P.hsG);
+    eq_setQ(P.q);
+    for (uint8_t i = 0; i < 4; i++) { eq_setFreqPeak(i, P.pF[i]); eq_setGainPeak(i, P.pG[i]); }
+    if (!eq.active) eq_setActive(true);
+    if (menu == EQ_MENU) lcd_drawEq_ActiveData();
+    page_markDirty(PAGE_EQ);
 }
 
 void Controller::lcd_drawEq_QData() {

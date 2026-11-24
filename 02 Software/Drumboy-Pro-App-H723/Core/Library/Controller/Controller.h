@@ -472,6 +472,8 @@ class Controller {
     void preview_schedule(uint8_t layerNum_);
     void lcd_drawProjectName();
     int8_t pitch_padNote(uint8_t pad_);
+    int8_t eq_matchPreset();
+    void eq_stepPreset(int8_t step_);
     void fileKnob(bool kit_, uint8_t tab_, int8_t step_);
     void pitch_knob(uint8_t which_, int8_t step_);
     void pitch_pad(uint8_t pad_);
@@ -560,6 +562,7 @@ class Controller {
     int32_t pitchRecStart = -1;                                         // stored start of that note
     volatile bool gateArmed[kLayerLibrarySize] = {false};               // playback: a gated note is sounding
     volatile uint16_t gateOff[kLayerLibrarySize] = {0};                 // playback: tick to end it on
+    int8_t eqPresetPos = 1;                                             // EQ preset knob position (0 = OFF)
     uint8_t lastPadLayer = 0xFF;                                        // last pad played normally (Notes focus)
     uint8_t pitchLayer = 0;                                             // Pitch mode: which drum the pads play
     uint8_t pitchRootPad = 0;                                           // which pad (0-9) plays the root

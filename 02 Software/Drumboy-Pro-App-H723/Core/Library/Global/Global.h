@@ -2301,7 +2301,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.60 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.61 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -3252,6 +3252,26 @@ const struct EqGainData kEqGainDataLibrary[] = {
     {"       +10", 10}, 
     {"       +11", 11}, 
     {"       +12", 12}};
+
+// Custom EQ presets: low shelf (freq, gain), high shelf (freq, gain), Q, 4 peaks (freq, gain).
+// Frequencies are kEqFreqDataLibrary indexes, gains are 24 + dB.
+struct EqPreset {
+    char name[11];
+    uint8_t lsF, lsG, hsF, hsG, q;
+    uint8_t pF[4], pG[4];
+};
+const EqPreset kEqPresets[] = {
+    {"FLAT",      4, 24, 31, 24, 0, {9, 12, 27, 29}, {24, 24, 24, 24}},
+    {"SMILE",     4, 28, 31, 20, 0, {9, 12, 27, 29}, {26, 24, 24, 22}},   // the stock default
+    {"WARM",      9, 27, 34, 21, 0, {12, 17, 28, 31}, {26, 24, 23, 22}},
+    {"BOOM BAP",  5, 28, 36, 25, 1, {9, 15, 29, 33}, {26, 21, 26, 24}},   // weight, less box, snare snap
+    {"DUSTY",     7, 22, 33, 18, 0, {11, 27, 29, 31}, {26, 25, 22, 22}},   // thin + dark, record-crate
+    {"LO-FI",    13, 12, 29, 12, 1, {23, 27, 28, 31}, {26, 28, 26, 24}},   // band-limited, telephone-ish
+    {"SUB",       4, 30, 38, 24, 1, {9, 13, 27, 29}, {26, 22, 24, 24}},
+    {"BRIGHT",    4, 24, 36, 28, 0, {11, 17, 29, 32}, {23, 24, 26, 26}},
+    {"MUFFLED",   9, 27, 28, 12, 0, {11, 17, 27, 29}, {26, 24, 21, 18}},   // next-room / under-water
+};
+const uint8_t kEqPresetCount = sizeof(kEqPresets) / sizeof(kEqPresets[0]);
 
 struct EqFilter {
     // y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]
