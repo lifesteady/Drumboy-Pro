@@ -1308,7 +1308,8 @@ typedef enum {
     ENC_KIT_TAB0                                    = 0x76,
     ENC_KIT_TAB1                                    = 0x77,
     ENC_KIT_TAB2                                    = 0x78,
-    ENC_KIT_TAB3                                    = 0x79
+    ENC_KIT_TAB3                                    = 0x79,
+    ENC_PITCH_GATE                                  = 0x7A
 } EncoderFunc;
 
 const EncoderFunc encoderLocalFunction[][8] = {
@@ -1503,19 +1504,20 @@ const EncoderFuncData kEncoderFuncDataLibrary[] = {
     {ENC_KIT_TAB0,            ENC_RES_S, "NEW       ", "KIT   ", "   ", false},
     {ENC_KIT_TAB1,            ENC_RES_S, "LOAD      ", "KIT   ", "   ", false},
     {ENC_KIT_TAB2,            ENC_RES_S, "SAVE      ", "KIT   ", "   ", false},
-    {ENC_KIT_TAB3,            ENC_RES_S, "CLEAR     ", "KIT   ", "   ", false}
+    {ENC_KIT_TAB3,            ENC_RES_S, "CLEAR     ", "KIT   ", "   ", false},
+    {ENC_PITCH_GATE,          ENC_RES_S, "GATE      ", "PITCH ", "   ", false}
 };
 
 // Knobs while the Pitch page is open (all 8 belong to Pitch mode).
 const EncoderFunc kPitchPageFunctions[8] = {ENC_PITCH_DRUM, ENC_PITCH_ROOT, ENC_PITCH_SCALE, ENC_PITCH_OCTAVE,
-                                            ENC_PITCH_ROOTPAD, ENC_PITCH_LEVEL, ENC_PITCH_TUNE, ENC_FNC_NONE};
+                                            ENC_PITCH_ROOTPAD, ENC_PITCH_LEVEL, ENC_PITCH_TUNE, ENC_PITCH_GATE};
 
 // Knob layout while the Sample page is open (any of the three Layer Inst menus).
 const EncoderFunc kSamplePageFunctions[8] = {ENC_INST_0_INST, ENC_INST_0_SAMPLE, ENC_SMP_ATTACK, ENC_SMP_HOLD,
                                              ENC_INST_1_START, ENC_INST_1_END, ENC_SMP_DECAY, ENC_FNC_NONE};
 
 // The table above is indexed by EncoderFunc value, so every entry must sit at its own enum number.
-static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_KIT_TAB3 + 1,
+static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_PITCH_GATE + 1,
               "kEncoderFuncDataLibrary must have one entry per EncoderFunc value");
 
 typedef enum {
@@ -2299,7 +2301,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.55 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.56 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -7177,6 +7179,7 @@ struct Beat {
     int8_t note                                     = 0;   // custom: semitones for Pitch mode (uses a padding byte)
     uint16_t startInterval                          = 0;
     uint16_t endInterval                            = 0;
+    uint16_t gate                                   = 0;   // custom: Notes gate length in ticks (0 = ring out)
 
     // Bit masks for precise field extraction
 
@@ -7199,6 +7202,7 @@ struct Beat {
         endInterval = 0;
         fillTarget = NULL_FILL_TARGET;
         note = 0;
+        gate = 0;
     }
 
     // Active bit logic

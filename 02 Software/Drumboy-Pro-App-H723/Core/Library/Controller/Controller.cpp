@@ -1626,6 +1626,7 @@ void Controller::keyboard_action() {
                     noteRepeatStopTick[layerNum] = HAL_GetTick();
                 } else if (keyboard.keyLayer.changeState[layerNum] == KEYSTATE_RELEASE) {
                     noteRepeatPads &= (uint16_t)~(1u << layerNum);
+                    if ((page == PAGE_PITCH) && pitchGate) pitch_release(layerNum);   // custom: Notes note-off
                 }
                 switch (keyboard.keyLayer.changeState[layerNum]) {
                     case KEYSTATE_PRESS:
@@ -4038,6 +4039,7 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
         case ENC_KIT_TAB3: fileKnob(true, 3, 1); break;
         case ENC_PITCH_LEVEL: pitch_knob(5, 1); break;
         case ENC_PITCH_TUNE: pitch_knob(6, 1); break;
+        case ENC_PITCH_GATE: pitch_knob(7, 1); break;
 
         case ENC_SMP_HOLD:
             sample_setEnv(1, (int16_t)layerLibrary[selectedLayerNum].envHold + 1);
@@ -4641,6 +4643,7 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
         case ENC_KIT_TAB3: fileKnob(true, 3, -1); break;
         case ENC_PITCH_LEVEL: pitch_knob(5, -1); break;
         case ENC_PITCH_TUNE: pitch_knob(6, -1); break;
+        case ENC_PITCH_GATE: pitch_knob(7, -1); break;
 
         case ENC_SMP_HOLD:
             sample_setEnv(1, (int16_t)layerLibrary[selectedLayerNum].envHold - 1);
@@ -5917,6 +5920,7 @@ uint32_t Controller::project_hash() {
                 mix(beat.data);
                 mix(((uint32_t)beat.startInterval << 16) | beat.endInterval);
                 mix((uint8_t)beat.note);
+                mix(beat.gate);
             }
         }
     }
@@ -6028,7 +6032,8 @@ void Controller::page_drawSample() {
     char text[96];
 
     // Peak cache: rebuilt only when a different sample is in the sector.
-    static int8_t peakMax[860], peakMin[860];
+    int8_t* const peakMax = (int8_t*)(RAM_MAIN_ADDRESS + 0x6000);   // (in spare SDRAM)
+    int8_t* const peakMin = (int8_t*)(RAM_MAIN_ADDRESS + 0x6000 + 864);
     static int16_t cacheSector = -2;
     static uint32_t cacheSize = 0;
     static uint32_t cacheAddr = 0;
@@ -6252,13 +6257,15 @@ void Controller::main_buildLane(uint8_t lane_) {
     static uint16_t hT[kBeatLibrarySize * 4];
     static uint8_t hV[kBeatLibrarySize * 4];
     static int8_t hBeat[kBeatLibrarySize * 4];
+    static uint16_t hG[kBeatLibrarySize * 4];
+    memset(hG, 0, sizeof(hG));
     uint16_t n = 0;
     for (int16_t j = 0; (j <= bank.lastActiveBeatNum) && (n < kBeatLibrarySize * 4 - 1); j++) {
         const Beat& b = bank.beatLibrary[j];
         if (!b.getActive()) continue;
         if ((b.getFillType() == 0) && (b.getFillPattern() <= 2) && (b.getFillTarget() == NULL_FILL_TARGET)) {
             const uint8_t p = b.getFillPattern();
-            hT[n] = b.getStartInterval(); hV[n] = (p == 0) ? 255 : ((p == 1) ? 128 : 40); hBeat[n] = (int8_t)j; n++;
+            hT[n] = b.getStartInterval(); hV[n] = (p == 0) ? 255 : ((p == 1) ? 128 : 40); hBeat[n] = (int8_t)j; hG[n] = b.gate; n++;
         } else if (b.getFillTarget() != NULL_FILL_TARGET) {
             const BeatFill& f = bank.beatFillLibrary[b.getFillTarget()];
             for (uint8_t k = 0; (k < f.getStepSize()) && (k < kBeatMicroLibrarySize) && (n < kBeatLibrarySize * 4 - 1); k++) {
@@ -6277,6 +6284,7 @@ void Controller::main_buildLane(uint8_t lane_) {
         uint32_t next = 0xFFFFFFFFu;
         for (uint16_t k = 0; k < n; k++) if ((hT[k] > t) && (hT[k] < next)) next = hT[k];
         if (next < tEnd) tEnd = next;
+        if (hG[i] && (t + hG[i] < tEnd)) tEnd = t + hG[i];   // Notes gate: the note ends when the pad was let go
         if ((tEnd <= v0) || (t >= v1)) continue;
         const int32_t c0 = (int32_t)(((int64_t)((int32_t)t - (int32_t)v0) * kMainGridW) / (int32_t)mainViewLen);
         const int32_t c1 = (int32_t)(((int64_t)((int32_t)tEnd - (int32_t)v0) * kMainGridW) / (int32_t)mainViewLen);
@@ -6668,7 +6676,7 @@ void Controller::noteRepeat_stopped() {
 // The 10 pads play ONE drum at 10 notes of a scale. Each recorded hit keeps its note
 // (Beat::note, semitones), so a bass line lives in that drum's own lane.
 
-static_assert(sizeof(Beat) == 8, "Beat::note must fit in the padding byte (undo / RAM budget)");
+static_assert(sizeof(Beat) == 10, "Beat layout changed: check undo / RAM budget");
 
 int8_t Controller::pitch_padNote(uint8_t pad_) {
     /// @brief Note of a pad: the ROOT sits on pitchRootPad, pads to the right climb the scale,
@@ -6709,6 +6717,7 @@ void Controller::pitch_knob(uint8_t which_, int8_t step_) {
     switch (which_) {
         case 4: pitchRootPad = (uint8_t)((pitchRootPad + kLayerLibrarySize + step_) % kLayerLibrarySize); break;
         case 5: { int16_t v = (int16_t)L.level + step_; if (v < 0) v = 0; if (v > kMaxLayerLevel) v = kMaxLayerLevel; layerInst_setLevel(pitchLayer, (uint8_t)v); } break;
+        case 7: pitchGate = !pitchGate; break;
         case 6: { int16_t v = (int16_t)L.pitch + step_; if (v < kMinLayerPitch) v = kMinLayerPitch; if (v > kMaxLayerPitch) v = kMaxLayerPitch; layerInst_setPitch(pitchLayer, (uint8_t)v); } break;
         case 0: pitchLayer = (uint8_t)((pitchLayer + kLayerLibrarySize + step_) % kLayerLibrarySize); break;
         case 1: pitchRoot = (uint8_t)((pitchRoot + 12 + step_) % 12); break;
@@ -6732,14 +6741,62 @@ void Controller::pitch_pad(uint8_t pad_) {
     pendingNote[pitchLayer] = note;
     if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(pitchLayer, 1.0f);
     pendingNote[pitchLayer] = 0;
+    pitchHeldPad = (int8_t)pad_;
+    pitchRecTick = -1;
     if (recordActive && !metronome.precountState) {
         undo_checkpoint(UNDO_RECORD);
         recordNote = note;
-        layerSong_setBeat(pitchLayer, activeSongBank, groove_unswing(pitchLayer, playInterval), 0, 0, 0, 0, true);
+        const uint16_t at = groove_unswing(pitchLayer, playInterval);
+        layerSong_setBeat(pitchLayer, activeSongBank, at, 0, 0, 0, 0, true);
         recordNote = 0;
+        uint16_t st = rhythm_snapToGrid(at);
+        if (st >= songInterval) st = 0;
+        pitchRecStart = st;
+        pitchRecTick = playInterval;
     }
     pitchLastPad = (int8_t)pad_;
     page_markDirty(PAGE_PITCH);
+}
+
+void Controller::voice_release(uint8_t layer_) {
+    /// @brief Fades out whatever this drum is playing (note-off). Safe against the audio interrupt.
+    if (layer_ >= kLayerLibrarySize) return;
+    LayerPlayData& lD = layerPlayData[layer_];
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    if (lD.tempBeatTimingFlag) { lD.tempBeatTimingFlag = false; memset(&lD.tempBeatPlayData, 0x00, sizeof(BeatPlayData)); }
+    if (lD.activeBeatPlayData.active && !lD.activeBeatPlayData.newBeatFlag && !lD.activeBeatPlayData.fadeAction) {
+        lD.activeBeatPlayData.fadeAction = true;
+        lD.activeBeatPlayData.counterFade = 0;
+    }
+    __set_PRIMASK(primask);
+}
+
+void Controller::pitch_release(uint8_t pad_) {
+    /// @brief Notes gate: letting go of the sounding pad ends the note, and a recorded note keeps that length.
+    if ((int8_t)pad_ != pitchHeldPad) return;   // another pad took over: leave it ringing
+    pitchHeldPad = -1;
+    voice_release(pitchLayer);
+    if ((pitchRecTick >= 0) && (pitchRecStart >= 0) && songInterval) {
+        int32_t len = (int32_t)playInterval - pitchRecTick;
+        if (len < 0) len += songInterval;
+        if (len < 1) len = 1;
+        Bank& bank = layerLibrary[pitchLayer].bankLibrary[activeSongBank];
+        for (int16_t j = 0; j <= bank.lastActiveBeatNum; j++)
+            if (bank.beatLibrary[j].getActive() && (bank.beatLibrary[j].startInterval == (uint16_t)pitchRecStart)) { bank.beatLibrary[j].gate = (uint16_t)len; break; }
+    }
+    pitchRecTick = -1;
+    pitchRecStart = -1;
+}
+
+void Controller::gate_tick() {
+    /// @brief Sequencer interrupt: ends gated notes when their recorded length is up.
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
+        if (gateArmed[l] && (gateOff[l] == playInterval)) {
+            gateArmed[l] = false;
+            voice_release(l);
+        }
+    }
 }
 
 void Controller::lcd_drawIo_PitchData() {
@@ -6747,7 +6804,7 @@ void Controller::lcd_drawIo_PitchData() {
     if (page != PAGE_PITCH) return;
     char text[16];
     const Layer& L = layerLibrary[pitchLayer];
-    const char* hdr[8] = {"PITCH-DRUM", "ROOT      ", "SCALE     ", "OCTAVE    ", "ROOT-PAD  ", "LEVEL     ", "TUNE      ", "          "};
+    const char* hdr[8] = {"PITCH-DRUM", "ROOT      ", "SCALE     ", "OCTAVE    ", "ROOT-PAD  ", "LEVEL     ", "TUNE      ", "GATE      "};
     lcd_setMenuHeaderState(CYAN);
     for (uint8_t k = 0; k < 8; k++) lcd.drawText(hdr[k], kMenuHeaderTextSize, kMenuHeaderX[k], kMenuHeaderY[k]);
     lcd_setMenuSignState(CYAN);
@@ -6774,7 +6831,7 @@ void Controller::lcd_drawIo_PitchData() {
     lcd.drawText(text, kMenuDataTextSize, kMenuDataX[4], kMenuDataY[4]);
     lcd.drawText(kNumberDataLibrary[L.level].nameLongR, kMenuDataTextSize, kMenuDataX[5], kMenuDataY[5]);
     lcd.drawText(kLayerPitchDataLibrary[L.pitch].nameLongR, kMenuDataTextSize, kMenuDataX[6], kMenuDataY[6]);
-    lcd.drawText("          ", kMenuDataTextSize, kMenuDataX[7], kMenuDataY[7]);
+    lcd.drawText(pitchGate ? "  PAD HELD" : "  RING OUT", kMenuDataTextSize, kMenuDataX[7], kMenuDataY[7]);
 }
 
 void Controller::page_drawPitch() {
@@ -6847,34 +6904,34 @@ void Controller::page_drawPitch() {
 }
 
 void Controller::pitch_saveNotes(uint8_t fileNum_) {
-    /// @brief Writes every hit that has a note to File_XXX.rwn (stock firmware ignores this file).
-    /// Streamed through a small buffer (internal RAM is nearly full).
+    /// @brief Writes every hit that has a note or a gate length to File_XXX.rwn (stock firmware ignores it).
     char fileName[50];
     snprintf(fileName, sizeof(fileName), "%s%03d%s", kFileStart, fileNum_ + 1, kPitchFileEnd);
+    auto wanted = [](const Beat& b) { return b.getActive() && ((b.note != 0) || (b.gate != 0)); };
     uint16_t n = 0;
     for (uint8_t l = 0; l < kLayerLibrarySize; l++)
         for (uint8_t b = 0; b < kBankLibrarySize; b++) {
             const Bank& bank = layerLibrary[l].bankLibrary[b];
-            for (int16_t j = 0; j <= bank.lastActiveBeatNum; j++)
-                if (bank.beatLibrary[j].getActive() && (bank.beatLibrary[j].note != 0)) n++;
+            for (int16_t j = 0; j <= bank.lastActiveBeatNum; j++) if (wanted(bank.beatLibrary[j])) n++;
         }
     f_close(&sd.file);
     if (n == 0) { f_unlink(fileName); return; }
     if (f_open(&sd.file, fileName, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK) return;
-    uint8_t buf[160];
+    uint8_t buf[168];
     uint16_t pos = 0;
-    buf[pos++] = 'R'; buf[pos++] = 'W'; buf[pos++] = 'N'; buf[pos++] = '1';
+    buf[pos++] = 'R'; buf[pos++] = 'W'; buf[pos++] = 'N'; buf[pos++] = '2';
     buf[pos++] = (uint8_t)(n >> 8); buf[pos++] = (uint8_t)(n & 0xFF);
     for (uint8_t l = 0; l < kLayerLibrarySize; l++)
         for (uint8_t b = 0; b < kBankLibrarySize; b++) {
             const Bank& bank = layerLibrary[l].bankLibrary[b];
             for (int16_t j = 0; j <= bank.lastActiveBeatNum; j++) {
                 const Beat& beat = bank.beatLibrary[j];
-                if (!beat.getActive() || (beat.note == 0)) continue;
+                if (!wanted(beat)) continue;
                 buf[pos++] = l; buf[pos++] = b;
                 buf[pos++] = (uint8_t)(beat.startInterval >> 8); buf[pos++] = (uint8_t)(beat.startInterval & 0xFF);
                 buf[pos++] = (uint8_t)beat.note;
-                if (pos > sizeof(buf) - 5) { f_write(&sd.file, buf, pos, &sd.byteswritten); pos = 0; }
+                buf[pos++] = (uint8_t)(beat.gate >> 8); buf[pos++] = (uint8_t)(beat.gate & 0xFF);
+                if (pos > sizeof(buf) - 7) { f_write(&sd.file, buf, pos, &sd.byteswritten); pos = 0; }
             }
         }
     if (pos) f_write(&sd.file, buf, pos, &sd.byteswritten);
@@ -6889,16 +6946,21 @@ void Controller::pitch_loadNotes(uint8_t fileNum_) {
     if (f_open(&sd.file, fileName, FA_READ) != FR_OK) return;
     uint8_t head[6];
     UINT got = 0;
-    if ((f_read(&sd.file, head, 6, &got) == FR_OK) && (got == 6) && (head[0] == 'R') && (head[1] == 'W') && (head[2] == 'N') && (head[3] == '1')) {
+    if ((f_read(&sd.file, head, 6, &got) == FR_OK) && (got == 6) && (head[0] == 'R') && (head[1] == 'W') && (head[2] == 'N') && ((head[3] == '1') || (head[3] == '2'))) {
         uint16_t n = ((uint16_t)head[4] << 8) | head[5];
-        uint8_t e[5];
+        const UINT esz = (head[3] == '2') ? 7 : 5;
+        uint8_t e[7] = {0};
         while (n--) {
-            if ((f_read(&sd.file, e, 5, &got) != FR_OK) || (got != 5)) break;
+            if ((f_read(&sd.file, e, esz, &got) != FR_OK) || (got != esz)) break;
             if ((e[0] >= kLayerLibrarySize) || (e[1] >= kBankLibrarySize)) continue;
             Bank& bank = layerLibrary[e[0]].bankLibrary[e[1]];
             const uint16_t st = ((uint16_t)e[2] << 8) | e[3];
             for (int16_t j = 0; j <= bank.lastActiveBeatNum; j++)
-                if (bank.beatLibrary[j].getActive() && (bank.beatLibrary[j].startInterval == st)) { bank.beatLibrary[j].note = (int8_t)e[4]; break; }
+                if (bank.beatLibrary[j].getActive() && (bank.beatLibrary[j].startInterval == st)) {
+                    bank.beatLibrary[j].note = (int8_t)e[4];
+                    if (esz == 7) bank.beatLibrary[j].gate = ((uint16_t)e[5] << 8) | e[6];
+                    break;
+                }
         }
     }
     f_close(&sd.file);
@@ -7612,10 +7674,11 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
     const uint16_t gx = 80, gw = 790, gTop = 190, gBot = 400;
     const uint16_t gh = gBot - gTop;
 
-    static int16_t curveY[790];   // main curve (accent), -1 = none
-    static int16_t refY[790];     // reference line (dim), -1 = none
-    static int16_t barTop[790];   // filled bar from barTop down to gBot, -1 = none
-    static uint8_t barShade[790]; // 0..100 brightness of the bar
+    // (in spare SDRAM: internal RAM is full)
+    int16_t* const curveY = (int16_t*)(RAM_MAIN_ADDRESS + 0x4000);          // main curve (accent), -1 = none
+    int16_t* const refY = (int16_t*)(RAM_MAIN_ADDRESS + 0x4000 + 1600);     // reference line (dim), -1 = none
+    int16_t* const barTop = (int16_t*)(RAM_MAIN_ADDRESS + 0x4000 + 3200);   // filled bar from barTop down to gBot, -1 = none
+    uint8_t* const barShade = (uint8_t*)(RAM_MAIN_ADDRESS + 0x4000 + 4800); // 0..100 brightness of the bar
     for (uint16_t i = 0; i < gw; i++) { curveY[i] = -1; refY[i] = -1; barTop[i] = -1; barShade[i] = 0; }
 
     char title[16];
@@ -23952,6 +24015,7 @@ void Controller::layerSong_setBeat(uint8_t layerNum_, uint8_t bankTab_, uint16_t
         if (!duplicate) {
             bank.setBeat(beatNum, startInterval, endInterval);
             bank.beatLibrary[beatNum].note = recordNote;   // custom: Pitch mode note (0 = normal hit)
+            bank.beatLibrary[beatNum].gate = 0;
             bank.setBeatFill(beatNum, fillType_, fillPattern_, fillTime_, fillLevel_);
             layerSong_calculateLastActiveBeatNum(layerNum_, bankTab_);
             layerSong_calculatePlayBeatNum(layerNum_, bankTab_, playInterval);
@@ -26745,6 +26809,8 @@ void Controller::interruptPlay() {
                             }
                             swingDelayTicks[i] = groove_swingDelay(i, playInterval);   // custom per-drum swing
                             pendingNote[i] = beat.note;                                  // custom Pitch mode note
+                            if (beat.gate && songInterval) { gateOff[i] = (uint16_t)((playInterval + beat.gate) % songInterval); gateArmed[i] = true; }
+                            else gateArmed[i] = false;
                             if (fillVolMultiplier > 0.0f) layer_playBeat(layer.number, fillVolMultiplier);
                             swingDelayTicks[i] = 0;
                             pendingNote[i] = 0;
@@ -26784,6 +26850,7 @@ void Controller::interruptPlay() {
             // 4. SONG NAVIGATION & LOOP MANAGEMENT
             // Advance timeline, evaluate stop/reset triggers, and handle loop wrap.
             noteRepeat_tick();   // custom: Note Repeat on this tick
+            gate_tick();         // custom: Notes gate lengths
             playInterval += 1;
             if (playInterval < songInterval) {
                 // Handle pending Stop/Reset requests with visual feedback
