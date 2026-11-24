@@ -6089,6 +6089,8 @@ static bool stripDirty = true;
 static int16_t stripPlay = -1;
 
 static inline RGB16Color rgb565(uint8_t r, uint8_t g, uint8_t b) { return (RGB16Color)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)); }
+// Selected (expanded) drum lane background: a slight green tint so the current drum stands out.
+static const RGB16Color kMainSelectBg = (RGB16Color)(((20 >> 3) << 11) | ((40 >> 2) << 5) | (16 >> 3));
 static inline RGB16Color mix565(RGB16Color a, RGB16Color b, float t) {
     const int ar = (a >> 11) & 0x1F, ag = (a >> 5) & 0x3F, ab = a & 0x1F;
     const int br = (b >> 11) & 0x1F, bg = (b >> 5) & 0x3F, bb = b & 0x1F;
@@ -6190,7 +6192,7 @@ void Controller::main_renderColumn(uint16_t col_, uint16_t row0_, uint16_t rows_
     static RGB16Color buf[kMainHeight];
     const RGB16Color cBlack = 0x0000;
     const RGB16Color cLine = kThemeLine, cInk = kThemeInk, cAcc = kThemeAccent, cHead = kThemeHeader, cMid = kThemeMid;
-    const RGB16Color cShade = rgb565(10, 13, 9), cSelBg = rgb565(16, 11, 6), cSep = mix565(cBlack, cLine, 0.6f);
+    const RGB16Color cShade = rgb565(10, 13, 9), cSelBg = kMainSelectBg, cSep = mix565(cBlack, cLine, 0.6f);
     const RGB16Color cBeatDot = mix565(cBlack, cLine, 0.75f), cSixDot = mix565(cBlack, cLine, 0.4f);
 
     // where is this column in musical time?
@@ -6262,7 +6264,7 @@ void Controller::main_drawLabels(uint8_t lane_) {
     const Layer& L = layerLibrary[lane_];
     const bool sel = ((int8_t)lane_ == mainExpanded);
     const uint16_t y = mainLaneY[lane_], h = mainLaneH[lane_];
-    const RGB16Color bg = sel ? rgb565(16, 11, 6) : 0x0000;
+    const RGB16Color bg = sel ? kMainSelectBg : 0x0000;
     lcd.setBackColor(bg);
     lcd.clearRect(kPageX, y, kMainGridX - kPageX, h - 1);
     lcd.setBackColor(BLACK);
