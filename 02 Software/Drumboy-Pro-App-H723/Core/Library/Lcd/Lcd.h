@@ -8,6 +8,7 @@
 #include "Font_07x09.h"
 #include "Font_10x14.h"
 #include "Font_14x18.h"
+#include "SansText.h"   // custom: smooth Liberation Sans text
 #include "Global.h"
 #include "Icon.h"
 #include "NT35510.h"

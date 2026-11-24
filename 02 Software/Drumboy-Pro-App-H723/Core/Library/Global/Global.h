@@ -715,6 +715,9 @@ typedef enum {
 
 /*----------------------------------------------------------------------------*/
 
+// Custom: draw all text in smooth Liberation Sans (false = the stock pixel fonts).
+const bool kSansText                                = true;
+
 typedef enum {
     FONT_05x07                                      = 0x00,
     FONT_07x09                                      = 0x01,
@@ -2325,7 +2328,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.84 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.85 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;

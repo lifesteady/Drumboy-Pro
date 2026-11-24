@@ -1409,6 +1409,60 @@ void Lcd::drawText(const char text[], uint16_t textLength, uint16_t x, uint16_t 
 
     if (isProtected(xPos, y, wText, hText)) return;  // custom: protected page area
 
+    // Custom: smooth Liberation Sans. Same box as the pixel font (so layouts and overwrites are
+    // unchanged); every pixel of the box is written once, blended from back to fore colour.
+    if (kSansText) {
+        const SansFont* sf = &kSansFont_07x09;
+        switch (font) {
+            case FONT_05x07: sf = &kSansFont_05x07; break;
+            case FONT_07x09: sf = &kSansFont_07x09; break;
+            case FONT_10x14: sf = &kSansFont_10x14; break;
+            case FONT_14x18: sf = &kSansFont_14x18; break;
+        }
+        static sans::Layout lay;
+        static uint8_t alpha[960];
+        if (wText > sizeof(alpha)) wText = sizeof(alpha);
+        sans::layout(*sf, text, textLength, wText, (uint8_t)fontAlignment, lay);
+        // descenders: a few rows under the box, only when the text has letters that need them
+        // Remember boxes that drew descender rows, so a later text without descenders in the
+        // same box still paints over them (no leftover tails).
+        struct DescMemo { uint16_t x, y, w; uint8_t rows; };
+        static DescMemo memo[48];
+        static uint8_t memoNext = 0;
+        uint8_t extra = lay.extraRows;
+        int8_t slot = -1;
+        for (uint8_t m = 0; m < 48; m++)
+            if ((memo[m].rows > 0) && (memo[m].x == xPos) && (memo[m].y == y) && (memo[m].w == wText)) { slot = (int8_t)m; break; }
+        if ((slot >= 0) && (memo[slot].rows > extra)) extra = memo[slot].rows;
+        uint16_t rows = hText + extra;
+        if ((extra > 0) && (isProtected(xPos, y, wText, rows) || ((uint32_t)y + rows > height))) rows = hText;
+        if (lay.extraRows > 0) {
+            if (slot < 0) { slot = (int8_t)memoNext; memoNext = (uint8_t)((memoNext + 1) % 48); }
+            memo[slot].x = xPos; memo[slot].y = y; memo[slot].w = wText; memo[slot].rows = lay.extraRows;
+        } else if (slot >= 0) {
+            memo[slot].rows = 0;   // cleaned up now
+        }
+        uint16_t lut[16];
+        sans::blendTable(foreColor, backColor, lut);
+        setAddressWindow(xPos, y, xPos + wText - 1, y + rows - 1);
+        LCD_CS_LOW;
+        LCD_RS_DATA;
+        volatile uint32_t* dReg = &(LCD_DATA_GPIO_Port->ODR);
+        volatile uint32_t* wReg = &(LCD_WR_GPIO_Port->BSRR);
+        const uint32_t wSet = LCD_WR_Pin;
+        const uint32_t wReset = LCD_WR_Pin << 16U;
+        for (uint16_t r = 0; r < rows; r++) {
+            sans::row(lay, (int16_t)r, wText, alpha);
+            for (uint16_t c = 0; c < wText; c++) {
+                *dReg = lut[alpha[c]];
+                *wReg = wReset;
+                *wReg = wSet;
+            }
+        }
+        LCD_CS_HIGH;
+        return;
+    }
+
     // 4. GLYPH INDEX PRECALCULATION
     // Resolve glyph table index for each character.
     uint8_t letterIndices[textLength];
