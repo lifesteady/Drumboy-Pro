@@ -5320,10 +5320,10 @@ void Controller::page_drawReverb() {
     const uint16_t hfT = (uint16_t)(tailHf * 10.0f + 0.5f);
     snprintf(info, sizeof(info), "TAIL %2u.%us  HIGHS %2u.%us  PRE %3ums  WET %3u", tailT / 10, tailT % 10,
              hfT / 10, hfT % 10, (unsigned)(preSec * 1000.0f + 0.5f), reverb.wet);
-    lcd.setFont(FONT_07x09);
+    lcd.setFont(FONT_10x14);  // bigger summary line (was 7x9)
     lcd.setAlignment(RIGHT);
     lcd.setForeColor(label);
-    lcd.drawText(info, strlen(info), 930, 144);
+    lcd.drawText(info, strlen(info), 930, 141);
 
     // ---- 5. columns: each pixel of the graph written once per redraw (black, fill, edge)
     // Fills kept dark: the real panel shows these much more saturated than a monitor.
@@ -5485,10 +5485,10 @@ void Controller::page_drawFilter(uint8_t filterNum_) {
     char info[64];
     snprintf(info, sizeof(info), "%8s %2udB  CUT %6sHZ  RES %u.%02u  DRIVE %3u", typeName[(f.type <= 4) ? f.type : 0],
              f.slope ? 12 : 6, cut, (unsigned)Q, (unsigned)(Q * 100) % 100, f.drive);
-    lcd.setFont(FONT_07x09);
+    lcd.setFont(FONT_10x14);  // bigger summary line (was 7x9)
     lcd.setAlignment(RIGHT);
     lcd.setForeColor(label);
-    lcd.drawText(info, strlen(info), 930, 144);
+    lcd.drawText(info, strlen(info), 930, 141);
 
     // ---- 5. response, column by column (no full clear => no flicker)
     const RGB16Color fill = page_mix(BLACK, accent, 0.28f);
@@ -5617,10 +5617,10 @@ void Controller::page_drawEq() {
     char info[48];
     snprintf(info, sizeof(info), "Q %u   LOW SHELF %+3d   HIGH SHELF %+3d", (unsigned)kEqQDataLibrary[eq.q].data,
              (int)kEqGainDataLibrary[eq.gainLowShelf].data, (int)kEqGainDataLibrary[eq.gainHighShelf].data);
-    lcd.setFont(FONT_07x09);
+    lcd.setFont(FONT_10x14);  // bigger summary line (was 7x9)
     lcd.setAlignment(RIGHT);
     lcd.setForeColor(label);
-    lcd.drawText(info, strlen(info), 930, 144);
+    lcd.drawText(info, strlen(info), 930, 141);
 
     // ---- combined response, column by column
     const EqFilter* bands[6] = {&eq.filterLowShelf, &eq.filterPeak[0], &eq.filterPeak[1],
@@ -5841,7 +5841,7 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
             const uint8_t aIdx = comp ? e.compressor.cAttackTime : e.expander.cAttackTime;
             const uint8_t rIdx = comp ? e.compressor.dReleaseTime : e.expander.dReleaseTime;
             snprintf(title, sizeof(title), comp ? "COMPRESSOR %u" : "EXPANDER %u", effectNum_ + 1);
-            snprintf(info, sizeof(info), "THRESH %+3ddB  RATIO %2u:1  ATTACK %3ums  RELEASE %4ums", (int)th, (unsigned)ratio,
+            snprintf(info, sizeof(info), "THR %+3ddB  RATIO %2u:1  ATK %3ums  REL %4ums", (int)th, (unsigned)ratio,
                      (unsigned)((comp ? kCompressorAttackTimeDataLibrary[aIdx].data : kExpanderAttackTimeDataLibrary[aIdx].data) * 1000.0f + 0.5f),
                      (unsigned)((comp ? kCompressorReleaseTimeDataLibrary[rIdx].data : kExpanderReleaseTimeDataLibrary[rIdx].data) * 1000.0f + 0.5f));
             xl[0] = "-48"; xl[1] = "-36"; xl[2] = "-24"; xl[3] = "-12"; xl[4] = "0DB";
@@ -5914,7 +5914,7 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
                 if ((i % 4) < 2) refY[i] = yFromUnit((x + range) / (2.0f * range));
             }
             snprintf(title, sizeof(title), "BITCRUSHER %u", effectNum_ + 1);
-            snprintf(info, sizeof(info), "%2u BIT  RATE 1/%-2u  %s  THRESH %+3ddB  SMOOTH %3u",
+            snprintf(info, sizeof(info), "%2u BIT  RATE 1/%-2u  %s  THR %+3ddB  SMOOTH %3u",
                      (unsigned)kBitcrusherResolutionDataLibrary[b.aResolution].data, (unsigned)hold, (b.mode == BIT_FOLD) ? "FOLD" : "CLIP",
                      (int)kBitcrusherThresholdDataLibrary[b.cThreshold].data, b.dSmooth);
             xl[0] = "0"; xl[1] = ""; xl[2] = "TEST TONE"; xl[3] = ""; xl[4] = "9MS";
@@ -5951,11 +5951,11 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
     lcd.setForeColor(on ? kThemeAccent : kThemeMid);
     snprintf(padded, sizeof(padded), "%-13s", on ? title : "EFFECT OFF");
     lcd.drawText(padded, 13, 30, 139);
-    lcd.setFont(FONT_07x09);
+    lcd.setFont(FONT_10x14);  // bigger summary line (was 7x9)
     lcd.setAlignment(RIGHT);
     lcd.setForeColor(label);
-    snprintf(padded, sizeof(padded), "%54s", info);
-    lcd.drawText(padded, strlen(padded), 930, 144);
+    snprintf(padded, sizeof(padded), "%48s", info);  // 48 chars x 13 px fits beside the title
+    lcd.drawText(padded, strlen(padded), 930, 141);
     lcd.setAlignment(CENTER);
     for (uint8_t q = 0; q < 5; q++) {
         snprintf(padded, sizeof(padded), "%9s", "");
