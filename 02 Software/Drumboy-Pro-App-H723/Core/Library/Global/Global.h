@@ -372,13 +372,16 @@ const uint32_t kChorusByteSize                      = kChorusSize * 4;
 #define RAM_CHORUS_0                                RAM_CHORUS_ADDRESS
 #define RAM_CHORUS_1                                RAM_CHORUS_ADDRESS + (1 * kChorusByteSize)
 
+// Custom: main-screen drawing tables (about 15 KB), right after the preview buffer.
+#define RAM_MAIN_ADDRESS                            0xC0F28000
 // Custom: sample preview buffer, in the free SDRAM gap after the chorus buffers.
 #define RAM_PREVIEW_ADDRESS                         0xC0EA6000                  // up to 3 s of float samples
 const bool kSamplePreview                           = true;                     // play samples while scrolling in INST
 const uint32_t kPreviewMaxSamples                   = 132300;                   // 3.0 s at 44.1 kHz
 const uint32_t kPreviewDelayMs                      = 150;                      // wait this long after the knob stops
 static_assert(RAM_PREVIEW_ADDRESS >= (0xC0E77200 + 2 * 96000), "preview buffer overlaps chorus RAM");
-static_assert(RAM_PREVIEW_ADDRESS + kPreviewMaxSamples * 4 <= 0xC0FB9640, "preview buffer overlaps image RAM");
+static_assert(RAM_PREVIEW_ADDRESS + kPreviewMaxSamples * 4 <= RAM_MAIN_ADDRESS, "preview buffer overlaps main-screen RAM");
+static_assert(RAM_MAIN_ADDRESS + 0x8000 <= 0xC0FB9640, "main-screen RAM overlaps image RAM");
 
 #define RAM_IMAGE_LOGO_ADDRESS                      0xC0FB9640                  // 170px * 170px
 #define RAM_IMAGE_LOGO_PALETTE_ADDRESS              0xC0FB9640                  // 128 bytes
@@ -2251,7 +2254,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.40 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.41 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;

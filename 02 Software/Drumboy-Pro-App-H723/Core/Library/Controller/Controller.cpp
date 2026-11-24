@@ -6073,10 +6073,12 @@ void Controller::page_drawSample() {
 // Drawn column by column from a small per-lane picture (attack + tail heights), so the
 // playhead only needs two columns redrawn per frame and a page flip is one fast sweep.
 
-static uint8_t mainAtt[kLayerLibrarySize][kMainGridW];     // attack line height 0-255 (velocity)
-static uint8_t mainTail[kLayerLibrarySize][kMainGridW];    // decay tail height 0-255
+// These tables live in spare SDRAM (internal RAM is full): see RAM_MAIN_ADDRESS.
+typedef uint8_t MainLaneRow[kMainGridW];
+static MainLaneRow* const mainAtt = (MainLaneRow*)(RAM_MAIN_ADDRESS);                                        // attack height 0-255
+static MainLaneRow* const mainTail = (MainLaneRow*)(RAM_MAIN_ADDRESS + kLayerLibrarySize * kMainGridW);      // decay tail height 0-255
 static int16_t mainSelCol = -1;                            // selected hit column (SEQ menu), drawn violet
-static uint16_t stripBits[kMainGridW];                     // overview strip: which lanes have a hit in each column
+static uint16_t* const stripBits = (uint16_t*)(RAM_MAIN_ADDRESS + 2 * kLayerLibrarySize * kMainGridW + 8);   // overview strip lane bits
 static bool stripDirty = true;
 static int16_t stripPlay = -1;
 
@@ -26310,9 +26312,9 @@ void Controller::interruptPlay() {
                                         break;  // MUTED: 0% velocity
                                 }
                             }
-                            swingDelayTicks[layer.number] = groove_swingDelay(layer.number, playInterval);   // custom per-drum swing
+                            swingDelayTicks[i] = groove_swingDelay(i, playInterval);   // custom per-drum swing
                             if (fillVolMultiplier > 0.0f) layer_playBeat(layer.number, fillVolMultiplier);
-                            swingDelayTicks[layer.number] = 0;
+                            swingDelayTicks[i] = 0;
 
                             // Advance to the next beat index
                             (playBeatNum < bank.lastActiveBeatNum) ? bank.playBeatNum += 1 : bank.playBeatNum = 0;
