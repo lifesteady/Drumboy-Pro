@@ -8073,7 +8073,7 @@ void Controller::page_drawEq() {
 void Controller::page_drawPunchMeter(uint8_t effectNum_) {
     /// @brief Custom PUNCH page: live gain-reduction meter right of the graph (0 to -24 dB, top down).
     const Compressor& cp = effect[effectNum_].compressor;
-    const uint16_t mx = 884, mw = 18, top = 190, bot = 400, h = bot - top;
+    const uint16_t mx = 900, mw = 18, top = 198, bot = 400, h = bot - top;
     float gr = -cp.grDisplay;
     if (!effect[effectNum_].active) gr = 0.0f;
     if (gr > 24.0f) gr = 24.0f;
@@ -8088,7 +8088,7 @@ void Controller::page_drawPunchMeter(uint8_t effectNum_) {
     lcd.setAlignment(CENTER);
     lcd.setBackColor(BLACK);
     lcd.setForeColor(kThemeHeader);
-    lcd.drawText("GR", 2, mx + mw / 2, bot + 8);
+    lcd.drawText("GR", 2, mx + mw / 2, top - 15);   // above the meter, clear of the 0DB axis label
 }
 
 void Controller::page_drawEffect(uint8_t effectNum_) {
@@ -8414,10 +8414,13 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
     page_drawSummary(info);
     lcd.setAlignment(CENTER);
     for (uint8_t q = 0; q < 5; q++) {
-        snprintf(padded, sizeof(padded), "%9s", "");
-        const uint8_t len = strlen(xl[q]);
-        memcpy(padded + (9 - len) / 2, xl[q], len);
-        lcd.drawText(padded, 9, gx + (gw * q) / 4, gBot + 8);
+        // at least 6 wide (fixed width so values never leave old characters behind); was 9, which
+        // blanked the PUNCH meter's label at the right end. Longer labels (TEST TONE) keep their length.
+        const uint8_t len = (strlen(xl[q]) < 12) ? strlen(xl[q]) : 12;
+        const uint8_t w = (len > 6) ? len : 6;
+        snprintf(padded, sizeof(padded), "%*s", (int)w, "");
+        memcpy(padded + (w - len) / 2, xl[q], len);
+        lcd.drawText(padded, w, gx + (gw * q) / 4, gBot + 8);
     }
     lcd.setAlignment(RIGHT);
     for (uint8_t q = 0; q < 3; q++) {
