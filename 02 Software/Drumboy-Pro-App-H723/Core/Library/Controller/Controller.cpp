@@ -4022,6 +4022,14 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
         case ENC_PITCH_SCALE: pitch_knob(2, 1); break;
         case ENC_PITCH_OCTAVE: pitch_knob(3, 1); break;
         case ENC_PITCH_ROOTPAD: pitch_knob(4, 1); break;
+        case ENC_FILE_TAB0: fileKnob(false, 0, 1); break;
+        case ENC_FILE_TAB1: fileKnob(false, 1, 1); break;
+        case ENC_FILE_TAB2: fileKnob(false, 2, 1); break;
+        case ENC_FILE_TAB3: fileKnob(false, 3, 1); break;
+        case ENC_KIT_TAB0: fileKnob(true, 0, 1); break;
+        case ENC_KIT_TAB1: fileKnob(true, 1, 1); break;
+        case ENC_KIT_TAB2: fileKnob(true, 2, 1); break;
+        case ENC_KIT_TAB3: fileKnob(true, 3, 1); break;
         case ENC_PITCH_LEVEL: pitch_knob(5, 1); break;
         case ENC_PITCH_TUNE: pitch_knob(6, 1); break;
 
@@ -4617,6 +4625,14 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
         case ENC_PITCH_SCALE: pitch_knob(2, -1); break;
         case ENC_PITCH_OCTAVE: pitch_knob(3, -1); break;
         case ENC_PITCH_ROOTPAD: pitch_knob(4, -1); break;
+        case ENC_FILE_TAB0: fileKnob(false, 0, -1); break;
+        case ENC_FILE_TAB1: fileKnob(false, 1, -1); break;
+        case ENC_FILE_TAB2: fileKnob(false, 2, -1); break;
+        case ENC_FILE_TAB3: fileKnob(false, 3, -1); break;
+        case ENC_KIT_TAB0: fileKnob(true, 0, -1); break;
+        case ENC_KIT_TAB1: fileKnob(true, 1, -1); break;
+        case ENC_KIT_TAB2: fileKnob(true, 2, -1); break;
+        case ENC_KIT_TAB3: fileKnob(true, 3, -1); break;
         case ENC_PITCH_LEVEL: pitch_knob(5, -1); break;
         case ENC_PITCH_TUNE: pitch_knob(6, -1); break;
 
@@ -6659,6 +6675,25 @@ int8_t Controller::pitch_padNote(uint8_t pad_) {
     if (n < -36) n = -36;
     if (n > 36) n = 36;
     return (int8_t)n;
+}
+
+void Controller::fileKnob(bool kit_, uint8_t tab_, int8_t step_) {
+    /// @brief Custom: File / Drumkit menus. Each top knob belongs to the tab above it (NEW, LOAD, SAVE,
+    /// CLEAR): the first click jumps to that tab, further clicks scroll through the slots.
+    if (menuTab != tab_) {
+        uint8_t guard = 0;
+        while ((menuTab != tab_) && (guard++ < 4)) kit_ ? drumkit_menuRight() : file_menuRight();
+        // LOAD / SAVE start at the project you have open (File menu)
+        if (!kit_ && (tab_ != 0) && (currentFileNum >= 0)) {
+            fileMenuCounter = (int8_t)currentFileNum;
+            file_menuUp();
+            file_menuDown();
+        }
+        return;
+    }
+    if (tab_ == 0) return;   // NEW has nothing to scroll
+    if (kit_) (step_ > 0) ? drumkit_menuUp() : drumkit_menuDown();
+    else (step_ > 0) ? file_menuUp() : file_menuDown();
 }
 
 void Controller::pitch_knob(uint8_t which_, int8_t step_) {

@@ -472,6 +472,7 @@ class Controller {
     void preview_schedule(uint8_t layerNum_);
     void lcd_drawProjectName();
     int8_t pitch_padNote(uint8_t pad_);
+    void fileKnob(bool kit_, uint8_t tab_, int8_t step_);
     void pitch_knob(uint8_t which_, int8_t step_);
     void pitch_pad(uint8_t pad_);
     void lcd_drawIo_PitchData();

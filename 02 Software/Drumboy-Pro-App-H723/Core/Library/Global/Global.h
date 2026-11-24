@@ -1300,7 +1300,15 @@ typedef enum {
     ENC_PITCH_OCTAVE                                = 0x6E,
     ENC_PITCH_ROOTPAD                               = 0x6F,
     ENC_PITCH_LEVEL                                 = 0x70,
-    ENC_PITCH_TUNE                                  = 0x71
+    ENC_PITCH_TUNE                                  = 0x71,
+    ENC_FILE_TAB0                                   = 0x72,  // custom: File / Drumkit knobs pick the tab and scroll slots
+    ENC_FILE_TAB1                                   = 0x73,
+    ENC_FILE_TAB2                                   = 0x74,
+    ENC_FILE_TAB3                                   = 0x75,
+    ENC_KIT_TAB0                                    = 0x76,
+    ENC_KIT_TAB1                                    = 0x77,
+    ENC_KIT_TAB2                                    = 0x78,
+    ENC_KIT_TAB3                                    = 0x79
 } EncoderFunc;
 
 const EncoderFunc encoderLocalFunction[][8] = {
@@ -1309,9 +1317,9 @@ const EncoderFunc encoderLocalFunction[][8] = {
     // GLOBAL_MENU = 0x01
     {ENC_FNC_OFF, ENC_FNC_OFF, ENC_FNC_OFF, ENC_FNC_OFF, ENC_FNC_OFF, ENC_FNC_OFF, ENC_FNC_OFF, ENC_FNC_OFF},
     // FILE_MENU = 0x02
-    {ENC_FNC_OFF, ENC_FNC_OFF, ENC_FNC_OFF, ENC_FNC_OFF, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE},
+    {ENC_FILE_TAB0, ENC_FILE_TAB1, ENC_FILE_TAB2, ENC_FILE_TAB3, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE},
     // DRUMKIT_MENU = 0x03
-    {ENC_FNC_OFF, ENC_FNC_OFF, ENC_FNC_OFF, ENC_FNC_OFF, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE},
+    {ENC_KIT_TAB0, ENC_KIT_TAB1, ENC_KIT_TAB2, ENC_KIT_TAB3, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE},
     // MIXER_MENU = 0x04
     {ENC_MIXER_MASTERVOLUME, ENC_MIXER_HPVOLUME, ENC_MIXER_LOVOLUME, ENC_MIXER_LIVOLUME, ENC_MIXER_LIMIXERIN, ENC_MIXER_PAN, ENC_MIXER_LIMITER, ENC_MIXER_NORMALIZE},
     // RHYTHM_MENU = 0x05
@@ -1487,7 +1495,15 @@ const EncoderFuncData kEncoderFuncDataLibrary[] = {
     {ENC_PITCH_OCTAVE,        ENC_RES_S, "OCTAVE    ", "PITCH ", "   ", false},
     {ENC_PITCH_ROOTPAD,       ENC_RES_S, "ROOT-PAD  ", "PITCH ", "   ", false},
     {ENC_PITCH_LEVEL,         ENC_RES_F, "LEVEL     ", "PITCH ", "  %", false},
-    {ENC_PITCH_TUNE,          ENC_RES_F, "TUNE      ", "PITCH ", "   ", false}
+    {ENC_PITCH_TUNE,          ENC_RES_F, "TUNE      ", "PITCH ", "   ", false},
+    {ENC_FILE_TAB0,           ENC_RES_S, "NEW       ", "FILE  ", "   ", false},
+    {ENC_FILE_TAB1,           ENC_RES_S, "LOAD      ", "FILE  ", "   ", false},
+    {ENC_FILE_TAB2,           ENC_RES_S, "SAVE      ", "FILE  ", "   ", false},
+    {ENC_FILE_TAB3,           ENC_RES_S, "CLEAR     ", "FILE  ", "   ", false},
+    {ENC_KIT_TAB0,            ENC_RES_S, "NEW       ", "KIT   ", "   ", false},
+    {ENC_KIT_TAB1,            ENC_RES_S, "LOAD      ", "KIT   ", "   ", false},
+    {ENC_KIT_TAB2,            ENC_RES_S, "SAVE      ", "KIT   ", "   ", false},
+    {ENC_KIT_TAB3,            ENC_RES_S, "CLEAR     ", "KIT   ", "   ", false}
 };
 
 // Knobs while the Pitch page is open (all 8 belong to Pitch mode).
@@ -1499,7 +1515,7 @@ const EncoderFunc kSamplePageFunctions[8] = {ENC_INST_0_INST, ENC_INST_0_SAMPLE,
                                              ENC_INST_1_START, ENC_INST_1_END, ENC_SMP_DECAY, ENC_FNC_NONE};
 
 // The table above is indexed by EncoderFunc value, so every entry must sit at its own enum number.
-static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_PITCH_TUNE + 1,
+static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_KIT_TAB3 + 1,
               "kEncoderFuncDataLibrary must have one entry per EncoderFunc value");
 
 typedef enum {
@@ -2283,7 +2299,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.51 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.52 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
