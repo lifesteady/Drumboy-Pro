@@ -7387,8 +7387,13 @@ void Controller::page_drawFilter(uint8_t filterNum_) {
         case FIL_HPF: b0 = (1 + cw) * 0.5f; b1 = -(1 + cw); b2 = (1 + cw) * 0.5f; a0 = 1 + alpha; a1 = -2 * cw; a2 = 1 - alpha; break;
         case FIL_BPF: b0 = alpha; b1 = 0; b2 = -alpha; a0 = 1 + alpha; a1 = -2 * cw; a2 = 1 - alpha; break;
         case FIL_BSF: b0 = 1; b1 = -2 * cw; b2 = 1; a0 = 1 + alpha; a1 = -2 * cw; a2 = 1 - alpha; break;
+        case FIL_CLASSIC: {
+            const float ac = sw / (2.0f * (0.707f + (Q - 0.70f) * kFilterClassicQScale));
+            b0 = (1 - cw) * 0.5f; b1 = 1 - cw; b2 = (1 - cw) * 0.5f; a0 = 1 + ac; a1 = -2 * cw; a2 = 1 - ac;
+        } break;
         default: break;
     }
+    const bool vintage = (f.type == FIL_VINTAGE);
     b0 /= a0; b1 /= a0; b2 /= a0; a1 /= a0; a2 /= a0;
     const float drive = 1.0f + (f.drive * 0.04f);
     const float wet = f.wet / 100.0f, dry = f.dry / 100.0f;
@@ -7443,13 +7448,16 @@ void Controller::page_drawFilter(uint8_t filterNum_) {
     snprintf(title, sizeof(title), on ? "FILTER %u    " : "FILTER %u OFF", filterNum_ + 1);
     lcd.drawText(title, 12, 30, 136);
 
-    const char* typeName[] = {"OFF", "LOWPASS", "HIGHPASS", "BANDPASS", "BANDSTOP"};
+    const char* typeName[] = {"OFF", "LOWPASS", "HIGHPASS", "BANDPASS", "BANDSTOP", "CLASSIC", "VINTAGE"};
     char cut[10];
     (cutoff >= 1000.0f) ? snprintf(cut, sizeof(cut), "%u.%uK", (unsigned)(cutoff / 1000), (unsigned)((uint32_t)cutoff % 1000) / 100)
                         : snprintf(cut, sizeof(cut), "%u", (unsigned)cutoff);
     char info[64];
-    snprintf(info, sizeof(info), "%s  SLOPE %u DB  CUTOFF %s HZ  RESONANCE %u.%02u  DRIVE %u", typeName[(f.type <= 4) ? f.type : 0],
-             f.slope ? 12 : 6, cut, (unsigned)Q, (unsigned)(Q * 100) % 100, f.drive);
+    if (vintage)
+        snprintf(info, sizeof(info), "VINTAGE  %s  CUTOFF %5s HZ  RESONANCE %3u  DRIVE %3u", f.slope ? "12-BIT 26K" : "CLEAN     ", cut, f.resonance, f.drive);
+    else
+        snprintf(info, sizeof(info), "%s  SLOPE %2u DB  CUTOFF %5s HZ  RESONANCE %u.%02u  DRIVE %3u", typeName[(f.type <= 6) ? f.type : 0],
+                 f.slope ? 12 : 6, cut, (unsigned)Q, (unsigned)(Q * 100) % 100, f.drive);
     page_drawSummary(info);
 
     // ---- 5. response, column by column (no full clear => no flicker)
@@ -7466,7 +7474,20 @@ void Controller::page_drawFilter(uint8_t filterNum_) {
         const float dr = 1 + a1 * c1 + a2 * c2, di = -(a1 * s1 + a2 * s2);
         const float dd = dr * dr + di * di;
         float hr = (nr * dr + ni * di) / dd, hi = (ni * dr - nr * di) / dd;
-        if (!f.slope) { hr = 0.5f * hr + 0.5f; hi = 0.5f * hi; }            // 6 dB mode
+        if (vintage) {
+            // 4 one-pole stages G = g / (1 - (1-g) z^-1) with feedback k: H = G^4 / (1 + k G^4)
+            const float gg = f.vg, kk = f.vk;
+            const float pr = 1.0f - (1.0f - gg) * c1, pi = (1.0f - gg) * s1;          // denominator of G
+            const float pd = pr * pr + pi * pi;
+            float gr = gg * pr / pd, gi = -gg * pi / pd;                                 // G
+            float g2r = gr * gr - gi * gi, g2i = 2 * gr * gi;                            // G^2
+            float g4r = g2r * g2r - g2i * g2i, g4i = 2 * g2r * g2i;                      // G^4
+            const float er = 1.0f + kk * g4r, ei = kk * g4i;
+            const float ed = er * er + ei * ei;
+            const float mk = 1.0f + 0.5f * kk;
+            hr = mk * (g4r * er + g4i * ei) / ed;
+            hi = mk * (g4i * er - g4r * ei) / ed;
+        } else if (!f.slope) { hr = 0.5f * hr + 0.5f; hi = 0.5f * hi; }    // 6 dB mode
         if (!on) { hr = 1.0f; hi = 0.0f; }                                  // bypass draws flat
         const float outR = on ? (drive * wet * hr + dry) : 1.0f;
         const float outI = on ? (drive * wet * hi) : 0.0f;
@@ -13441,7 +13462,8 @@ void Controller::lcd_drawFilter_SlopeData(uint8_t filterNum_) {
 
     // 2. VALUE DRAW
     // Draw filter slope text.
-    lcd.drawText(kFilterSlopeDataLibrary[filter[filterNum_].slope].nameLongR, kMenuDataTextSize, kMenuDataX[2], kMenuDataY[2]);
+    if (filter[filterNum_].type == FIL_VINTAGE) lcd.drawText(filter[filterNum_].slope ? "    12-BIT" : "     CLEAN", kMenuDataTextSize, kMenuDataX[2], kMenuDataY[2]);   // custom
+    else lcd.drawText(kFilterSlopeDataLibrary[filter[filterNum_].slope].nameLongR, kMenuDataTextSize, kMenuDataX[2], kMenuDataY[2]);
 }
 
 void Controller::lcd_drawFilter_FrequencyData(uint8_t filterNum_) {
@@ -25924,10 +25946,37 @@ float Controller::processAudioFilterHelper(uint8_t filterNum_, float audio_) {
             input = softKneeClip(input);
         }
 
+        float filteredSample;
+        float finalFilterOut;
+        if (filter_.type == FIL_VINTAGE) {
+            // Custom VINTAGE: optional 26 kHz / 12-bit sampler (SLOPE knob = 12-BIT on/off, aliasing left in
+            // on purpose), then a warm 4-pole ladder low-pass with soft saturation in its feedback.
+            float x = input;
+            if (filter_.slope) {
+                filter_.spPhase += kFilterVintageRate * kInvSampleRate;
+                if (filter_.spPhase >= 1.0f) {
+                    filter_.spPhase -= 1.0f;
+                    float q = x;
+                    if (q > 1.0f) q = 1.0f;
+                    if (q < -1.0f) q = -1.0f;
+                    filter_.spHeld = roundf(q * 2048.0f) * (1.0f / 2048.0f);
+                }
+                x = filter_.spHeld;
+            }
+            const float g = filter_.vg;
+            const float u = filterFastTanh(x - filter_.vk * filter_.vs[3]);
+            filter_.vs[0] += g * (u - filter_.vs[0]) + FILTER_ANTI_DENORMAL;
+            filter_.vs[1] += g * (filter_.vs[0] - filter_.vs[1]);
+            filter_.vs[2] += g * (filter_.vs[1] - filter_.vs[2]);
+            filter_.vs[3] += g * (filter_.vs[2] - filter_.vs[3]);
+            filteredSample = filter_.vs[3] * (1.0f + 0.5f * filter_.vk);   // make up the level resonance takes away
+            if (!(filteredSample > -8.0f && filteredSample < 8.0f)) { filter_.cleanMemory(); filteredSample = 0.0f; }
+            finalFilterOut = filteredSample;
+        } else {
         // 3. BIQUAD CALCULATION
         // Compute filtered sample with anti-denormal protection.
 
-        float filteredSample = (filter_.b0 * input) + (filter_.b1 * filter_.x1) + (filter_.b2 * filter_.x2) - (filter_.a1 * filter_.y1) - (filter_.a2 * filter_.y2) + FILTER_ANTI_DENORMAL;
+        filteredSample = (filter_.b0 * input) + (filter_.b1 * filter_.x1) + (filter_.b2 * filter_.x2) - (filter_.a1 * filter_.y1) - (filter_.a2 * filter_.y2) + FILTER_ANTI_DENORMAL;
 
         // 4. FILTER HISTORY UPDATE
         // Shift input/output delay-line history buffers.
@@ -25937,16 +25986,18 @@ float Controller::processAudioFilterHelper(uint8_t filterNum_, float audio_) {
         filter_.y2 = filter_.y1;
         filter_.y1 = filteredSample;
 
+        // Custom CLASSIC: a touch of round, soft saturation on the way out.
+        if (filter_.type == FIL_CLASSIC) filteredSample = 1.25f * filterFastTanh(0.8f * filteredSample);
+
         // 5. SLOPE & MIX RESOLUTION
         // Resolve slope mode and wet/dry transition mix.
-
-        float finalFilterOut;
 
         // Determine filter slope (0 = 6dB, 1 = 12dB)
         if (filter_.slope == 0) {
             finalFilterOut = (filteredSample * 0.5f) + (input * 0.5f);
         } else {
             finalFilterOut = filteredSample;
+        }
         }
 
         // Apply transition mix or standard wet/dry levels

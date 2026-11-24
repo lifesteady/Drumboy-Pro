@@ -2301,7 +2301,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.57 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.60 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -2700,7 +2700,7 @@ const uint8_t kMinFilter                            = 0;
 const uint8_t kMaxFilter                            = 1;
 
 const uint8_t kMinFilterType                        = 1;
-const uint8_t kMaxFilterType                        = 4;
+const uint8_t kMaxFilterType                        = 6;   // custom: + CLASSIC, VINTAGE
 
 const uint8_t kMinFilterSlope                       = 0;
 const uint8_t kMaxFilterSlope                       = 1;
@@ -2738,8 +2738,21 @@ typedef enum {
     FIL_LPF                                         = 0x01,
     FIL_HPF                                         = 0x02,
     FIL_BPF                                         = 0x03,
-    FIL_BSF                                         = 0x04
+    FIL_BSF                                         = 0x04,
+    FIL_CLASSIC                                     = 0x05,  // custom: smooth, polite resonant low-pass (MPC3000 flavour)
+    FIL_VINTAGE                                     = 0x06   // custom: 26 kHz / 12-bit grit + warm 4-pole low-pass (SP-1200 flavour)
 } FilterType;
+
+// Custom character filters
+const float kFilterClassicQScale                    = 0.35f;     // CLASSIC: resonance tamed to about a third
+const float kFilterVintageRate                      = 26040.0f;  // VINTAGE: sampler rate
+const float kFilterVintageMaxFeedback               = 3.8f;      // VINTAGE: ladder resonance at 100 (4.0 = self-oscillation)
+inline float filterFastTanh(float x) {
+    if (x > 3.0f) return 1.0f;
+    if (x < -3.0f) return -1.0f;
+    const float x2 = x * x;
+    return x * (27.0f + x2) / (27.0f + 9.0f * x2);
+}
 
 struct FilterTypeData {
     char nameLongR[11];
@@ -2750,7 +2763,9 @@ const struct FilterTypeData kFilterTypeDataLibrary[] = {
     {"   LOWPASS"}, 
     {"  HIGHPASS"}, 
     {"  BANDPASS"}, 
-    {"  BANDSTOP"}};
+    {"  BANDSTOP"},
+    {"   CLASSIC"},
+    {"   VINTAGE"}};
 
 struct FilterSlopeData {
     char nameLongR[11];
@@ -2953,6 +2968,13 @@ struct Filter {
     float y1                                        = 0.0f;
     float y2                                        = 0.0f;
 
+    // custom VINTAGE state: 4-pole ladder + 26 kHz / 12-bit sampler
+    float vg                                        = 0.5f;   // one-pole coefficient
+    float vk                                        = 0.0f;   // ladder feedback (resonance)
+    float vs[4]                                     = {0.0f, 0.0f, 0.0f, 0.0f};
+    float spPhase                                   = 0.0f;
+    float spHeld                                    = 0.0f;
+
     void initialize() {
         active = kInitialFilterActive;
         type = kInitialFilterType[num];
@@ -2981,7 +3003,26 @@ struct Filter {
         float sinw0 = sinFast(normFreq);
         alpha = sinw0 / (2.0f * Q);
 
+        // custom character filters
+        if (type == FIL_CLASSIC) alpha = sinw0 / (2.0f * (0.707f + (Q - 0.70f) * kFilterClassicQScale));
+        if (type == FIL_VINTAGE) {
+            float fc = freq;
+            if (fc > 0.45f * AUDIO_SAMPLE_RATE) fc = 0.45f * AUDIO_SAMPLE_RATE;
+            vg = 1.0f - expf(-2.0f * 3.14159265f * fc * kInvSampleRate);
+            vk = kFilterVintageMaxFeedback * (float)resonance / 100.0f;
+        }
+
         switch (type) {
+            case FIL_CLASSIC:   // a gentle 2-pole low-pass (same shape as LPF, tamed resonance)
+            case FIL_VINTAGE:   // (biquad unused; kept as LPF so transitions stay sane)
+                b0_tmp = (1.0f - cosw0) * 0.5f;
+                b1_tmp = 1.0f - cosw0;
+                b2_tmp = (1.0f - cosw0) * 0.5f;
+                a0_tmp = 1.0f + alpha;
+                a1_tmp = -2.0f * cosw0;
+                a2_tmp = 1.0f - alpha;
+                break;
+
             case FIL_OFF:
                 b0_tmp = 1.0f;
                 b1_tmp = 0.0f;
@@ -3051,6 +3092,9 @@ struct Filter {
         x2 = 0.0f;
         y1 = 0.0f;
         y2 = 0.0f;
+        vs[0] = vs[1] = vs[2] = vs[3] = 0.0f;
+        spPhase = 0.0f;
+        spHeld = 0.0f;
     }
 
     Filter(uint8_t num_) : num(num_) {}
