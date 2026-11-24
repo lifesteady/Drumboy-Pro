@@ -1285,7 +1285,9 @@ typedef enum {
     ENC_RHYTHM_SWINGGRID                            = 0x63,
 
     ENC_LFO_TARGET                                  = 0x64,  // custom: LFO page target row
-    ENC_LFO_SELECT                                  = 0x65   // custom: step through LFO 1-10
+    ENC_LFO_SELECT                                  = 0x65,  // custom: step through LFO 1-10
+    ENC_GROOVE_DRUMSWING                            = 0x66,  // custom: Rhythm menu knob 7
+    ENC_GROOVE_CORRECT                              = 0x67   // custom: Rhythm menu knob 8
 } EncoderFunc;
 
 const EncoderFunc encoderLocalFunction[][8] = {
@@ -1300,7 +1302,7 @@ const EncoderFunc encoderLocalFunction[][8] = {
     // MIXER_MENU = 0x04
     {ENC_MIXER_MASTERVOLUME, ENC_MIXER_HPVOLUME, ENC_MIXER_LOVOLUME, ENC_MIXER_LIVOLUME, ENC_MIXER_LIMIXERIN, ENC_MIXER_PAN, ENC_MIXER_LIMITER, ENC_MIXER_NORMALIZE},
     // RHYTHM_MENU = 0x05
-    {ENC_RHYTHM_TEMPO, ENC_RHYTHM_MEASURE, ENC_RHYTHM_BAR, ENC_RHYTHM_QUANTIZE, ENC_RHYTHM_SWING, ENC_RHYTHM_SWINGGRID, ENC_FNC_NONE, ENC_FNC_NONE},
+    {ENC_RHYTHM_TEMPO, ENC_RHYTHM_MEASURE, ENC_RHYTHM_BAR, ENC_RHYTHM_QUANTIZE, ENC_RHYTHM_SWING, ENC_RHYTHM_SWINGGRID, ENC_GROOVE_DRUMSWING, ENC_GROOVE_CORRECT},
     // METRO_MENU = 0x06
     {ENC_METRO_ACTIVE, ENC_METRO_PRECOUNT, ENC_METRO_SAMPLE, ENC_METRO_VOLUME, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE},
     // IO_MENU = 0x07
@@ -1460,11 +1462,13 @@ const EncoderFuncData kEncoderFuncDataLibrary[] = {
     {ENC_RHYTHM_SWINGGRID,    ENC_RES_S, "SWING-GRID", "RHY   ", "   ", false},
 
     {ENC_LFO_TARGET,          ENC_RES_S, "TARGET    ", "LFO   ", "   ", false},
-    {ENC_LFO_SELECT,          ENC_RES_S, "LFO       ", "LFO   ", "   ", false}
+    {ENC_LFO_SELECT,          ENC_RES_S, "LFO       ", "LFO   ", "   ", false},
+    {ENC_GROOVE_DRUMSWING,    ENC_RES_M, "DRUM-SWING", "RHY   ", "  %", false},
+    {ENC_GROOVE_CORRECT,      ENC_RES_S, "CORRECT   ", "RHY   ", "  %", false}
 };
 
 // The table above is indexed by EncoderFunc value, so every entry must sit at its own enum number.
-static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_LFO_SELECT + 1,
+static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_GROOVE_CORRECT + 1,
               "kEncoderFuncDataLibrary must have one entry per EncoderFunc value");
 
 typedef enum {
@@ -2186,8 +2190,16 @@ typedef enum {
     PAGE_EQ                                         = 0x04,
     PAGE_EFFECT_0                                   = 0x05,
     PAGE_EFFECT_1                                   = 0x06,
-    PAGE_LFO                                        = 0x07
+    PAGE_LFO                                        = 0x07,
+    PAGE_GROOVE                                     = 0x08   // Rhythm key twice: per-drum swing + timing correct
 } PageView;
+
+// Custom groove: each drum can swing MORE than the master swing (extra 0-25 %), and
+// Timing Correct pulls a drum's hits toward the QUANTIZE grid by a chosen strength.
+const uint8_t kMaxDrumSwing                         = 25;
+const uint8_t kMaxTotalSwing                        = 80;   // master + drum extra never goes past this
+const uint8_t kInitialCorrect                       = 50;   // %
+const uint8_t kCorrectStep                          = 5;
 
 const uint16_t kPageX                               = 20;
 const uint16_t kPageY                               = 131;
@@ -2204,7 +2216,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.29 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.30 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -7307,6 +7319,7 @@ struct Layer {
     uint8_t end                                     = kInitialLayerEnd;
     uint8_t timing                                  = kInitialLayerTiming;
     uint8_t probability                             = kInitialLayerProbability;
+    uint8_t swingExtra                              = 0;   // custom: extra swing for this drum (0-25 %)
 
     uint8_t lfoLevel                                = kInitialLayerLfo;
     uint8_t lfoPitch                                = kInitialLayerLfo;

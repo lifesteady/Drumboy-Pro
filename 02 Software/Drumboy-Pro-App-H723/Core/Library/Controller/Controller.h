@@ -471,6 +471,13 @@ class Controller {
     void lfo_toggleTarget(uint8_t layerNum_);
     void preview_schedule(uint8_t layerNum_);
     void lcd_drawProjectName();
+    uint16_t groove_swingDelay(uint8_t layerNum_, uint16_t interval_);
+    uint16_t groove_unswing(uint8_t layerNum_, uint16_t interval_);
+    void groove_setDrumSwing(uint8_t layerNum_, int16_t value_);
+    void groove_timingCorrect(uint8_t layerNum_);
+    void groove_knob(bool drumSwing_, int8_t step_);
+    void page_drawGroove();
+    void lcd_drawRhythm_GrooveData();
     void lcd_drawMenuLabel(Menu menu_, int16_t num_);
     uint32_t undo_slotAddress(uint8_t pos_);
     void undo_save(uint8_t pos_);
@@ -503,6 +510,10 @@ class Controller {
     bool textUndoFlag = false;
     char undoText[6] = "UNDO ";
     int16_t currentFileNum = -1;                                        // project shown top-right (-1 = new, unsaved)
+    uint8_t grooveLayer = 0;                                            // Groove page: selected drum
+    uint8_t grooveCorrect = kInitialCorrect;                            // Timing Correct strength %
+    char grooveMessage[48] = "";                                        // Groove page status line
+    volatile uint16_t swingDelayTicks[kLayerLibrarySize] = {0};         // per-drum swing delay for the hit being triggered
     bool previewPending = false;                                        // sample preview waiting for the knob to settle
     uint8_t previewLayer = 0;
     uint32_t previewTick = 0;

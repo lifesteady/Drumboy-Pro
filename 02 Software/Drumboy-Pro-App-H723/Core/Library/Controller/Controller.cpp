@@ -548,7 +548,7 @@ void Controller::update() {
                 if (recordActive) {
                     undo_checkpoint(UNDO_RECORD);   // custom: one undo step per take
                     if (!metronome.precountState) {
-                        layerSong_setBeat(layerNum, activeSongBank, playInterval, 0, 0, 0, 0, true);
+                        layerSong_setBeat(layerNum, activeSongBank, groove_unswing(layerNum, playInterval), 0, 0, 0, 0, true);
                     } else {
                         // Note landed during precount; commit it to position 0 once playback starts.
                         precountPendingBeat[layerNum] = true;
@@ -1632,6 +1632,19 @@ void Controller::keyboard_action() {
                             ledLayerPlayMode = false;
                             ledLayerSelectFlag = true;
                             ledLayerSelectData = 0x03 << (selectedSongBank * 2);
+                        } else if ((page == PAGE_GROOVE) && (menu == RHYTHM_MENU) && (!alertFlag)) {
+                            // Custom: Groove page. Pad = pick drum (and hear it); ADD + pad = Timing Correct.
+                            if (keyboard.shiftKeyPress) {
+                                undo_cancelShiftActions();
+                                grooveLayer = layerNum;
+                                groove_timingCorrect(layerNum);
+                            } else {
+                                grooveLayer = layerNum;
+                                page_markDirty(PAGE_GROOVE);
+                                lcd_drawRhythm_GrooveData();
+                                Layer& layer = layerLibrary[layerNum];
+                                if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(layerNum, 1.0f);
+                            }
                         } else if ((page == PAGE_LFO) && (menu == LFO_MENU) && (!alertFlag)) {
                             // Custom: on the LFO page a pad adds/removes that drum on the target row.
                             // The drum still sounds (so you hear what you picked) but nothing is recorded.
@@ -1650,7 +1663,7 @@ void Controller::keyboard_action() {
                             if (recordActive) {
                                 undo_checkpoint(UNDO_RECORD);   // custom: one undo step per take
                                 if (!metronome.precountState) {
-                                    layerSong_setBeat(layerNum, activeSongBank, playInterval, 0, 0, 0, 0, true);
+                                    layerSong_setBeat(layerNum, activeSongBank, groove_unswing(layerNum, playInterval), 0, 0, 0, 0, true);
                                 } else {
                                     // Hit landed during precount; commit it to position 0 once playback starts.
                                     precountPendingBeat[layerNum] = true;
@@ -2161,6 +2174,7 @@ void Controller::keyboard_action() {
                                             break;
 
                                         case RHYTHM_MENU:
+                                            if (page == PAGE_GROOVE) break;   // custom: ADD is the Timing Correct modifier here
                                             rhythmLockKeyFlag = true;
                                             startLongKeyTimer();
                                             break;
@@ -2596,7 +2610,8 @@ void Controller::keyboard_action() {
                                 break;
 
                             case KEY_RHYTHM:
-                                if (!alertFlag) rhythm_select();
+                                // Custom: pressing Rhythm again opens / closes the Groove page.
+                                if (!alertFlag) (menu == RHYTHM_MENU) ? page_toggle(PAGE_GROOVE) : rhythm_select();
                                 break;
 
                             case KEY_METRONOME:
@@ -3916,6 +3931,14 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
             lfo_select((uint8_t)((selectedLfoNum + 1) % kLfoLibrarySize));
             break;
 
+        case ENC_GROOVE_DRUMSWING:
+            groove_knob(true, 1);
+            break;
+
+        case ENC_GROOVE_CORRECT:
+            groove_knob(false, 1);
+            break;
+
             // Layer inst functions
 
         case ENC_INST_0_INST:
@@ -4481,6 +4504,14 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
 
         case ENC_LFO_SELECT:
             lfo_select((uint8_t)((selectedLfoNum + kLfoLibrarySize - 1) % kLfoLibrarySize));
+            break;
+
+        case ENC_GROOVE_DRUMSWING:
+            groove_knob(true, -1);
+            break;
+
+        case ENC_GROOVE_CORRECT:
+            groove_knob(false, -1);
             break;
 
             // Layer inst functions
@@ -5433,6 +5464,203 @@ void Controller::undo_showText(const char* text_) {
     textUndoFlag = true;
 }
 
+////////////////////////////////////////////////////////////////////////////////
+/* Custom: Groove (per-drum swing, Timing Correct) ---------------------------*/
+////////////////////////////////////////////////////////////////////////////////
+
+uint16_t Controller::groove_swingDelay(uint8_t layerNum_, uint16_t interval_) {
+    /// @brief Extra delay (sequencer ticks) for one hit of a drum with its own swing.
+    /// Only hits near the second note of each swing pair move. The master swing already stretches
+    /// the clock, so the extra amount is converted with the squeezed second-half tick length.
+    if (layerNum_ >= kLayerLibrarySize) return 0;
+    const uint8_t extraWanted = layerLibrary[layerNum_].swingExtra;
+    if (extraWanted == 0) return 0;
+    const uint8_t master = (rhythm.swing >= kMinSwing) ? rhythm.swing : kMinSwing;
+    const uint8_t extra = (master + extraWanted > kMaxTotalSwing) ? (uint8_t)(kMaxTotalSwing - master) : extraWanted;
+    if (extra == 0) return 0;
+    const uint8_t grid = (rhythm.swingGrid <= kMaxSwingGrid) ? rhythm.swingGrid : kInitialSwingGrid;
+    const uint16_t pair = kSwingPairInterval[grid];
+    const uint16_t half = pair / 2;
+    const uint16_t pos = interval_ % pair;
+    // "near the off note" = within a quarter pair of it
+    if ((pos + (half / 2) < half) || (pos > half + (half / 2))) return 0;
+    return (uint16_t)(((uint32_t)extra * half) / (100U - master));
+}
+
+uint16_t Controller::groove_unswing(uint8_t layerNum_, uint16_t interval_) {
+    /// @brief While recording: a hit played along with a drum's extra swing is stored where it would
+    /// be without that extra, so playback doesn't swing it twice.
+    const uint8_t grid = (rhythm.swingGrid <= kMaxSwingGrid) ? rhythm.swingGrid : kInitialSwingGrid;
+    const uint16_t pair = kSwingPairInterval[grid];
+    const uint16_t half = pair / 2;
+    const uint16_t delay = groove_swingDelay(layerNum_, (uint16_t)((interval_ / pair) * pair + half));
+    if (delay == 0) return interval_;
+    const uint16_t pos = interval_ % pair;
+    if ((pos >= half + (delay / 2)) && (pos < half + delay + (half / 2))) return (uint16_t)(interval_ - delay);
+    return interval_;
+}
+
+void Controller::groove_setDrumSwing(uint8_t layerNum_, int16_t value_) {
+    if (layerNum_ >= kLayerLibrarySize) return;
+    if (value_ < 0) value_ = 0;
+    if (value_ > kMaxDrumSwing) value_ = kMaxDrumSwing;
+    layerLibrary[layerNum_].swingExtra = (uint8_t)value_;
+    page_markDirty(PAGE_GROOVE);
+    lcd_drawRhythm_GrooveData();
+}
+
+void Controller::groove_knob(bool drumSwing_, int8_t step_) {
+    /// @brief Rhythm menu knobs 7 / 8. The first turn opens the Groove page so you can see the values.
+    if (page != PAGE_GROOVE) {
+        page_open(PAGE_GROOVE);
+        return;
+    }
+    if (drumSwing_) {
+        groove_setDrumSwing(grooveLayer, (int16_t)layerLibrary[grooveLayer].swingExtra + step_);
+    } else {
+        int16_t v = (int16_t)grooveCorrect + (step_ * kCorrectStep);
+        if (v < kCorrectStep) v = kCorrectStep;
+        if (v > 100) v = 100;
+        grooveCorrect = (uint8_t)v;
+        page_markDirty(PAGE_GROOVE);
+        lcd_drawRhythm_GrooveData();
+    }
+}
+
+void Controller::groove_timingCorrect(uint8_t layerNum_) {
+    /// @brief Moves every hit of one drum (current song bank) toward the nearest QUANTIZE grid
+    /// line by grooveCorrect %. 100 % = fully on the grid. One undo step.
+    if (layerNum_ >= kLayerLibrarySize) return;
+    if (rhythm.quantize == kQuantizeOff) {
+        snprintf(grooveMessage, sizeof(grooveMessage), "SET QUANTIZE TO A GRID FIRST (NOW OFF)");
+        page_markDirty(PAGE_GROOVE);
+        return;
+    }
+    Bank& bank = layerLibrary[layerNum_].bankLibrary[activeSongBank];
+    if (bank.lastActiveBeatNum == -1) {
+        snprintf(grooveMessage, sizeof(grooveMessage), "DRUM %02u HAS NO HITS IN THIS SONG", layerNum_ + 1);
+        page_markDirty(PAGE_GROOVE);
+        return;
+    }
+    undo_checkpoint(UNDO_SINGLE);
+    uint8_t moved = 0;
+    HAL_NVIC_DisableIRQ(TIM15_IRQn);
+    for (uint8_t j = 0; j <= (uint8_t)bank.lastActiveBeatNum; j++) {
+        Beat& beat = bank.beatLibrary[j];
+        if (!beat.getActive()) continue;
+        const int32_t start = beat.getStartInterval();
+        int32_t target = rhythm_snapToGrid((uint16_t)start);
+        if (target >= (int32_t)songInterval) target = (int32_t)songInterval - 1;   // never past the loop end
+        const int32_t delta = target - start;
+        int32_t moveBy = (delta * (int32_t)grooveCorrect) / 100;
+        if ((moveBy == 0) && (delta != 0) && (grooveCorrect == 100)) moveBy = delta;
+        if (moveBy != 0) {
+            beat.setStartInterval((uint16_t)(start + moveBy));
+            moved++;
+        }
+    }
+    // Rebuild the hit list: merges hits that landed on the same tick, re-sorts, fixes lengths/fills.
+    layerSong_arrangeActiveBeats(layerNum_, activeSongBank, true, true, true, true);
+    HAL_NVIC_EnableIRQ(TIM15_IRQn);
+
+    lcd_drawSong(layerNum_, activeSongBank);
+    const char* q = kQuantizeDataLibrary[rhythm.quantize].nameLongR;
+    while (*q == ' ') q++;
+    snprintf(grooveMessage, sizeof(grooveMessage), "DRUM %02u: %u HITS MOVED %u%% TOWARD %s", layerNum_ + 1, moved, grooveCorrect, q);
+    undo_showText("FIX  ");
+    page_markDirty(PAGE_GROOVE);
+}
+
+void Controller::page_drawGroove() {
+    /// @brief Groove page: swing of each drum (master + its own extra) and Timing Correct controls.
+    const uint8_t master = (rhythm.swing >= kMinSwing) ? rhythm.swing : kMinSwing;
+    const RGB16Color label = kThemeHeader;
+    char text[96];
+
+    if (pageFullRedraw) {
+        lcd.setBackColor(BLACK);
+        lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
+        lcd.setForeColor(kThemeLine);
+        lcd.drawHLine(30, 177, 900);
+        lcd.setFont(FONT_07x09);
+        lcd.setAlignment(LEFT);
+        lcd.setForeColor(label);
+        const char h1[] = "PAD: PICK DRUM    BOTTOM KNOB 3: DRUM SWING    BOTTOM KNOB 4: CORRECT %";
+        lcd.drawText(h1, strlen(h1), 30, 420);
+        const char h2[] = "HOLD ADD + TAP PAD: TIMING CORRECT THAT DRUM    (ADD + CLEAR = UNDO)";
+        lcd.drawText(h2, strlen(h2), 30, 438);
+        lcd.setAlignment(RIGHT);
+        const char h3[] = "TAP RHYTHM: BACK";
+        lcd.drawText(h3, strlen(h3), 930, 438);
+        pageFullRedraw = false;
+    }
+
+    // ---- title + summary
+    lcd.setFont(FONT_14x18);
+    lcd.setAlignment(LEFT);
+    lcd.setBackColor(BLACK);
+    lcd.setForeColor(kThemeAccent);
+    lcd.drawText("GROOVE", 6, 30, 136);
+    const char* q = kQuantizeDataLibrary[(rhythm.quantize <= kMaxQuantize) ? rhythm.quantize : kInitialQuantize].nameLongR;
+    while (*q == ' ') q++;
+    const char* g = kSwingGridName[(rhythm.swingGrid <= kMaxSwingGrid) ? rhythm.swingGrid : kInitialSwingGrid];
+    while (*g == ' ') g++;
+    snprintf(text, sizeof(text), "MASTER SWING %u%% ON %s   QUANTIZE %s   CORRECT %u%%", master, g,
+             (rhythm.quantize == kQuantizeOff) ? "OFF" : q, grooveCorrect);
+    page_drawSummary(text);
+
+    // ---- one column per drum: bar = total swing (master part dim, drum's extra part orange)
+    const uint16_t colW = 90, x0 = 30, barTop = 212, barBot = 360, barW = 44;
+    const float span = (float)(kMaxTotalSwing - kMinSwing);   // 50..80 % fills the bar
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
+        const uint16_t cx = x0 + l * colW + colW / 2;
+        const bool sel = (l == grooveLayer);
+        uint8_t extra = layerLibrary[l].swingExtra;
+        if (master + extra > kMaxTotalSwing) extra = kMaxTotalSwing - master;
+        const uint8_t total = master + extra;
+
+        lcd.setFont(FONT_07x09);
+        lcd.setAlignment(CENTER);
+        lcd.setBackColor(BLACK);
+        lcd.setForeColor(sel ? kThemeAccent : label);
+        snprintf(text, sizeof(text), "%cDRUM %02u%c", sel ? '>' : ' ', l + 1, sel ? '<' : ' ');
+        lcd.drawText(text, strlen(text), cx, 192);
+
+        const uint16_t bx = cx - barW / 2;
+        const uint16_t hMaster = (uint16_t)(((master - kMinSwing) / span) * (barBot - barTop) + 0.5f);
+        const uint16_t hTotal = (uint16_t)(((total - kMinSwing) / span) * (barBot - barTop) + 0.5f);
+        lcd.setBackColor(BLACK);
+        lcd.clearRect(bx - 3, barTop - 3, barW + 6, (barBot - barTop) + 6);
+        lcd.setForeColor(sel ? page_mix(BLACK, kThemeAccent, 0.6f) : kThemeLine);
+        lcd.drawRect(bx - 2, barTop - 2, barW + 4, (barBot - barTop) + 4);
+        if (hMaster > 0) {
+            lcd.setForeColor(page_mix(BLACK, kThemeInk, 0.35f));
+            lcd.fillRect(bx, barBot - hMaster, barW, hMaster);
+        }
+        if (hTotal > hMaster) {
+            lcd.setForeColor(kThemeAccent);
+            lcd.fillRect(bx, barBot - hTotal, barW, hTotal - hMaster);
+        }
+        lcd.setFont(FONT_10x14);
+        lcd.setForeColor(sel ? kThemeAccent : kThemeInk);
+        snprintf(text, sizeof(text), " %u%% ", total);
+        lcd.drawText(text, strlen(text), cx, 368);
+        lcd.setFont(FONT_07x09);
+        lcd.setForeColor(extra ? kThemeAmber : kThemeLine);
+        if (extra) snprintf(text, sizeof(text), " +%u ", extra); else snprintf(text, sizeof(text), "  -  ");
+        lcd.drawText(text, strlen(text), cx, 386);
+    }
+
+    // ---- status line (last Timing Correct result)
+    char row[kPageSummaryChars + 1];
+    snprintf(row, sizeof(row), "%-*s", (int)kPageSummaryChars, grooveMessage);
+    lcd.setFont(FONT_10x14);
+    lcd.setAlignment(LEFT);
+    lcd.setBackColor(BLACK);
+    lcd.setForeColor(kThemeAmber);
+    lcd.drawText(row, kPageSummaryChars, 30, 400);
+}
+
 void Controller::preview_schedule(uint8_t layerNum_) {
     /// @brief Custom: asks for the selected sample to be auditioned once the knob stops moving.
     if (!kSamplePreview) return;
@@ -5658,6 +5886,9 @@ void Controller::page_draw() {
             break;
         case PAGE_LFO:
             page_drawLfo();
+            break;
+        case PAGE_GROOVE:
+            page_drawGroove();
             break;
         default:
             break;
@@ -7189,6 +7420,7 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
                         layerInst_setMute(i, (bool)data[offset + 20]);
                         layerInst_setFill(i, (bool)data[offset + 21]);
                         layerInst_setStyle(i, (bool)data[offset + 22]);
+                        layerLibrary[i].swingExtra = (data[offset + 23] <= kMaxDrumSwing) ? data[offset + 23] : 0;   // custom
                     }
 
                     // 5.4 ASSET REFERENCE EXTRACTION
@@ -7555,6 +7787,7 @@ SdResult Controller::sd_saveFile(uint8_t fileNum_) {
         data[offset + 20] = layer.mute;
         data[offset + 21] = layer.fill;
         data[offset + 22] = layer.style;
+        data[offset + 23] = layer.swingExtra;   // custom: per-drum swing (byte was unused)
     }
 
     // 2.12 ASSET REFERENCES
@@ -7990,6 +8223,7 @@ SdResult Controller::sd_loadDrumkit(uint8_t kitNum_) {
                         layerInst_setMute(i, (bool)data[offset + 20]);
                         layerInst_setFill(i, (bool)data[offset + 21]);
                         layerInst_setStyle(i, (bool)data[offset + 22]);
+                        layerLibrary[i].swingExtra = (data[offset + 23] <= kMaxDrumSwing) ? data[offset + 23] : 0;   // custom
                     }
 
                     // 5.4 ASSET REFERENCE EXTRACTION
@@ -8282,6 +8516,7 @@ SdResult Controller::sd_saveDrumkit(uint8_t kitNum_) {
         data[offset + 20] = layer.mute;
         data[offset + 21] = layer.fill;
         data[offset + 22] = layer.style;
+        data[offset + 23] = layer.swingExtra;   // custom: per-drum swing (byte was unused)
     }
 
     // 2.12 ASSET REFERENCES
@@ -9862,7 +10097,7 @@ void Controller::lcd_transitionMenu() {
             break;
 
         case RHYTHM_MENU:
-            for (uint8_t i = 0; i <= kMaxRhythmTab; i++) {
+            for (uint8_t i = 0; i <= kMaxMenu8Tab; i++) {   // custom: knobs 7/8 are used too
                 lcd_clearTextBox(i);
             }
             rhythm.measureLock = true;
@@ -11409,6 +11644,8 @@ void Controller::lcd_drawRhythmMenu() {
     lcd.drawText(kHeaderQuantize, kMenuHeaderTextSize, kMenuHeaderX[3], kMenuHeaderY[3]);
     lcd.drawText(kHeaderSwing, kMenuHeaderTextSize, kMenuHeaderX[4], kMenuHeaderY[4]);
     lcd.drawText(kHeaderSwingGrid, kMenuHeaderTextSize, kMenuHeaderX[5], kMenuHeaderY[5]);
+    lcd.drawText("DRUM-SWING", kMenuHeaderTextSize, kMenuHeaderX[6], kMenuHeaderY[6]);   // custom
+    lcd.drawText("CORRECT   ", kMenuHeaderTextSize, kMenuHeaderX[7], kMenuHeaderY[7]);   // custom
 
     // 4. SIGN/UNIT DRAW
     // Draw unit/sign text for each parameter slot.
@@ -11419,6 +11656,8 @@ void Controller::lcd_drawRhythmMenu() {
     lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[3], kMenuSignBoxY[3]);
     lcd.drawText("  %", kMenuSignTextSize, kMenuSignBoxX[4], kMenuSignBoxY[4]);
     lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[5], kMenuSignBoxY[5]);
+    lcd.drawText("  %", kMenuSignTextSize, kMenuSignBoxX[6], kMenuSignBoxY[6]);
+    lcd.drawText("  %", kMenuSignTextSize, kMenuSignBoxX[7], kMenuSignBoxY[7]);
 
     // 5. DATA DRAW
     // Draw rhythm parameter values.
@@ -11428,6 +11667,18 @@ void Controller::lcd_drawRhythmMenu() {
     lcd_drawRhythm_QuantizeData();
     lcd_drawRhythm_SwingData();
     lcd_drawRhythm_SwingGridData();
+    lcd_drawRhythm_GrooveData();
+}
+
+void Controller::lcd_drawRhythm_GrooveData() {
+    /// @brief Custom: Rhythm menu knobs 7 and 8 (selected drum's extra swing, Timing Correct strength).
+    if (menu != RHYTHM_MENU) return;
+    char text[12];
+    lcd_setMenuDataState(WHITE);
+    snprintf(text, sizeof(text), "D%02u    +%2u", grooveLayer + 1, layerLibrary[grooveLayer].swingExtra);
+    lcd.drawText(text, kMenuDataTextSize, kMenuDataX[6], kMenuDataY[6]);
+    snprintf(text, sizeof(text), "%10u", grooveCorrect);
+    lcd.drawText(text, kMenuDataTextSize, kMenuDataX[7], kMenuDataY[7]);
 }
 
 void Controller::lcd_drawRhythm_TempoData() {
@@ -16092,6 +16343,7 @@ void Controller::rhythm_setSwing(uint8_t swing_) {
     if ((swing_ >= kMinSwing) && (swing_ <= kMaxSwing)) {
         rhythm.swing = swing_;
         if (menu == RHYTHM_MENU) lcd_drawRhythm_SwingData();
+        page_markDirty(PAGE_GROOVE);   // custom
     }
 }
 
@@ -16101,6 +16353,7 @@ void Controller::rhythm_setSwingGrid(uint8_t swingGrid_) {
     if ((swingGrid_ >= kMinSwingGrid) && (swingGrid_ <= kMaxSwingGrid)) {
         rhythm.swingGrid = swingGrid_;
         if (menu == RHYTHM_MENU) lcd_drawRhythm_SwingGridData();
+        page_markDirty(PAGE_GROOVE);   // custom
     }
 }
 
@@ -16149,6 +16402,7 @@ void Controller::rhythm_setQuantize(uint8_t quantize_) {
         rhythm.quantize = quantize_;
         if (menu == RHYTHM_MENU)
             lcd_drawRhythm_QuantizeData();
+        page_markDirty(PAGE_GROOVE);   // custom
     }
 }
 
@@ -20325,6 +20579,20 @@ void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
                     tBD.counterEnd = tBD.counterMax;
                 }
 
+                // Custom: per-drum swing adds to (or creates) the trigger delay for this hit.
+                {
+                    const uint16_t extraDelay = swingDelayTicks[layerNum_];
+                    if (extraDelay > 0) {
+                        if (lD.tempBeatTimingFlag) {
+                            lD.tempBeatTimingCounterMax += extraDelay;
+                        } else {
+                            lD.tempBeatTimingFlag = true;
+                            lD.tempBeatTimingCounter = 0;
+                            lD.tempBeatTimingCounterMax = extraDelay;
+                        }
+                    }
+                }
+
                 // configure fade logic based on direction
                 switch (tBD.directionMode) {
                     case 0:
@@ -20506,6 +20774,7 @@ void Controller::layerInst_reset(uint8_t layerNum_) {
     layerInst_setMute(layerNum_, false);
     layerInst_setFill(layerNum_, true);
     layerInst_setStyle(layerNum_, true);
+    layerLibrary[layerNum_].swingExtra = 0;   // custom
 }
 
 void Controller::layerInst_menuRight() {
@@ -25114,7 +25383,9 @@ void Controller::interruptPlay() {
                                         break;  // MUTED: 0% velocity
                                 }
                             }
+                            swingDelayTicks[layer.number] = groove_swingDelay(layer.number, playInterval);   // custom per-drum swing
                             if (fillVolMultiplier > 0.0f) layer_playBeat(layer.number, fillVolMultiplier);
+                            swingDelayTicks[layer.number] = 0;
 
                             // Advance to the next beat index
                             (playBeatNum < bank.lastActiveBeatNum) ? bank.playBeatNum += 1 : bank.playBeatNum = 0;
