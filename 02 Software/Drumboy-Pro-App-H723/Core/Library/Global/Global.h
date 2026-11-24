@@ -667,7 +667,11 @@ inline RGB16Color themeMapImage(RGB16Color c) {
 
 const RGB16Color kLayerColorPalette[]               = {WHITE, GRAY_75, WHITE, GRAY_75, WHITE, GRAY_75, WHITE, GRAY_75, WHITE, GRAY_75};
 
-const RGB16Color kBeatSelectedColor                 = kThemeDark ? YELLOW : MAGENTA;    // theme: amber
+// Selected hit: vivid violet (#C040FF). This value is deliberately NOT in themeMap(),
+// so it passes through untouched and stands apart from the green/orange theme.
+const RGB16Color kThemeSelect                       = 0xC21F;
+const RGB16Color kBeatSelectedColor                 = kThemeDark ? kThemeSelect : MAGENTA;
+const uint8_t kBeatSelectedWidth                    = 5;   // px, selected hit bar (normal hits are 2 px)
 const RGB16Color kLayerSelectedColor                = kThemeDark ? MAGENTA : CYAN;      // theme: accent
 
 const RGB16Color kMenuHLineColor                    = GRAY_50;
@@ -2178,7 +2182,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.21 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.22 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;

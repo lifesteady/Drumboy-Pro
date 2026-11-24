@@ -13772,11 +13772,23 @@ void Controller::lcd_drawBeat(uint8_t layerNum_, uint8_t bankNum_, uint8_t beatN
             // Draw beat shape based on fill type
             if ((fillType == 0) && (fillPattern < 2)) {
                 lcd.clearRect(xStart, yStart, clearWidth, kSongHeight);
-                lcd.drawRect(xStart, yStart, 2, kSongHeight);
+                if (selected_) {
+                    // Selected hit: thicker solid bar, kept inside this hit's own space
+                    // so it never paints over the next hit.
+                    uint32_t w = (clearWidth < kBeatSelectedWidth) ? clearWidth : kBeatSelectedWidth;
+                    if (w < 2) w = 2;
+                    lcd.fillRect(xStart, yStart, w, kSongHeight);
+                } else {
+                    lcd.drawRect(xStart, yStart, 2, kSongHeight);
+                }
             } else if ((fillType == 0) && (fillPattern == 2)) {
                 lcd.clearRect(xStart, yStart, clearWidth, kSongHeight);
                 for (uint8_t i = 0; i < 4; i++) {
                     lcd.drawPixel(xStart, yStart + (i * 3));
+                    if (selected_ && (clearWidth > 2)) {  // selected ghost hit: wider dots
+                        lcd.drawPixel(xStart + 1, yStart + (i * 3));
+                        lcd.drawPixel(xStart + 2, yStart + (i * 3));
+                    }
                 }
             } else {
                 lcd.fillRect(xStart, yStart, fillWidth, kSongHeight);
