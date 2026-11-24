@@ -6705,34 +6705,35 @@ void Controller::main_drawTransport() {
     const uint16_t beatsPerBar = (barInterval / kMeasureInterval) ? (barInterval / kMeasureInterval) : 4;
     const uint16_t bar = (uint16_t)(pos / barInterval) + 1;
     const uint16_t beat = (uint16_t)((pos % barInterval) / kMeasureInterval) + 1;
+    // Custom counter, DAW style: BAR.BEAT.16TH (big) + tick inside the 16th (0-199) + song time.
+    const uint16_t sixteenth = (uint16_t)((pos % kMeasureInterval) / (kMeasureInterval / 4)) + 1;
+    const uint16_t tick = (uint16_t)(pos % (kMeasureInterval / 4));
+    const uint32_t bpm = rhythm.tempo ? rhythm.tempo : 90;
+    const uint32_t ms = (uint32_t)(((uint64_t)pos * 60000ULL) / ((uint64_t)bpm * kMeasureInterval));
     char text[24];
-    snprintf(text, sizeof(text), "%u.%u", bar, beat);
     (void)beatsPerBar;
+    snprintf(text, sizeof(text), "%u.%u.%u.%u.%lu", bar, beat, sixteenth, tick, (unsigned long)ms);
     if (strcmp(text, mainCounter) != 0) {
         strncpy(mainCounter, text, sizeof(mainCounter) - 1);
-        // counter lives in the empty left end of the ruler row (inside the page area)
+        // counter lives in the empty left end of the ruler row (inside the page area).
+        // Fixed-width fields, drawn over their own background: no clear, so no flicker.
         const uint16_t cy = kMainTop;
         lcd.setBackColor(BLACK);
-        lcd.clearRect(kPageX, cy, kMainGridX - kPageX - 2, kMainRuler);
         lcd.setAlignment(LEFT);
-        lcd.setFont(FONT_07x09);
-        lcd.setSpacing(2);
-        lcd.setForeColor(kThemeHeader);
-        lcd.drawText("BAR", 3, 28, cy + 3);
         lcd.setFont(FONT_10x14);
         lcd.setSpacing(1);
         lcd.setForeColor(kThemeAccent);
-        snprintf(text, sizeof(text), "%u", bar);
-        lcd.drawText(text, strlen(text), 58, cy);
+        snprintf(text, sizeof(text), "%2u.%u.%u", bar, beat, sixteenth);
+        lcd.drawText(text, strlen(text), 24, cy);
         lcd.setFont(FONT_07x09);
-        lcd.setSpacing(2);
-        lcd.setForeColor(kThemeHeader);
-        lcd.drawText("BEAT", 4, 100, cy + 3);
-        lcd.setFont(FONT_10x14);
         lcd.setSpacing(1);
-        lcd.setForeColor(kThemeAccent);
-        snprintf(text, sizeof(text), "%u", beat);
-        lcd.drawText(text, strlen(text), 138, cy);
+        lcd.setForeColor(kThemeInk);
+        snprintf(text, sizeof(text), ".%03u", tick);
+        lcd.drawText(text, strlen(text), 92, cy + 4);
+        lcd.setForeColor(kThemeHeader);
+        snprintf(text, sizeof(text), "%2lu:%02lu.%03lu", (unsigned long)(ms / 60000UL), (unsigned long)((ms / 1000UL) % 60UL), (unsigned long)(ms % 1000UL));
+        lcd.drawText(text, strlen(text), 140, cy + 4);
+        lcd.setSpacing(1);
     }
     // overview strip (whole song): cached hit bits per column; full redraw only when hits/window change
     const int32_t px = (playActive && songInterval) ? (int32_t)(((uint64_t)playInterval * kMainGridW) / songInterval) : -10;
@@ -6991,6 +6992,8 @@ void Controller::noteRepeat_stopped() {
 static_assert(RAM_VERB_ADDRESS + rvp::slowFloats() * 4 <= 0xC0FB9640, "reverb RAM overlaps image RAM");
 static_assert(RAM_VERB_FAST_ADDRESS + rvp::fastFloats() * 4 <= 0x20020000, "reverb tank does not fit DTCM");
 static_assert(RAM_VERB_ENGINE_ADDRESS + sizeof(rvp::Engine) <= RAM_VERB_FAST_ADDRESS, "reverb engine object overlaps its tank");
+static_assert(Reverb::kSharedFloats <= rvp::fastFloats(), "STANDARD reverb buffers must fit inside the shared DTCM block");
+static_assert(kFileBeatsPerBank * 4 + 1 == 257, "song file bank block is 257 bytes");
 static_assert(sizeof(Beat) == 10, "Beat layout changed: check undo / RAM budget");
 
 int8_t Controller::pitch_padNote(uint8_t pad_) {
@@ -7243,31 +7246,37 @@ void Controller::pitch_saveNotes(uint8_t fileNum_) {
     /// @brief Writes every hit that has a note or a gate length to File_XXX.rwn (stock firmware ignores it).
     char fileName[50];
     snprintf(fileName, sizeof(fileName), "%s%03d%s", kFileStart, fileNum_ + 1, kPitchFileEnd);
-    auto wanted = [](const Beat& b) { return b.getActive() && ((b.note != 0) || (b.gate != 0)); };
+    // RWN3: every hit with a note or gate, plus every hit past the 64 the song file can hold.
+    auto wantedAt = [](const Bank& bank_, int16_t j_) {
+        const Beat& b = bank_.beatLibrary[j_];
+        return b.getActive() && ((b.note != 0) || (b.gate != 0) || (j_ >= (int16_t)kFileBeatsPerBank));
+    };
     uint16_t n = 0;
     for (uint8_t l = 0; l < kLayerLibrarySize; l++)
         for (uint8_t b = 0; b < kBankLibrarySize; b++) {
             const Bank& bank = layerLibrary[l].bankLibrary[b];
-            for (int16_t j = 0; j <= bank.lastActiveBeatNum; j++) if (wanted(bank.beatLibrary[j])) n++;
+            for (int16_t j = 0; j <= bank.lastActiveBeatNum; j++) if (wantedAt(bank, j)) n++;
         }
     f_close(&sd.file);
     if (n == 0) { f_unlink(fileName); return; }
     if (f_open(&sd.file, fileName, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK) return;
     uint8_t buf[168];
     uint16_t pos = 0;
-    buf[pos++] = 'R'; buf[pos++] = 'W'; buf[pos++] = 'N'; buf[pos++] = '2';
+    buf[pos++] = 'R'; buf[pos++] = 'W'; buf[pos++] = 'N'; buf[pos++] = '3';
     buf[pos++] = (uint8_t)(n >> 8); buf[pos++] = (uint8_t)(n & 0xFF);
     for (uint8_t l = 0; l < kLayerLibrarySize; l++)
         for (uint8_t b = 0; b < kBankLibrarySize; b++) {
             const Bank& bank = layerLibrary[l].bankLibrary[b];
             for (int16_t j = 0; j <= bank.lastActiveBeatNum; j++) {
                 const Beat& beat = bank.beatLibrary[j];
-                if (!wanted(beat)) continue;
+                if (!wantedAt(bank, j)) continue;
                 buf[pos++] = l; buf[pos++] = b;
                 buf[pos++] = (uint8_t)(beat.startInterval >> 8); buf[pos++] = (uint8_t)(beat.startInterval & 0xFF);
                 buf[pos++] = (uint8_t)beat.note;
                 buf[pos++] = (uint8_t)(beat.gate >> 8); buf[pos++] = (uint8_t)(beat.gate & 0xFF);
-                if (pos > sizeof(buf) - 7) { f_write(&sd.file, buf, pos, &sd.byteswritten); pos = 0; }
+                const uint16_t d = beat.getData();   // active bit + fill settings (needed for extra hits)
+                buf[pos++] = (uint8_t)(d >> 8); buf[pos++] = (uint8_t)(d & 0xFF);
+                if (pos > sizeof(buf) - 9) { f_write(&sd.file, buf, pos, &sd.byteswritten); pos = 0; }
             }
         }
     if (pos) f_write(&sd.file, buf, pos, &sd.byteswritten);
@@ -7282,22 +7291,42 @@ void Controller::pitch_loadNotes(uint8_t fileNum_) {
     if (f_open(&sd.file, fileName, FA_READ) != FR_OK) return;
     uint8_t head[6];
     UINT got = 0;
-    if ((f_read(&sd.file, head, 6, &got) == FR_OK) && (got == 6) && (head[0] == 'R') && (head[1] == 'W') && (head[2] == 'N') && ((head[3] == '1') || (head[3] == '2'))) {
+    if ((f_read(&sd.file, head, 6, &got) == FR_OK) && (got == 6) && (head[0] == 'R') && (head[1] == 'W') && (head[2] == 'N') && (head[3] >= '1') && (head[3] <= '3')) {
         uint16_t n = ((uint16_t)head[4] << 8) | head[5];
-        const UINT esz = (head[3] == '2') ? 7 : 5;
-        uint8_t e[7] = {0};
+        const UINT esz = (head[3] == '3') ? 9 : ((head[3] == '2') ? 7 : 5);
+        uint8_t e[9] = {0};
+        uint16_t touched[kLayerLibrarySize] = {0};   // banks that got extra hits (bit per bank)
+        const uint8_t quantizeWas = rhythm.quantize;
+        rhythm.quantize = kQuantizeOff;              // extra hits go back exactly where they were
         while (n--) {
             if ((f_read(&sd.file, e, esz, &got) != FR_OK) || (got != esz)) break;
             if ((e[0] >= kLayerLibrarySize) || (e[1] >= kBankLibrarySize)) continue;
             Bank& bank = layerLibrary[e[0]].bankLibrary[e[1]];
             const uint16_t st = ((uint16_t)e[2] << 8) | e[3];
+            int16_t found = -1;
             for (int16_t j = 0; j <= bank.lastActiveBeatNum; j++)
-                if (bank.beatLibrary[j].getActive() && (bank.beatLibrary[j].startInterval == st)) {
-                    bank.beatLibrary[j].note = (int8_t)e[4];
-                    if (esz == 7) bank.beatLibrary[j].gate = ((uint16_t)e[5] << 8) | e[6];
-                    break;
+                if (bank.beatLibrary[j].getActive() && (bank.beatLibrary[j].startInterval == st)) { found = j; break; }
+            if ((found < 0) && (esz == 9)) {   // a hit past the song file's 64: add it back
+                const uint16_t d = ((uint16_t)e[7] << 8) | e[8];
+                if ((d >> 15) && (st < songInterval)) {
+                    layerSong_setBeat(e[0], e[1], st, (uint8_t)((d & Beat::TYPE_MASK) >> Beat::TYPE_SHIFT),
+                                      (uint8_t)((d & Beat::PATTERN_MASK) >> Beat::PATTERN_SHIFT),
+                                      (uint8_t)((d & Beat::TIME_MASK) >> Beat::TIME_SHIFT), (uint8_t)(d & Beat::LEVEL_MASK), false);
+                    touched[e[0]] |= (uint16_t)(1u << e[1]);
+                    for (int16_t j = 0; j <= bank.lastActiveBeatNum; j++)
+                        if (bank.beatLibrary[j].getActive() && (bank.beatLibrary[j].startInterval == st)) { found = j; break; }
                 }
+            }
+            if (found >= 0) {
+                bank.beatLibrary[found].note = (int8_t)e[4];
+                if (esz >= 7) bank.beatLibrary[found].gate = ((uint16_t)e[5] << 8) | e[6];
+            }
         }
+        rhythm.quantize = quantizeWas;
+        for (uint8_t l = 0; l < kLayerLibrarySize; l++)
+            for (uint8_t b = 0; b < kBankLibrarySize; b++)
+                if (touched[l] & (1u << b)) layerSong_arrangeActiveBeats(l, b, true, true, true, true);
+        stripDirty = true;
     }
     f_close(&sd.file);
 }
@@ -9437,7 +9466,7 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
                         uint16_t offsetBank = 1 + (j * 257);
 
                         // Decode beat entries in reverse index order
-                        for (int8_t k = (kBeatLibrarySize - 1); k >= 0; k--) {
+                        for (int8_t k = (kFileBeatsPerBank - 1); k >= 0; k--) {   // custom: the file holds 64 per bank
                             uint16_t offsetBeat = offsetBank + 1 + (k * 4);
                             uint8_t dataBeat0 = data[offsetBeat + 0];
                             uint8_t dataBeat1 = data[offsetBeat + 1];
@@ -9746,7 +9775,7 @@ SdResult Controller::sd_saveFile(uint8_t fileNum_) {
                         data[offsetBank] = 'b';
 
                         // Encode packed beat data + start interval
-                        for (uint8_t k = 0; k < kBeatLibrarySize; k++) {
+                        for (uint8_t k = 0; k < kFileBeatsPerBank; k++) {   // custom: 65-128 go in the .rwn file
                             Beat& beat = bank.beatLibrary[k];
                             uint16_t offsetBeat = offsetBank + 1 + (k * 4);
                             uint16_t data_ = beat.getData();

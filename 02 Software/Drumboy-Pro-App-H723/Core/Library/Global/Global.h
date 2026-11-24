@@ -2232,7 +2232,8 @@ const float kQuantizeInterval[]                     = {50, 100, 200, 400, 800, 1
                                                        1.0f};  // OFF: every tick is a grid point
 
 // Order the grids appear in when scrolling: OFF, 1:64, 1:32, 1:32T, 1:16, 1:16T, 1:8, 1:8T, 1:4, 1:4T, 1:2, 1:1
-const uint8_t kQuantizeOrder[]                      = {11, 0, 1, 7, 2, 8, 3, 9, 4, 10, 5, 6};
+// Custom: knob order OFF, 1:1, 1:2, 1:4, 1:4T, 1:8, 1:8T, 1:16, 1:16T, 1:32, 1:32T, 1:64 (was OFF, 1:64 .. 1:1)
+const uint8_t kQuantizeOrder[]                      = {11, 6, 5, 4, 10, 3, 9, 2, 8, 1, 7, 0};
 const uint8_t kQuantizeOrderSize                    = sizeof(kQuantizeOrder) / sizeof(kQuantizeOrder[0]);
 
 // SWING (MPC-style): percent of each note pair given to the first note.
@@ -2310,7 +2311,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.82 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.83 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -6209,14 +6210,17 @@ struct Reverb {
     float comb7Out                                  = 0.0f; 
     float comb8Out                                  = 0.0f;
 
-    float comb1Buffer[comb1Size]; 
-    float comb2Buffer[comb2Size]; 
-    float comb3Buffer[comb3Size]; 
-    float comb4Buffer[comb4Size];
-    float comb5Buffer[comb5Size]; 
-    float comb6Buffer[comb6Size]; 
-    float comb7Buffer[comb7Size]; 
-    float comb8Buffer[comb8Size];
+    // Custom: the delay buffers live in DTCM, in the block the VINTAGE / PLATE / ROOM / NONLIN
+    // engine uses (only one reverb runs at a time; switching type clears the block). Frees ~50 KB of RAM_D1.
+    float* const comb1Buffer = (float*)(RAM_VERB_FAST_ADDRESS) + 0;
+    float* const comb2Buffer = (float*)(RAM_VERB_FAST_ADDRESS) + 1116;
+    float* const comb3Buffer = (float*)(RAM_VERB_FAST_ADDRESS) + 2304;
+    float* const comb4Buffer = (float*)(RAM_VERB_FAST_ADDRESS) + 3581;
+    float* const comb5Buffer = (float*)(RAM_VERB_FAST_ADDRESS) + 4937;
+    float* const comb6Buffer = (float*)(RAM_VERB_FAST_ADDRESS) + 6359;
+    float* const comb7Buffer = (float*)(RAM_VERB_FAST_ADDRESS) + 7850;
+    float* const comb8Buffer = (float*)(RAM_VERB_FAST_ADDRESS) + 9407;
+
 
     // Internal coefficients
     float combFeedback;                             // Controlled by Size and Decay
@@ -6240,10 +6244,12 @@ struct Reverb {
     float apass3Out                                 = 0.0f; 
     float apass4Out                                 = 0.0f;
 
-    float apass1Buffer[apass1Size];
-    float apass2Buffer[apass2Size]; 
-    float apass3Buffer[apass3Size]; 
-    float apass4Buffer[apass4Size];
+    float* const apass1Buffer = (float*)(RAM_VERB_FAST_ADDRESS) + 11024;
+    float* const apass2Buffer = (float*)(RAM_VERB_FAST_ADDRESS) + 11249;
+    float* const apass3Buffer = (float*)(RAM_VERB_FAST_ADDRESS) + 11805;
+    float* const apass4Buffer = (float*)(RAM_VERB_FAST_ADDRESS) + 12246;
+    static const uint32_t kSharedFloats = 12587;   // comb + all-pass floats in the shared block
+
     float apassFeedback                             = 0.35f;
 
     void initialize() {
@@ -6313,21 +6319,21 @@ struct Reverb {
 
     void cleanWidthDelayBuffer() { memset(surroundBuffer, 0, sizeof(surroundBuffer)); }
 
-    void cleanCombBuffer() {
-        memset(comb1Buffer, 0, sizeof(comb1Buffer));
-        memset(comb2Buffer, 0, sizeof(comb2Buffer));
-        memset(comb3Buffer, 0, sizeof(comb3Buffer));
-        memset(comb4Buffer, 0, sizeof(comb4Buffer));
-        memset(comb5Buffer, 0, sizeof(comb5Buffer));
-        memset(comb6Buffer, 0, sizeof(comb6Buffer));
-        memset(comb7Buffer, 0, sizeof(comb7Buffer));
-        memset(comb8Buffer, 0, sizeof(comb8Buffer));
+    void cleanCombBuffer() {   // custom: buffers are pointers now, so sizes are explicit
+        memset(comb1Buffer, 0, comb1Size * sizeof(float));
+        memset(comb2Buffer, 0, comb2Size * sizeof(float));
+        memset(comb3Buffer, 0, comb3Size * sizeof(float));
+        memset(comb4Buffer, 0, comb4Size * sizeof(float));
+        memset(comb5Buffer, 0, comb5Size * sizeof(float));
+        memset(comb6Buffer, 0, comb6Size * sizeof(float));
+        memset(comb7Buffer, 0, comb7Size * sizeof(float));
+        memset(comb8Buffer, 0, comb8Size * sizeof(float));
     }
     void cleanApassBuffer() {
-        memset(apass1Buffer, 0, sizeof(apass1Buffer));
-        memset(apass2Buffer, 0, sizeof(apass2Buffer));
-        memset(apass3Buffer, 0, sizeof(apass3Buffer));
-        memset(apass4Buffer, 0, sizeof(apass4Buffer));
+        memset(apass1Buffer, 0, apass1Size * sizeof(float));
+        memset(apass2Buffer, 0, apass2Size * sizeof(float));
+        memset(apass3Buffer, 0, apass3Size * sizeof(float));
+        memset(apass4Buffer, 0, apass4Size * sizeof(float));
     }
 
     void cleanMemory() {
@@ -6564,7 +6570,8 @@ const uint8_t kInitialLayerLfo                      = 0;
 
 const uint8_t kLayerLibrarySize                     = 10;
 const uint8_t kBankLibrarySize                      = 5;
-const uint16_t kBeatLibrarySize                     = 64;
+const uint16_t kBeatLibrarySize                     = 128;   // custom: hits per drum per song (stock 64)
+const uint16_t kFileBeatsPerBank                    = 64;    // the song file holds 64; hits 65-128 go in File_XXX.rwn
 const uint16_t kBeatFillLibrarySize                 = 32;
 const uint16_t kBeatMicroLibrarySize                = 16 + 1;
 
