@@ -470,6 +470,7 @@ class Controller {
     void page_toggle(PageView page_);
     void lfo_toggleTarget(uint8_t layerNum_);
     void preview_schedule(uint8_t layerNum_);
+    void lcd_drawProjectName();
     uint32_t undo_slotAddress(uint8_t pos_);
     void undo_save(uint8_t pos_);
     bool undo_slotEqualsLive(uint8_t pos_);
@@ -500,6 +501,7 @@ class Controller {
     bool undoTakeSaved = false;                                         // one undo step per recording take
     bool textUndoFlag = false;
     char undoText[6] = "UNDO ";
+    int16_t currentFileNum = -1;                                        // project shown top-right (-1 = new, unsaved)
     bool previewPending = false;                                        // sample preview waiting for the knob to settle
     uint8_t previewLayer = 0;
     uint32_t previewTick = 0;

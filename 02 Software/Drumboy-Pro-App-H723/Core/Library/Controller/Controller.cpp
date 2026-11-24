@@ -9667,13 +9667,29 @@ void Controller::lcd_drawMenuIcon(Menu menu_) {
     }
 
     // 3. RIGHT ICON DRAW
-    // Draw right-side fixed four-block indicator.
+    // Custom: the stock four-square icon is replaced by the current project name.
     lcd.setSpacing(2);
+    lcd_drawProjectName();
+}
 
-    lcd.clearRect(kMenuIconRightX - 14, kMenuIconRightY - 2, 25, 20);
-    for (uint8_t k = 0; k < 4; k++) {
-        lcd.fillRect(kMenuIconRightX - 6 + (k % 2 * 8), kMenuIconRightY + 1 + (k / 2 * 8), 4, 4);
-    }
+void Controller::lcd_drawProjectName() {
+    /// @brief Custom: shows which project is open (FILE_006 etc.) in the top-right corner.
+    const LcdFont font = lcd.getFont();
+    const LcdAlign align = lcd.getAlignment();
+    const uint16_t spacing = lcd.getSpacing();
+    char text[12];
+    if (currentFileNum >= 0) snprintf(text, sizeof(text), "FILE_%03d", currentFileNum + 1);
+    else snprintf(text, sizeof(text), "  NEW   ");
+    lcd.setBackColor(BLACK);
+    lcd.clearRect(kMenuIconRightX - 46, kMenuIconRightY - 4, 96, 22);
+    lcd.setFont(FONT_10x14);
+    lcd.setSpacing(1);
+    lcd.setAlignment(CENTER);
+    lcd.setForeColor(kThemeDark ? kThemeAccent : WHITE);
+    lcd.drawText(text, strlen(text), kMenuIconRightX + 2, kMenuIconRightY);
+    lcd.setFont(font);
+    lcd.setAlignment(align);
+    lcd.setSpacing(spacing);
 }
 
 void Controller::lcd_drawEncoderBox(uint8_t encoderNum_) {
@@ -14575,6 +14591,8 @@ void Controller::file_newSelect() {
 
 void Controller::file_newAction() {
     undo_reset();   // custom
+    currentFileNum = -1;   // custom
+    lcd_drawProjectName();
     /// @brief Executes New File flow by resetting layer/song/modulation/system runtime state.
 
     // 1. ALERT CLEANUP
@@ -14672,6 +14690,8 @@ void Controller::file_loadAction() {
     // 4. TRANSACTION FLAG RESTORE
     // Release load-in-progress flag after SD transaction completes.
     loadAction = false;
+    if (alertType != ALERT_LOADERROR) currentFileNum = fileMenuCounter;   // custom
+    lcd_drawProjectName();
 
     // 5. RESULT ALERT PRESENTATION
     // Display result alert and keep it visible for user acknowledgment.
@@ -14713,6 +14733,8 @@ void Controller::file_saveAction() {
     // 3. SD SAVE EXECUTION & RESULT MAPPING
     // Execute SD save and map operation result to alert type.
     (sd_saveFile(fileMenuCounter) == SD_OK) ? alertType = ALERT_SAVESUCCESS : alertType = ALERT_SAVEERROR;
+    if (alertType == ALERT_SAVESUCCESS) currentFileNum = fileMenuCounter;   // custom: saved as this file
+    lcd_drawProjectName();
 
     // 4. TRANSACTION FLAG RESTORE
     // Release save-in-progress flag after SD transaction completes.
@@ -14763,6 +14785,7 @@ void Controller::file_clearAction() {
     // 2. SD CLEAR EXECUTION & RESULT MAPPING
     // Execute slot clear on SD and map result to alert type.
     (sd_clearFile(fileMenuCounter) == SD_OK) ? alertType = ALERT_CLEARSUCCESS : alertType = ALERT_CLEARERROR;
+    if ((alertType == ALERT_CLEARSUCCESS) && (currentFileNum == fileMenuCounter)) { currentFileNum = -1; lcd_drawProjectName(); }   // custom
 
     // 3. STATUS & LIBRARY REFRESH
     // Re-evaluate slot status and refresh indexed file library cache.
