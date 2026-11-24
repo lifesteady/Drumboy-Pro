@@ -388,6 +388,9 @@ void Controller::update() {
         // Custom: a new recording take starts a new undo step.
         if (!recordActive) undoTakeSaved = false;
 
+        // Custom: unsaved-changes marker (FILE_006*).
+        project_checkDirty();
+
         // 4. FILESYSTEM MAINTENANCE
         // Recover SD subsystem if media access is lost.
         if (!sd.ready) {
@@ -1623,6 +1626,7 @@ void Controller::keyboard_action() {
                             lfoKeyUsed = true;
                             lfo_select(layerNum);
                         } else if ((keyboard.layerInstKeyPress) && (!alertFlag)) {
+                            instKeyUsed = true;
                             layerInst_select(layerNum);
                         } else if ((keyboard.layerSongKeyPress) && (!alertFlag)) {
                             layerSong_select(layerNum, activeSongBank);
@@ -2664,6 +2668,7 @@ void Controller::keyboard_action() {
 
                             case KEY_LAYER_INST:
                                 keyboard.layerInstKeyPress = true;
+                                instKeyUsed = false;
                                 break;
 
                             case KEY_LAYER_SONG:
@@ -2689,6 +2694,9 @@ void Controller::keyboard_action() {
 
                             case KEY_LAYER_INST:
                                 keyboard.layerInstKeyPress = false;
+                                // Custom: tapping Layer Inst on its own (no pad) in an INST menu toggles the Sample page.
+                                if ((!instKeyUsed) && (!alertFlag) && ((menu == LAYER_INST_0_MENU) || (menu == LAYER_INST_1_MENU) || (menu == LAYER_INST_2_MENU)))
+                                    page_toggle(PAGE_SAMPLE);
                                 break;
 
                             case KEY_LAYER_SONG:
@@ -3308,6 +3316,8 @@ void Controller::encoder_update() {
         } else {
             enc.mode = ENC_MODE_LOCAL;
             enc.function = encoderLocalFunction[menuSafe][i];
+            if ((page == PAGE_SAMPLE) && ((menuSafe == LAYER_INST_0_MENU) || (menuSafe == LAYER_INST_1_MENU) || (menuSafe == LAYER_INST_2_MENU)))
+                enc.function = kSamplePageFunctions[i];   // custom
         }
 
         // 2. COUNTER STATE RESET
@@ -3943,6 +3953,18 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
             groove_knob(false, 1);
             break;
 
+        case ENC_SMP_ATTACK:
+            sample_setEnv(0, (int16_t)layerLibrary[selectedLayerNum].envAttack + 1);
+            break;
+
+        case ENC_SMP_HOLD:
+            sample_setEnv(1, (int16_t)layerLibrary[selectedLayerNum].envHold + 1);
+            break;
+
+        case ENC_SMP_DECAY:
+            sample_setEnv(2, (int16_t)layerLibrary[selectedLayerNum].envDecay + 1);
+            break;
+
             // Layer inst functions
 
         case ENC_INST_0_INST:
@@ -4516,6 +4538,18 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
 
         case ENC_GROOVE_CORRECT:
             groove_knob(false, -1);
+            break;
+
+        case ENC_SMP_ATTACK:
+            sample_setEnv(0, (int16_t)layerLibrary[selectedLayerNum].envAttack - 1);
+            break;
+
+        case ENC_SMP_HOLD:
+            sample_setEnv(1, (int16_t)layerLibrary[selectedLayerNum].envHold - 1);
+            break;
+
+        case ENC_SMP_DECAY:
+            sample_setEnv(2, (int16_t)layerLibrary[selectedLayerNum].envDecay - 1);
             break;
 
             // Layer inst functions
@@ -5286,13 +5320,19 @@ void Controller::page_open(PageView page_) {
     lcd.fillRect(kPlayX - 4, kPlayY - 5, 2, 11);
 
     lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
+    if (page_ == PAGE_SAMPLE) encoder_update();   // custom: sample page knob layout
     page_draw();
 }
 
 void Controller::page_close() {
     /// @brief Removes the page and redraws the 10 layer lanes exactly as the stock main page does.
     if (page == PAGE_NONE) return;
+    const bool wasSample = (page == PAGE_SAMPLE);
     page = PAGE_NONE;
+    if (wasSample) {
+        encoder_update();
+        if ((menu == LAYER_INST_0_MENU) || (menu == LAYER_INST_1_MENU) || (menu == LAYER_INST_2_MENU)) page_restoreInstMenu();
+    }
     pageDirty = false;
     lcd.setProtect(false);
 
@@ -5719,6 +5759,288 @@ void Controller::page_drawGroove() {
     lcd.drawText(row, kPageSummaryChars, 30, 400);
 }
 
+////////////////////////////////////////////////////////////////////////////////
+/* Custom: unsaved-changes marker -------------------------------------------*/
+////////////////////////////////////////////////////////////////////////////////
+
+uint32_t Controller::project_hash() {
+    /// @brief Fingerprint of everything a save writes: settings block + every drum's hits.
+    static uint8_t data[kDrumkitByteSize];
+    memset(data, 0x00, sizeof(data));
+    sd_encodeProject(data);
+    uint32_t h = 2166136261u;
+    auto mix = [&h](uint32_t v) { h ^= v; h *= 16777619u; };
+    for (uint16_t i = 0; i < kDrumkitByteSize; i++) mix(data[i]);
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
+        for (uint8_t b = 0; b < kBankLibrarySize; b++) {
+            const Bank& bank = layerLibrary[l].bankLibrary[b];
+            mix((uint32_t)(uint8_t)bank.lastActiveBeatNum);
+            for (int16_t j = 0; j <= bank.lastActiveBeatNum; j++) {
+                const Beat& beat = bank.beatLibrary[j];
+                mix(beat.data);
+                mix(((uint32_t)beat.startInterval << 16) | beat.endInterval);
+            }
+        }
+    }
+    return h;
+}
+
+void Controller::project_markSaved() {
+    savedHash = project_hash();
+    savedHashValid = true;
+    projectDirty = false;
+    lcd_drawProjectName();
+}
+
+void Controller::project_checkDirty() {
+    /// @brief Main loop, twice a second: compares the project with the last load / save / new.
+    if ((HAL_GetTick() - dirtyCheckTick) < 500) return;
+    dirtyCheckTick = HAL_GetTick();
+    if (loadAction || saveAction) return;
+    if (!savedHashValid) {   // power-on or File > New: whatever is there now is the clean state
+        savedHash = project_hash();
+        savedHashValid = true;
+        if (projectDirty) { projectDirty = false; lcd_drawProjectName(); }
+        return;
+    }
+    const bool dirty = (project_hash() != savedHash);
+    if (dirty != projectDirty) {
+        projectDirty = dirty;
+        lcd_drawProjectName();
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+/* Custom: Sample page (waveform, START / END trim, attack-hold-decay) -------*/
+////////////////////////////////////////////////////////////////////////////////
+
+void Controller::sample_setEnv(uint8_t which_, int16_t value_) {
+    if ((selectedLayerNum < 0) || (selectedLayerNum >= kLayerLibrarySize)) return;
+    if (value_ < 0) value_ = 0;
+    if (value_ > 100) value_ = 100;
+    Layer& layer = layerLibrary[selectedLayerNum];
+    if (which_ == 0) layer.envAttack = (uint8_t)value_;
+    else if (which_ == 1) layer.envHold = (uint8_t)value_;
+    else layer.envDecay = (uint8_t)value_;
+    page_markDirty(PAGE_SAMPLE);
+}
+
+static float sample_envMs(uint8_t v, float maxMs) {
+    const float f = (float)v / 100.0f;
+    return f * f * maxMs;
+}
+
+void Controller::page_drawSampleKnobs() {
+    /// @brief Knob boxes while the Sample page is open: ATTACK / HOLD (top 3-4), START / END / DECAY (bottom 1-3).
+    if ((selectedLayerNum < 0) || (selectedLayerNum >= kLayerLibrarySize)) return;
+    const Layer& layer = layerLibrary[selectedLayerNum];
+    char text[16];
+    // Top slots 3-4 normally hold the small waveform: clear it and draw two knob boxes.
+    lcd.setBackColor(BLACK);
+    lcd.clearRect(kMenuLineX[2] + 2, kMenuLineY[2], (kMenuDataX[3] + 20) - (kMenuLineX[2] + 2), kMenuLineHeight);
+    lcd.setForeColor(kThemeLine);
+    lcd.drawVLine(kMenuLineX[3], kMenuLineY[3], kMenuLineHeight);
+
+    lcd_setMenuHeaderState(CYAN);
+    lcd.drawText("ATTACK    ", kMenuHeaderTextSize, kMenuHeaderX[2], kMenuHeaderY[2]);
+    lcd.drawText("HOLD      ", kMenuHeaderTextSize, kMenuHeaderX[3], kMenuHeaderY[3]);
+    lcd.drawText(kHeaderStart, kMenuHeaderTextSize, kMenuHeaderX[4], kMenuHeaderY[4]);
+    lcd.drawText(kHeaderEnd, kMenuHeaderTextSize, kMenuHeaderX[5], kMenuHeaderY[5]);
+    lcd.drawText("DECAY     ", kMenuHeaderTextSize, kMenuHeaderX[6], kMenuHeaderY[6]);
+    lcd.drawText("          ", kMenuHeaderTextSize, kMenuHeaderX[7], kMenuHeaderY[7]);
+
+    lcd_setMenuSignState(CYAN);
+    lcd.drawText(" MS", kMenuSignTextSize, kMenuSignBoxX[2], kMenuSignBoxY[2]);
+    lcd.drawText((layer.envHold >= 100) ? "   " : " MS", kMenuSignTextSize, kMenuSignBoxX[3], kMenuSignBoxY[3]);
+    lcd.drawText((layer.envHold >= 100) ? "   " : " MS", kMenuSignTextSize, kMenuSignBoxX[6], kMenuSignBoxY[6]);
+    lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[7], kMenuSignBoxY[7]);
+
+    lcd_setMenuDataState(WHITE);
+    snprintf(text, sizeof(text), "%10u", (unsigned)(sample_envMs(layer.envAttack, kEnvAttackMaxMs) + 0.5f));
+    lcd.drawText(text, kMenuDataTextSize, kMenuDataX[2], kMenuDataY[2]);
+    if (layer.envHold >= 100) snprintf(text, sizeof(text), "      FULL");
+    else snprintf(text, sizeof(text), "%10u", (unsigned)(sample_envMs(layer.envHold, kEnvHoldMaxMs) + 0.5f));
+    lcd.drawText(text, kMenuDataTextSize, kMenuDataX[3], kMenuDataY[3]);
+    if (layer.envHold >= 100) snprintf(text, sizeof(text), "         -");
+    else snprintf(text, sizeof(text), "%10u", (unsigned)(sample_envMs(layer.envDecay, kEnvDecayMaxMs) + 0.5f));
+    lcd.drawText(text, kMenuDataTextSize, kMenuDataX[6], kMenuDataY[6]);
+    lcd.drawText("          ", kMenuDataTextSize, kMenuDataX[7], kMenuDataY[7]);
+    lcd_drawLayerInst_StartData(selectedLayerNum);
+    lcd_drawLayerInst_EndData(selectedLayerNum);
+}
+
+void Controller::page_restoreInstMenu() {
+    /// @brief After the Sample page closes: put the normal Layer Inst knob boxes back.
+    if ((selectedLayerNum < 0) || (selectedLayerNum >= kLayerLibrarySize)) return;
+    lcd.setBackColor(BLACK);
+    lcd.clearRect(kMenuLineX[2] + 2, kMenuLineY[2], (kMenuDataX[3] + 20) - (kMenuLineX[2] + 2), kMenuLineHeight);
+    lcd_drawLayerInst0Menu(selectedLayerNum, true);
+    if (menu == LAYER_INST_1_MENU) lcd_drawLayerInst1Menu(selectedLayerNum);
+    else if (menu == LAYER_INST_2_MENU) lcd_drawLayerInst2Menu(selectedLayerNum);
+}
+
+void Controller::page_drawSample() {
+    /// @brief Sample page: the loaded sample's waveform, the START / END window that plays,
+    /// and the attack / hold / decay envelope drawn over it (time at normal pitch).
+    if ((selectedLayerNum < 0) || (selectedLayerNum >= kLayerLibrarySize)) return;
+    const Layer& layer = layerLibrary[selectedLayerNum];
+    const uint16_t gx = 40, gw = 860, gTop = 192, gBot = 390;
+    const int16_t mid = (gTop + gBot) / 2;
+    const float half = (gBot - gTop) / 2.0f - 2.0f;
+    char text[96];
+
+    // Peak cache: rebuilt only when a different sample is in the sector.
+    static int8_t peakMax[860], peakMin[860];
+    static int16_t cacheSector = -2;
+    static uint32_t cacheSize = 0;
+    static uint32_t cacheAddr = 0;
+
+    bool hasSample = (layer.samplePlay) && (layer.playSampleSector >= 0) && (layer.playSampleSector < kSampleSectorLibrarySize) &&
+                     sampleSectorLibrary[layer.playSampleSector].playMode;
+    uint32_t size = hasSample ? sampleSectorLibrary[layer.playSampleSector].size : 0;
+    if (size < 10) hasSample = false;
+    const uint32_t addr = hasSample ? (RAM_SAMPLE_ADDRESS + (layer.playSampleSector * kSampleByteSize)) : 0;
+
+    if (hasSample && ((cacheSector != layer.playSampleSector) || (cacheSize != size) || (cacheAddr != addr))) {
+        const volatile float* data = (const volatile float*)addr;
+        float peak = 0.00001f;
+        for (uint32_t k = 0; k < size; k++) { const float a = fabsf(data[k]); if (a > peak) peak = a; }
+        for (uint16_t c = 0; c < gw; c++) {
+            const uint32_t a0 = ((uint64_t)size * c) / gw;
+            uint32_t a1 = ((uint64_t)size * (c + 1)) / gw;
+            if (a1 <= a0) a1 = a0 + 1;
+            float mx = -1.0f, mn = 1.0f;
+            for (uint32_t k = a0; (k < a1) && (k < size); k++) { const float v = data[k] / peak; if (v > mx) mx = v; if (v < mn) mn = v; }
+            if (mx < mn) { mx = 0; mn = 0; }
+            peakMax[c] = (int8_t)(mx * 100.0f);
+            peakMin[c] = (int8_t)(mn * 100.0f);
+        }
+        cacheSector = layer.playSampleSector;
+        cacheSize = size;
+        cacheAddr = addr;
+        pageFullRedraw = true;
+    }
+
+    if (pageFullRedraw) {
+        lcd.setBackColor(BLACK);
+        lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
+        lcd.setForeColor(kThemeLine);
+        lcd.drawHLine(30, 177, 900);
+        lcd.setFont(FONT_07x09);
+        lcd.setAlignment(LEFT);
+        lcd.setForeColor(kThemeHeader);
+        const char h1[] = "TOP KNOBS 3-4: ATTACK / HOLD    BOTTOM KNOBS 1-3: START / END / DECAY    (HOLD FULL = NO DECAY)";
+        lcd.drawText(h1, strlen(h1), 30, 422);
+        lcd.setAlignment(RIGHT);
+        const char h2[] = "TAP LAYER INST: BACK";
+        lcd.drawText(h2, strlen(h2), 930, 438);
+        pageFullRedraw = false;
+    }
+
+    // ---- title + summary
+    lcd.setFont(FONT_14x18);
+    lcd.setAlignment(LEFT);
+    lcd.setBackColor(BLACK);
+    lcd.setForeColor(kThemeAccent);
+    char name[kFileNameSize + 1] = {0};
+    if (hasSample) {
+        strncpy(name, layer.sampleLoadedData.nameLong, kFileNameSize);
+        char* dot = strrchr(name, '.');
+        if (dot) *dot = 0;
+    }
+    snprintf(text, sizeof(text), "DRUM %02d  %-40.40s", selectedLayerNum + 1, hasSample ? name : "NO SAMPLE LOADED");
+    lcd.drawText(text, 49, 30, 136);
+
+    const float secs = hasSample ? (float)size / AUDIO_SAMPLE_RATE : 0.0f;
+    const float sSec = secs * (float)layer.start / 100.0f;
+    const float eSec = secs * (float)layer.end / 100.0f;
+    char hold[16], decay[16];
+    if (layer.envHold >= 100) { snprintf(hold, sizeof(hold), "FULL"); snprintf(decay, sizeof(decay), "-"); }
+    else {
+        snprintf(hold, sizeof(hold), "%u MS", (unsigned)(sample_envMs(layer.envHold, kEnvHoldMaxMs) + 0.5f));
+        snprintf(decay, sizeof(decay), "%u MS", (unsigned)(sample_envMs(layer.envDecay, kEnvDecayMaxMs) + 0.5f));
+    }
+    // (no %f: the C library printf in this build may not format floats)
+    auto cs = [](float sec) -> unsigned { return (unsigned)(sec * 100.0f + 0.5f); };
+    snprintf(text, sizeof(text), "%u.%02u-%u.%02u OF %u.%02u S  ATTACK %u MS  HOLD %s  DECAY %s",
+             cs(sSec) / 100, cs(sSec) % 100, cs(eSec) / 100, cs(eSec) % 100, cs(secs) / 100, cs(secs) % 100,
+             (unsigned)(sample_envMs(layer.envAttack, kEnvAttackMaxMs) + 0.5f), hold, decay);
+    page_drawSummary(text);
+
+    page_drawSampleKnobs();
+    lcd.setFont(FONT_07x09);
+
+    // ---- waveform + window + envelope, column by column (no flicker)
+    const uint32_t sIdx = hasSample ? (uint32_t)(((uint64_t)size * layer.start) / 100) : 0;
+    const uint32_t eIdx = hasSample ? (uint32_t)(((uint64_t)size * layer.end) / 100) : 0;
+    const float msPerSample = 1000.0f / AUDIO_SAMPLE_RATE;
+    const float aMs = sample_envMs(layer.envAttack, kEnvAttackMaxMs);
+    const bool holdFull = (layer.envHold >= 100);
+    const float hMs = holdFull ? 1e9f : sample_envMs(layer.envHold, kEnvHoldMaxMs);
+    float dMs = sample_envMs(layer.envDecay, kEnvDecayMaxMs);
+    if (dMs < 2.0f) dMs = 2.0f;
+    int16_t prevY = -1;
+    for (uint16_t c = 0; c < gw; c++) {
+        const uint16_t x = gx + c;
+        lcd.setForeColor(BLACK);
+        lcd.drawVLine(x, gTop, gBot - gTop + 1);
+        if ((c % 2) == 0) { lcd.setForeColor(kThemeLine); lcd.drawPixel(x, mid); }
+        if (!hasSample) continue;
+
+        const uint32_t idx = (uint32_t)(((uint64_t)size * c) / gw);
+        const bool inside = (idx >= sIdx) && (idx < eIdx);
+        float g = 0.0f;
+        if (inside) {
+            const float t = (float)(idx - sIdx) * msPerSample;
+            if ((aMs > 0.0f) && (t < aMs)) g = t / aMs;
+            else if (t < aMs + hMs) g = 1.0f;
+            else if (t < aMs + hMs + dMs) { const float u = 1.0f - (t - aMs - hMs) / dMs; g = u * u; }
+            else g = 0.0f;
+        }
+        const int16_t yMax = (int16_t)(mid - (peakMax[c] / 100.0f) * half);
+        const int16_t yMin = (int16_t)(mid - (peakMin[c] / 100.0f) * half);
+        // Faint full waveform, then the part you hear (shaped by the envelope) on top.
+        lcd.setForeColor(inside ? page_mix(BLACK, kThemeInk, 0.22f) : page_mix(BLACK, kThemeLine, 0.7f));
+        if (yMin > yMax) lcd.drawVLine(x, yMax, yMin - yMax + 1); else lcd.drawPixel(x, mid);
+        if (inside && (g > 0.0f)) {
+            const int16_t yMaxG = (int16_t)(mid - (peakMax[c] / 100.0f) * half * g);
+            const int16_t yMinG = (int16_t)(mid - (peakMin[c] / 100.0f) * half * g);
+            lcd.setForeColor(kThemeInk);
+            if (yMinG > yMaxG) lcd.drawVLine(x, yMaxG, yMinG - yMaxG + 1); else lcd.drawPixel(x, mid);
+        }
+        // Envelope line (top half) inside the window
+        if (inside) {
+            const int16_t y = (int16_t)(mid - g * half);
+            lcd.setForeColor(kThemeAccent);
+            if (prevY >= 0) {
+                const int16_t lo = (y < prevY) ? y : prevY, hi = (y < prevY) ? prevY : y;
+                if (hi - lo > 1) lcd.drawVLine(x, lo, hi - lo);
+            }
+            lcd.drawPixel(x, y);
+            prevY = y;
+        } else {
+            prevY = -1;
+        }
+        // START / END markers
+        if ((idx >= sIdx) && (c > 0) && ((uint32_t)(((uint64_t)size * (c - 1)) / gw) < sIdx)) { lcd.setForeColor(kThemeAccent); lcd.drawVLine(x, gTop, gBot - gTop + 1); }
+        if ((idx >= eIdx) && (c > 0) && ((uint32_t)(((uint64_t)size * (c - 1)) / gw) < eIdx)) { lcd.setForeColor(kThemeAccent); lcd.drawVLine(x, gTop, gBot - gTop + 1); }
+    }
+
+    // ---- time labels under the waveform
+    lcd.setFont(FONT_07x09);
+    lcd.setBackColor(BLACK);
+    lcd.setForeColor(kThemeHeader);
+    lcd.clearRect(gx - 10, gBot + 4, gw + 20, 10);
+    if (hasSample) {
+        for (uint8_t k = 0; k <= 4; k++) {
+            const unsigned c100 = (unsigned)(secs * k * 25.0f + 0.5f);   // hundredths of a second
+            snprintf(text, sizeof(text), "%u.%02u S", c100 / 100, c100 % 100);
+            lcd.setAlignment((k == 0) ? LEFT : ((k == 4) ? RIGHT : CENTER));
+            lcd.drawText(text, strlen(text), gx + (gw * k) / 4, gBot + 5);
+        }
+    }
+}
+
 void Controller::preview_schedule(uint8_t layerNum_) {
     /// @brief Custom: asks for the selected sample to be auditioned once the knob stops moving.
     if (!kSamplePreview) return;
@@ -5947,6 +6269,9 @@ void Controller::page_draw() {
             break;
         case PAGE_GROOVE:
             page_drawGroove();
+            break;
+        case PAGE_SAMPLE:
+            page_drawSample();
             break;
         default:
             break;
@@ -7479,6 +7804,13 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
                         layerInst_setFill(i, (bool)data[offset + 21]);
                         layerInst_setStyle(i, (bool)data[offset + 22]);
                         layerLibrary[i].swingExtra = (data[offset + 23] <= kMaxDrumSwing) ? data[offset + 23] : 0;   // custom
+                        {   // custom envelope (old files: defaults)
+                            const uint16_t ao = 500 + (i * 100) + kEnvFileMarkerOffset;
+                            const bool hasEnv = (data[ao] == 'E');
+                            layerLibrary[i].envAttack = (hasEnv && data[ao + 1] <= 100) ? data[ao + 1] : kInitialEnvAttack;
+                            layerLibrary[i].envHold = (hasEnv && data[ao + 2] <= 100) ? data[ao + 2] : kInitialEnvHold;
+                            layerLibrary[i].envDecay = (hasEnv && data[ao + 3] <= 100) ? data[ao + 3] : kInitialEnvDecay;
+                        }
                     }
 
                     // 5.4 ASSET REFERENCE EXTRACTION
@@ -7686,22 +8018,9 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
     return result;
 }
 
-SdResult Controller::sd_saveFile(uint8_t fileNum_) {
-    /// @brief Serializes current project state and writes it to the selected SD slot.
-    /// Encodes drumkit parameters, asset references, song data, and final EOF marker.
-
-    SdResult result = SD_ERROR;
-    char eof[] = "EOF";
-    char fileName[50];
-    char fileNum[4];
-
-    // 1. FILENAME CONSTRUCTION
-    // Generate the 3-digit padded filename (e.g., File_001.rws).
-    sprintf(fileNum, "%03d", (fileNum_ + 1));
-    strcpy(fileName, kFileStart);
-    strcat(fileName, fileNum);
-    strcat(fileName, kFileEnd);
-    uint8_t data[kDrumkitByteSize] = {0x00};
+void Controller::sd_encodeProject(uint8_t* data) {
+    /// @brief Custom: builds the settings part of a project file (moved out of sd_saveFile unchanged)
+    /// so the unsaved-changes marker can compare exactly what a save would write.
 
     // 2. PAYLOAD ENCODING
     // Build the drumkit payload buffer before starting SD write operations.
@@ -7869,7 +8188,31 @@ SdResult Controller::sd_saveFile(uint8_t fileNum_) {
         } else {
             data[offset + 50] = 'o';
         }
+        data[offset + kEnvFileMarkerOffset] = 'E';   // custom envelope
+        data[offset + kEnvFileMarkerOffset + 1] = layer.envAttack;
+        data[offset + kEnvFileMarkerOffset + 2] = layer.envHold;
+        data[offset + kEnvFileMarkerOffset + 3] = layer.envDecay;
     }
+
+}
+
+SdResult Controller::sd_saveFile(uint8_t fileNum_) {
+    /// @brief Serializes current project state and writes it to the selected SD slot.
+    /// Encodes drumkit parameters, asset references, song data, and final EOF marker.
+
+    SdResult result = SD_ERROR;
+    char eof[] = "EOF";
+    char fileName[50];
+    char fileNum[4];
+
+    // 1. FILENAME CONSTRUCTION
+    // Generate the 3-digit padded filename (e.g., File_001.rws).
+    sprintf(fileNum, "%03d", (fileNum_ + 1));
+    strcpy(fileName, kFileStart);
+    strcat(fileName, fileNum);
+    strcat(fileName, kFileEnd);
+    uint8_t data[kDrumkitByteSize] = {0x00};
+    sd_encodeProject(data);   // custom: shared with the unsaved-changes check
 
     // 3. INPUT PROTECTION
     // Disable keyboard interrupts during SD write operations.
@@ -8282,6 +8625,13 @@ SdResult Controller::sd_loadDrumkit(uint8_t kitNum_) {
                         layerInst_setFill(i, (bool)data[offset + 21]);
                         layerInst_setStyle(i, (bool)data[offset + 22]);
                         layerLibrary[i].swingExtra = (data[offset + 23] <= kMaxDrumSwing) ? data[offset + 23] : 0;   // custom
+                        {   // custom envelope (old files: defaults)
+                            const uint16_t ao = 500 + (i * 100) + kEnvFileMarkerOffset;
+                            const bool hasEnv = (data[ao] == 'E');
+                            layerLibrary[i].envAttack = (hasEnv && data[ao + 1] <= 100) ? data[ao + 1] : kInitialEnvAttack;
+                            layerLibrary[i].envHold = (hasEnv && data[ao + 2] <= 100) ? data[ao + 2] : kInitialEnvHold;
+                            layerLibrary[i].envDecay = (hasEnv && data[ao + 3] <= 100) ? data[ao + 3] : kInitialEnvDecay;
+                        }
                     }
 
                     // 5.4 ASSET REFERENCE EXTRACTION
@@ -8598,6 +8948,10 @@ SdResult Controller::sd_saveDrumkit(uint8_t kitNum_) {
         } else {
             data[offset + 50] = 'o';
         }
+        data[offset + kEnvFileMarkerOffset] = 'E';   // custom envelope
+        data[offset + kEnvFileMarkerOffset + 1] = layer.envAttack;
+        data[offset + kEnvFileMarkerOffset + 2] = layer.envHold;
+        data[offset + kEnvFileMarkerOffset + 3] = layer.envDecay;
     }
 
     // 3. INPUT PROTECTION
@@ -9944,12 +10298,12 @@ void Controller::lcd_drawProjectName() {
     const LcdAlign align = lcd.getAlignment();
     const uint16_t spacing = lcd.getSpacing();
     char text[12];
-    if (currentFileNum >= 0) snprintf(text, sizeof(text), "FILE_%03d", currentFileNum + 1);
-    else snprintf(text, sizeof(text), "  NEW   ");
+    if (currentFileNum >= 0) snprintf(text, sizeof(text), projectDirty ? "FILE_%03d*" : "FILE_%03d ", currentFileNum + 1);
+    else snprintf(text, sizeof(text), projectDirty ? "  NEW*   " : "  NEW    ");
     lcd.setBackColor(BLACK);
     lcd.clearRect(kMenuIconRightX - 46, kMenuIconRightY - 4, 96, 22);
     lcd.setFont(FONT_10x14);
-    lcd.setSpacing(1);
+    lcd.setSpacing(0);
     lcd.setAlignment(CENTER);
     lcd.setForeColor(kThemeDark ? kThemeAccent : WHITE);
     lcd.drawText(text, strlen(text), kMenuIconRightX + 2, kMenuIconRightY);
@@ -10129,7 +10483,10 @@ void Controller::lcd_transitionMenu() {
     // Custom: leaving a menu closes its full-screen page and brings the song grid back.
     // Exception: switching from one LFO to another keeps the LFO page up (it just redraws).
     const bool lfoToLfo = (page == PAGE_LFO) && (menu == LFO_MENU) && (preMenu == LFO_MENU);
-    if ((page != PAGE_NONE) && !lfoToLfo) page_close();
+    auto isInst = [](Menu m) { return (m == LAYER_INST_0_MENU) || (m == LAYER_INST_1_MENU) || (m == LAYER_INST_2_MENU); };
+    const bool instToInst = (page == PAGE_SAMPLE) && isInst(menu) && isInst(preMenu);
+    if (instToInst) page_markDirty(PAGE_SAMPLE);
+    if ((page != PAGE_NONE) && !lfoToLfo && !instToInst) page_close();
 
     // 1. PREVIOUS MENU CLEANUP
     // Clear UI artifacts based on previous menu type.
@@ -13282,6 +13639,7 @@ void Controller::lcd_drawLayerInst_SampleData(uint8_t layerNum_) {
 }
 
 void Controller::lcd_drawLayerInst_GraphData(uint8_t layerNum_) {
+    if (page == PAGE_SAMPLE) return;   // custom: the Sample page uses this corner for ATTACK / HOLD
     /// @brief Draws sample waveform graph plus bit-depth and duration metadata.
 
     // 1. CONTEXT LOAD
@@ -14874,7 +15232,7 @@ void Controller::file_newSelect() {
 void Controller::file_newAction() {
     undo_reset();   // custom
     currentFileNum = -1;   // custom
-    lcd_drawProjectName();
+    savedHashValid = false;   // re-baselined once the reset below is done
     /// @brief Executes New File flow by resetting layer/song/modulation/system runtime state.
 
     // 1. ALERT CLEANUP
@@ -14973,7 +15331,7 @@ void Controller::file_loadAction() {
     // Release load-in-progress flag after SD transaction completes.
     loadAction = false;
     if (alertType != ALERT_LOADERROR) currentFileNum = fileMenuCounter;   // custom
-    lcd_drawProjectName();
+    project_markSaved();
 
     // 5. RESULT ALERT PRESENTATION
     // Display result alert and keep it visible for user acknowledgment.
@@ -15015,7 +15373,7 @@ void Controller::file_saveAction() {
     // 3. SD SAVE EXECUTION & RESULT MAPPING
     // Execute SD save and map operation result to alert type.
     (sd_saveFile(fileMenuCounter) == SD_OK) ? alertType = ALERT_SAVESUCCESS : alertType = ALERT_SAVEERROR;
-    if (alertType == ALERT_SAVESUCCESS) currentFileNum = fileMenuCounter;   // custom: saved as this file
+    if (alertType == ALERT_SAVESUCCESS) { currentFileNum = fileMenuCounter; project_markSaved(); }   // custom: saved as this file
     lcd_drawProjectName();
 
     // 4. TRANSACTION FLAG RESTORE
@@ -20637,6 +20995,20 @@ void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
                     tBD.counterEnd = tBD.counterMax;
                 }
 
+                // Custom: per-drum envelope (attack / hold / decay), counted in output samples.
+                {
+                    auto envSamples = [](uint8_t v, float maxMs) -> uint32_t {
+                        const float f = (float)v / 100.0f;
+                        return (uint32_t)(f * f * maxMs * (AUDIO_SAMPLE_RATE / 1000.0f));
+                    };
+                    tBD.envPos = 0;
+                    tBD.envAttack = envSamples(layer.envAttack, kEnvAttackMaxMs);
+                    tBD.envHold = (layer.envHold >= 100) ? 0xFFFFFFFFu : envSamples(layer.envHold, kEnvHoldMaxMs);
+                    tBD.envDecay = envSamples(layer.envDecay, kEnvDecayMaxMs);
+                    if (tBD.envDecay < 88) tBD.envDecay = 88;   // at least 2 ms so a cut never clicks
+                    tBD.envActive = (tBD.envAttack > 0) || (tBD.envHold != 0xFFFFFFFFu);
+                }
+
                 // Custom: per-drum swing adds to (or creates) the trigger delay for this hit.
                 {
                     const uint16_t extraDelay = swingDelayTicks[layerNum_];
@@ -20833,6 +21205,9 @@ void Controller::layerInst_reset(uint8_t layerNum_) {
     layerInst_setFill(layerNum_, true);
     layerInst_setStyle(layerNum_, true);
     layerLibrary[layerNum_].swingExtra = 0;   // custom
+    layerLibrary[layerNum_].envAttack = kInitialEnvAttack;
+    layerLibrary[layerNum_].envHold = kInitialEnvHold;
+    layerLibrary[layerNum_].envDecay = kInitialEnvDecay;
 }
 
 void Controller::layerInst_menuRight() {
@@ -21663,6 +22038,7 @@ void Controller::layerInst_setSampleLoaded(uint8_t layerNum_) {
                         sampleSectorLibrary[targetSector].writeMode = false;
                         layer.playSampleSector = layer.writeSampleSector;
                         layer.samplePlay = true;
+                        page_markDirty(PAGE_SAMPLE);   // custom
                         __set_PRIMASK(primaskPublish);
 
                         // Store duration in seconds (post-upsampling total samples)
@@ -21863,6 +22239,7 @@ void Controller::layerInst_setStart(uint8_t layerNum_, uint8_t start_) {
         // Apply start position to target layer.
         Layer& layer = layerLibrary[layerNum_];
         layer.start = start_;
+        page_markDirty(PAGE_SAMPLE);   // custom
 
         // 3. UI REFRESH
         // Update start label and graph when menu is visible.
@@ -21883,6 +22260,7 @@ void Controller::layerInst_setEnd(uint8_t layerNum_, uint8_t end_) {
         // Apply end position to target layer.
         Layer& layer = layerLibrary[layerNum_];
         layer.end = end_;
+        page_markDirty(PAGE_SAMPLE);   // custom
 
         // 3. UI REFRESH
         // Update end label and graph when menu is visible.
@@ -23925,6 +24303,21 @@ void Controller::processAudioMetronome() {
     }
 }
 
+static inline float env_next(BeatPlayData& b, bool& ended) {
+    /// @brief Custom: next envelope gain for a voice (attack ramp, hold, squared decay to silence).
+    const uint32_t pos = b.envPos++;
+    if (pos < b.envAttack) return (float)pos / (float)b.envAttack;
+    uint32_t q = pos - b.envAttack;
+    if ((b.envHold == 0xFFFFFFFFu) || (q < b.envHold)) return 1.0f;
+    q -= b.envHold;
+    if (q < b.envDecay) {
+        const float x = 1.0f - ((float)q / (float)b.envDecay);
+        return x * x;
+    }
+    ended = true;
+    return 0.0f;
+}
+
 void Controller::processAudioLayer() {
     /// @brief Manages real-time audio playback for all layers, featuring sample retriggering, bitcrushing, linear interpolation, and multiple playback direction modes.
 
@@ -23984,6 +24377,7 @@ void Controller::processAudioLayer() {
             if (aBD.counter == aBD.counterStart) io.midi.txTriggerNoteOn[i] = true;
 
             bool bitCrushActive = (aBD.resolutionCoef != 0x00FFFFFF);
+            bool envEnded = false;
 
             for (uint16_t j = 0; j < copySize; j++) {
                 float sample = localCache[j];
@@ -24008,13 +24402,16 @@ void Controller::processAudioLayer() {
                     if (aBD.counterFade < 49) aBD.counterFade++;
                 }
 
+                // Custom envelope
+                if (aBD.envActive) sample *= env_next(aBD, envEnded);
+
                 // Apply final volume and store in output buffer
                 targetBuffer[j] = sample * aBD.volumeMultiplier;
             }
 
             // Update sample counter and check for playback end
             aBD.counter += (float)copySize;
-            if (copySize < I2S_BLOCK_SIZE) {
+            if ((copySize < I2S_BLOCK_SIZE) || (envEnded && !aBD.newBeatFlag)) {
                 lD.beatStartFlag = false;
                 lD.beatEndFlag = true;
                 aBD.active = false;
@@ -24026,6 +24423,7 @@ void Controller::processAudioLayer() {
             // Handle interpolated read and multi-direction playback modes.
             for (uint16_t k = 0; k < I2S_BLOCK_SIZE; k++) {
                 bool endFlag = false;
+                bool envEnded = false;
 
                 // Perform Linear Interpolation for pitch shifting
                 float counterFloat = aBD.counter;
@@ -24067,6 +24465,12 @@ void Controller::processAudioLayer() {
                         aBD.counterFade++;
                     else if (!aBD.newBeatFlag)
                         endFlag = true;
+                }
+
+                // Custom envelope
+                if (aBD.envActive) {
+                    currentSample *= env_next(aBD, envEnded);
+                    if (envEnded && !aBD.newBeatFlag) endFlag = true;
                 }
 
                 // Store sample with volume scaling

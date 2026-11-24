@@ -471,6 +471,14 @@ class Controller {
     void lfo_toggleTarget(uint8_t layerNum_);
     void preview_schedule(uint8_t layerNum_);
     void lcd_drawProjectName();
+    void sd_encodeProject(uint8_t* data);
+    uint32_t project_hash();
+    void project_markSaved();
+    void project_checkDirty();
+    void sample_setEnv(uint8_t which_, int16_t value_);
+    void page_drawSample();
+    void page_drawSampleKnobs();
+    void page_restoreInstMenu();
     uint16_t groove_swingDelay(uint8_t layerNum_, uint16_t interval_);
     uint16_t groove_unswing(uint8_t layerNum_, uint16_t interval_);
     void groove_setDrumSwing(uint8_t layerNum_, int16_t value_);
@@ -511,6 +519,11 @@ class Controller {
     bool textUndoFlag = false;
     char undoText[6] = "UNDO ";
     int16_t currentFileNum = -1;                                        // project shown top-right (-1 = new, unsaved)
+    uint32_t savedHash = 0;                                             // unsaved-changes marker: project hash at last load/save/new
+    bool savedHashValid = false;
+    bool projectDirty = false;
+    uint32_t dirtyCheckTick = 0;
+    bool instKeyUsed = false;                                           // Layer Inst key was combined with a pad
     uint8_t grooveLayer = 0;                                            // Groove page: selected drum
     int32_t grooveShiftTotal[kLayerLibrarySize] = {0};                  // Groove page: net shift per drum this session (ticks)
     uint8_t grooveCorrect = kInitialCorrect;                            // Timing Correct strength %

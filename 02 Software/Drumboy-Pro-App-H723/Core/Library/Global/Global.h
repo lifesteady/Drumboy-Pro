@@ -1287,7 +1287,10 @@ typedef enum {
     ENC_LFO_TARGET                                  = 0x64,  // custom: LFO page target row
     ENC_LFO_SELECT                                  = 0x65,  // custom: step through LFO 1-10
     ENC_GROOVE_DRUMSWING                            = 0x66,  // custom: Rhythm menu knob 7
-    ENC_GROOVE_CORRECT                              = 0x67   // custom: Rhythm menu knob 8
+    ENC_GROOVE_CORRECT                              = 0x67,  // custom: Rhythm menu knob 8
+    ENC_SMP_ATTACK                                  = 0x68,  // custom: sample page knobs
+    ENC_SMP_HOLD                                    = 0x69,
+    ENC_SMP_DECAY                                   = 0x6A
 } EncoderFunc;
 
 const EncoderFunc encoderLocalFunction[][8] = {
@@ -1464,11 +1467,18 @@ const EncoderFuncData kEncoderFuncDataLibrary[] = {
     {ENC_LFO_TARGET,          ENC_RES_S, "TARGET    ", "LFO   ", "   ", false},
     {ENC_LFO_SELECT,          ENC_RES_S, "LFO       ", "LFO   ", "   ", false},
     {ENC_GROOVE_DRUMSWING,    ENC_RES_M, "DRUM-SWING", "RHY   ", "  %", false},
-    {ENC_GROOVE_CORRECT,      ENC_RES_S, "CORRECT   ", "RHY   ", "  %", false}
+    {ENC_GROOVE_CORRECT,      ENC_RES_S, "CORRECT   ", "RHY   ", "  %", false},
+    {ENC_SMP_ATTACK,          ENC_RES_F, "ATTACK    ", "LAYER ", " MS", false},
+    {ENC_SMP_HOLD,            ENC_RES_F, "HOLD      ", "LAYER ", " MS", false},
+    {ENC_SMP_DECAY,           ENC_RES_F, "DECAY     ", "LAYER ", " MS", false}
 };
 
+// Knob layout while the Sample page is open (any of the three Layer Inst menus).
+const EncoderFunc kSamplePageFunctions[8] = {ENC_INST_0_INST, ENC_INST_0_SAMPLE, ENC_SMP_ATTACK, ENC_SMP_HOLD,
+                                             ENC_INST_1_START, ENC_INST_1_END, ENC_SMP_DECAY, ENC_FNC_NONE};
+
 // The table above is indexed by EncoderFunc value, so every entry must sit at its own enum number.
-static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_GROOVE_CORRECT + 1,
+static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_SMP_DECAY + 1,
               "kEncoderFuncDataLibrary must have one entry per EncoderFunc value");
 
 typedef enum {
@@ -2191,8 +2201,19 @@ typedef enum {
     PAGE_EFFECT_0                                   = 0x05,
     PAGE_EFFECT_1                                   = 0x06,
     PAGE_LFO                                        = 0x07,
-    PAGE_GROOVE                                     = 0x08   // Rhythm key twice: per-drum swing + timing correct
+    PAGE_GROOVE                                     = 0x08,  // Rhythm key twice: per-drum swing + timing correct
+    PAGE_SAMPLE                                     = 0x09   // Layer Inst tapped alone: waveform, trim, envelope
 } PageView;
+
+// Custom sample envelope (per drum). Values are 0-100 knob steps; times grow with the square of
+// the value so small settings are fine-grained. HOLD 100 = FULL (play to the end, no decay).
+const uint8_t kInitialEnvAttack                     = 0;
+const uint8_t kInitialEnvHold                       = 100;
+const uint8_t kInitialEnvDecay                      = 30;
+const float kEnvAttackMaxMs                         = 1000.0f;
+const float kEnvHoldMaxMs                           = 4000.0f;
+const float kEnvDecayMaxMs                          = 4000.0f;
+const uint16_t kEnvFileMarkerOffset                 = 83;    // inside each drum's 100-byte asset block (bytes 83-99 were unused)
 
 // Custom groove: each drum can swing MORE than the master swing (extra 0-25 %), and
 // Timing Correct pulls a drum's hits toward the QUANTIZE grid by a chosen strength.
@@ -2218,7 +2239,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.32 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.33 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -7322,6 +7343,9 @@ struct Layer {
     uint8_t timing                                  = kInitialLayerTiming;
     uint8_t probability                             = kInitialLayerProbability;
     uint8_t swingExtra                              = 0;   // custom: extra swing for this drum (0-25 %)
+    uint8_t envAttack                               = kInitialEnvAttack;   // custom envelope (0-100)
+    uint8_t envHold                                 = kInitialEnvHold;
+    uint8_t envDecay                                = kInitialEnvDecay;
 
     uint8_t lfoLevel                                = kInitialLayerLfo;
     uint8_t lfoPitch                                = kInitialLayerLfo;
@@ -7487,6 +7511,13 @@ struct BeatPlayData {
     uint8_t directionPhase;
 
     MixerInMode mixerInMode;
+
+    // Custom envelope (in output samples). envHold 0xFFFFFFFF = hold to the end.
+    bool envActive;
+    uint32_t envPos;
+    uint32_t envAttack;
+    uint32_t envHold;
+    uint32_t envDecay;
 };
 
 struct LayerPlayData {
