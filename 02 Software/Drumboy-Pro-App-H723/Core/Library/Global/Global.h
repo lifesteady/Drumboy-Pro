@@ -718,6 +718,9 @@ typedef enum {
 // Custom: draw all text in smooth Liberation Sans (false = the stock pixel fonts).
 const bool kSansText                                = true;
 
+// Custom: velocity levels 1..16 -> gain. 16 = full, each step -2 dB (level 1 = -30 dB), like MPC 16 levels.
+const float kVelGain[17] = {0.0f, 0.03162f, 0.03981f, 0.05012f, 0.06310f, 0.07943f, 0.10000f, 0.12589f, 0.15849f, 0.19953f, 0.25119f, 0.31623f, 0.39811f, 0.50119f, 0.63096f, 0.79433f, 1.00000f};
+
 typedef enum {
     FONT_05x07                                      = 0x00,
     FONT_07x09                                      = 0x01,
@@ -2344,7 +2347,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.87 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.88 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -7365,7 +7368,14 @@ struct Beat {
     int8_t note                                     = 0;   // custom: semitones for Pitch mode (uses a padding byte)
     uint16_t startInterval                          = 0;
     uint16_t endInterval                            = 0;
-    uint16_t gate                                   = 0;   // custom: Notes gate length in ticks (0 = ring out)
+    uint16_t gate                                   = 0;   // custom: [11:0] Notes gate length in ticks (0 = ring out),
+                                                           //         [15:12] 16 - velocity (0 = full, so old songs play full)
+
+    // custom: velocity 1..16 and gate length share the gate field (no extra memory)
+    uint16_t getGate() const noexcept { return gate & 0x0FFF; }
+    void setGate(uint16_t g_) noexcept { if (g_ > 0x0FFF) g_ = 0x0FFF; gate = (uint16_t)((gate & 0xF000) | g_); }
+    uint8_t getVel() const noexcept { return (uint8_t)(16 - (gate >> 12)); }
+    void setVel(uint8_t v_) noexcept { if (v_ < 1) v_ = 1; if (v_ > 16) v_ = 16; gate = (uint16_t)((gate & 0x0FFF) | ((uint16_t)(16 - v_) << 12)); }
 
     // Bit masks for precise field extraction
 

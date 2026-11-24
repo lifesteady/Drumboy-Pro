@@ -489,6 +489,10 @@ class Controller {
     float noteRepeat_step();
     void noteRepeat_tick();
     void noteRepeat_stopped();
+    uint8_t vel_pad();
+    float vel_gain(uint8_t v_) const { return kVelGain[(v_ >= 1 && v_ <= 16) ? v_ : 16]; }
+    void page_drawLevels();
+    uint8_t levels_padVel(uint8_t pad_);
     void rhythm_stepSwingGrid(bool up_);
     int8_t noteRepeat_pitchPad();
     void noteRepeat_pitchHit(int8_t pad_, bool record_, uint16_t at_);
@@ -609,6 +613,12 @@ class Controller {
     EqFilter laneEqF[4][6];                                             // 2 LANES: EQ state per path (A, B, REVERB, DRY)
     uint32_t routeCpuTick = 0;
     volatile int8_t noteRepeatPitchPad = -1;                            // Notes: pad the roll plays
+    uint8_t padVelocity = 16;                                           // velocity of pad hits (1..16)
+    uint8_t humanize = 0;                                               // random +- levels on pad hits
+    uint8_t levelsSoftest = 4;                                          // LEVELS mode: velocity of pad 1
+    bool levelsMode = false;                                            // Sync key twice: pads = velocity levels
+    uint8_t recordVel = 16;                                             // velocity stamped on hits written by layerSong_setBeat
+    uint32_t velRand = 0x12345678u;
     volatile bool noteRepeatHeld = false;                               // Metronome key held = Note Repeat
     volatile uint16_t noteRepeatPads = 0;                               // pads currently held (bit per drum)
     volatile int32_t noteRepeatLast[kLayerLibrarySize] = {0};           // last tick each drum repeated on

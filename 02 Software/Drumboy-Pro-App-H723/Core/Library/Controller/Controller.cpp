@@ -1718,7 +1718,8 @@ void Controller::keyboard_action() {
                             // Custom Note Repeat: sound now, record on the nearest grid line, then the
                             // sequencer repeats it on every following grid line while the pad is held.
                             Layer& layer = layerLibrary[layerNum];
-                            if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(layerNum, 1.0f);
+                            const uint8_t v = vel_pad();
+                            if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(layerNum, vel_gain(v));
                             const float step = noteRepeat_step();
                             int32_t idx = (int32_t)((float)playInterval / step + 0.5f);
                             int32_t at = (int32_t)((float)idx * step + 0.5f);
@@ -1727,17 +1728,22 @@ void Controller::keyboard_action() {
                             if (recordActive) {
                                 undo_checkpoint(UNDO_RECORD);
                                 HAL_NVIC_DisableIRQ(TIM15_IRQn);
+                                recordVel = v;
                                 layerSong_setBeat(layerNum, activeSongBank, (uint16_t)at, 0, 0, 0, 0, true);
+                                recordVel = 16;
                                 HAL_NVIC_EnableIRQ(TIM15_IRQn);
                             }
                         } else {
                             Layer& layer = layerLibrary[layerNum];
                             lastPadLayer = layerNum;   // custom: Notes mode opens on this drum
-                            if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(layerNum, 1.0f);
+                            const uint8_t v = vel_pad();   // custom: PAD VELOCITY + HUMANIZE
+                            if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(layerNum, vel_gain(v));
                             if (recordActive) {
                                 undo_checkpoint(UNDO_RECORD);   // custom: one undo step per take
                                 if (!metronome.precountState) {
+                                    recordVel = v;
                                     layerSong_setBeat(layerNum, activeSongBank, groove_unswing(layerNum, playInterval), 0, 0, 0, 0, true);
+                                    recordVel = 16;
                                 } else {
                                     // Hit landed during precount; commit it to position 0 once playback starts.
                                     precountPendingBeat[layerNum] = true;
@@ -2696,8 +2702,15 @@ void Controller::keyboard_action() {
                             case KEY_IO:
                                 // Custom: Sync key = Pitch mode (Sync settings: Mixer key, three presses).
                                 if (!alertFlag) {
-                                    if (page == PAGE_PITCH) { page_close(); global_select(); }
+                                    if ((page == PAGE_PITCH) && !levelsMode) {   // custom: second press = LEVELS
+                                        levelsMode = true;
+                                        pageFullRedraw = true;
+                                        page_markDirty(PAGE_PITCH);
+                                        lcd_drawIo_PitchData();
+                                        lcd_drawMenuLabel(IO_MENU, -1);
+                                    } else if (page == PAGE_PITCH) { levelsMode = false; page_close(); global_select(); }
                                     else {
+                                        levelsMode = false;
                                         // Notes follows the drum you're on: the selected drum (INST / SEQ),
                                         // otherwise the last pad you played.
                                         if ((selectedLayerNum >= 0) && (selectedLayerNum < kLayerLibrarySize)) pitchLayer = (uint8_t)selectedLayerNum;
@@ -5751,109 +5764,120 @@ void Controller::route_pad(uint8_t layerNum_) {
 }
 
 void Controller::page_drawRoute() {
-    /// @brief Routing page: the stages as 7 boxes, then one row per drum (and Line In, Metronome)
-    /// showing which stages it goes through. Filled square = that stage is on and changes the
-    /// sound; hollow = it's off, the sound just passes through.
-    /// CHAIN: one line, a drum goes through everything after where it enters.
-    /// 2 LANES: EQ (per drum), then lane A (FILTER 1 > EFFECT 1) or lane B (FILTER 2 > EFFECT 2), then REVERB.
-    const RGB16Color label = kThemeHeader;
+    /// @brief Routing page, "buckets": one column per place a drum can go. Each column lists what
+    /// it adds (filter / effect) and holds a chip for every drum routed there.
+    /// 2 LANES: LANE A, LANE B, REVERB ONLY, DRY. CHAIN: EQ ... REVERB, DRY - a drum goes through
+    /// its column and every column to the right of it.
     const bool lanes = (routeMode == ROUTE_LANES);
-    const uint16_t x0 = 190, colW = 106, boxW = 96, boxY = 190, boxH = 40;
-    const uint16_t rowY = 236, rowH = 15;
+    auto rgb = [](uint8_t r, uint8_t g, uint8_t b) -> RGB16Color { return (RGB16Color)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)); };
+    const RGB16Color cBlue = rgb(0x5F, 0xA8, 0xE8), cPurple = rgb(0xB4, 0x8C, 0xE0), cTeal = rgb(0x5C, 0xC8, 0xB8);
+    const uint8_t nCol = lanes ? 4 : 7;
+    const uint16_t gap = lanes ? 13 : 8;
+    const uint16_t cw = (900 - gap * (nCol - 1)) / nCol;
+    const uint16_t top = 186, bot = 418, chip0 = 246, chipStep = 18, chipH = 16;
+    const uint8_t maxRows = 8;
+    const uint8_t chars = (uint8_t)((cw - 14) / 9);
     char text[112];
 
-    bool stageOn[7];
+    bool stageOn[6];
     stageOn[0] = eq.active;
     stageOn[1] = filter[0].active && (filter[0].type >= kMinFilterType) && (filter[0].type <= kMaxFilterType);
     stageOn[2] = filter[1].active && (filter[1].type >= kMinFilterType) && (filter[1].type <= kMaxFilterType);
     stageOn[3] = effect[0].active;
     stageOn[4] = effect[1].active;
     stageOn[5] = reverb.active;
-    stageOn[6] = true;
-
-    // Column order on screen. CHAIN: EQ F1 F2 FX1 FX2 REVERB OUT. 2 LANES: EQ [F1 FX1] [F2 FX2] REVERB OUT.
-    const uint8_t chainCol[7] = {0, 1, 2, 3, 4, 5, 6};
-    const uint8_t laneCol[7] = {0, 1, 3, 2, 4, 5, 6};   // stage -> column (stage 2 = FILTER 2, stage 3 = EFFECT 1)
-    const uint8_t* colOf = lanes ? laneCol : chainCol;
-    uint8_t stageAt[7];
-    for (uint8_t st = 0; st < 7; st++) stageAt[colOf[st]] = st;
-
-    auto stageState = [&](uint8_t c_) -> const char* {
-        static char buf[12];
-        const char* src = "";
-        switch (c_) {
+    auto stageType = [&](uint8_t st_) -> const char* {
+        static const char* const fn[] = {"OFF", "LOWPASS", "HIGHPASS", "BANDPASS", "BANDSTOP", "CLASSIC", "VINTAGE"};
+        const char* src = "OFF";
+        switch (st_) {
             case 0: { const int8_t pr = eq_matchPreset(); src = !eq.active ? "OFF" : ((pr >= 0) ? kEqPresets[pr].name : "CUSTOM"); } break;
-            case 1:
-            case 2: {
-                static const char* const fn[] = {"OFF", "LOWPASS", "HIGHPASS", "BANDPASS", "BANDSTOP", "CLASSIC", "VINTAGE"};
-                const Filter& f = filter[c_ - 1];
-                src = stageOn[c_] ? fn[(f.type <= 6) ? f.type : 0] : "OFF";
-            } break;
-            case 3:
-            case 4: {
-                const Effect& e = effect[c_ - 3];
-                src = stageOn[c_] ? kEffectTypeDataLibrary[(e.type < kSubEffectLibrarySize) ? e.type : 0].nameLongR : "OFF";
-            } break;
+            case 1: case 2: { const Filter& f = filter[st_ - 1]; src = stageOn[st_] ? fn[(f.type <= 6) ? f.type : 0] : "OFF"; } break;
+            case 3: case 4: { const Effect& e = effect[st_ - 3]; src = stageOn[st_] ? kEffectTypeDataLibrary[(e.type < kSubEffectLibrarySize) ? e.type : 0].nameLongR : "OFF"; } break;
             case 5: src = reverb.active ? kReverbTypeName[(reverb.type < rvp::kTypeCount) ? reverb.type : 0] : "OFF"; break;
-            default: src = "MASTER"; break;
+            default: break;
         }
         while (*src == ' ') src++;
-        snprintf(buf, sizeof(buf), "%s", src);
-        return buf;
+        return src;
     };
-
-    // Which stages a source goes through (by stage number 0..6)
-    auto pathOf = [&](uint8_t code_, bool visit_[7]) {
-        for (uint8_t st = 0; st < 7; st++) visit_[st] = false;
-        visit_[6] = true;
-        if (!lanes) {
-            const uint8_t e = (code_ > MIXER_IN_SEND) ? MIXER_IN_SEND : code_;
-            for (uint8_t st = e; st < 7; st++) visit_[st] = true;
-            return;
-        }
-        switch (code_) {   // line in / metronome keep chain codes: same mapping as the audio
-            case MIXER_IN_EQ: code_ = MIXER_IN_LANE_A_EQ; break;
-            case MIXER_IN_FILTER_0:
-            case MIXER_IN_EFFECT_0: code_ = MIXER_IN_LANE_A; break;
-            case MIXER_IN_FILTER_1:
-            case MIXER_IN_EFFECT_1: code_ = MIXER_IN_LANE_B; break;
-            default: break;
-        }
+    // Which column a routing code lands in (line in keeps a chain code: mapped like the audio).
+    auto colOf = [&](uint8_t code_) -> uint8_t {
+        if (!lanes) return (code_ > MIXER_IN_SEND) ? 6 : code_;
         switch (code_) {
-            case MIXER_IN_LANE_A_EQ: visit_[0] = true;   // fall through
-            case MIXER_IN_LANE_A: visit_[1] = visit_[3] = true; visit_[5] = (routeLaneRev == 0) || (routeLaneRev == 1); break;
-            case MIXER_IN_LANE_B_EQ: visit_[0] = true;   // fall through
-            case MIXER_IN_LANE_B: visit_[2] = visit_[4] = true; visit_[5] = (routeLaneRev == 0) || (routeLaneRev == 2); break;
-            case MIXER_IN_REVERB_EQ: visit_[0] = true;   // fall through
-            case MIXER_IN_REVERB: visit_[5] = true; break;
-            case MIXER_IN_SEND_EQ: visit_[0] = true; break;
-            default: break;
+            case MIXER_IN_EQ: case MIXER_IN_FILTER_0: case MIXER_IN_EFFECT_0: case MIXER_IN_LANE_A: case MIXER_IN_LANE_A_EQ: return 0;
+            case MIXER_IN_FILTER_1: case MIXER_IN_EFFECT_1: case MIXER_IN_LANE_B: case MIXER_IN_LANE_B_EQ: return 1;
+            case MIXER_IN_REVERB: case MIXER_IN_REVERB_EQ: return 2;
+            default: return 3;
         }
     };
+    auto hasEq = [&](uint8_t code_) -> bool {
+        return lanes && ((code_ == MIXER_IN_LANE_A_EQ) || (code_ == MIXER_IN_LANE_B_EQ) || (code_ == MIXER_IN_REVERB_EQ) || (code_ == MIXER_IN_SEND_EQ) || (code_ == MIXER_IN_EQ));
+    };
+    const bool revA = (routeLaneRev == 0) || (routeLaneRev == 1);
+    const bool revB = (routeLaneRev == 0) || (routeLaneRev == 2);
 
+    // column look: colour, title, two info lines, footer
+    RGB16Color colC[7];
+    const char* colT[7];
+    char info[7][2][24];
+    char foot[7][24];
+    for (uint8_t c = 0; c < 7; c++) { info[c][0][0] = info[c][1][0] = foot[c][0] = 0; }
+    if (lanes) {
+        colC[0] = kThemeAccent; colT[0] = "LANE A";
+        colC[1] = cBlue;        colT[1] = "LANE B";
+        colC[2] = cPurple;      colT[2] = "REVERB ONLY";
+        colC[3] = kThemeMid;    colT[3] = "DRY";
+        snprintf(info[0][0], 24, "FILTER 1  %s", stageType(1));
+        snprintf(info[0][1], 24, "EFFECT 1  %s", stageType(3));
+        snprintf(info[1][0], 24, "FILTER 2  %s", stageType(2));
+        snprintf(info[1][1], 24, "EFFECT 2  %s", stageType(4));
+        snprintf(info[2][0], 24, "NO FILTER, NO EFFECT");
+        snprintf(info[3][0], 24, "NOTHING ADDED");
+        const char* rv = stageType(5);
+        snprintf(foot[0], 24, revA ? "> REVERB %s" : "> STRAIGHT OUT", rv);
+        snprintf(foot[1], 24, revB ? "> REVERB %s" : "> STRAIGHT OUT", rv);
+        snprintf(foot[2], 24, "> REVERB %s", rv);
+        snprintf(foot[3], 24, "> STRAIGHT OUT");
+    } else {
+        const RGB16Color cc[7] = {kThemeGood, kThemeAccent, kThemeAmber, cBlue, cTeal, cPurple, kThemeMid};
+        const char* tt[7] = {"EQ", "FILTER 1", "FILTER 2", "EFFECT 1", "EFFECT 2", "REVERB", "DRY"};
+        for (uint8_t c = 0; c < 7; c++) {
+            colC[c] = cc[c];
+            colT[c] = tt[c];
+            if (c < 6) { snprintf(info[c][0], 24, "%s", stageType(c)); snprintf(foot[c], 24, "THEN >"); }
+            else { snprintf(info[c][0], 24, "NOTHING"); snprintf(foot[c], 24, "TO OUT"); }
+        }
+    }
+
+    // ---- static parts
     if (pageFullRedraw) {
         lcd.setBackColor(BLACK);
         lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
         lcd.setForeColor(kThemeLine);
         lcd.drawHLine(30, 177, 900);
-        lcd.setFont(FONT_07x09);
-        lcd.setAlignment(LEFT);
-        lcd.setForeColor(label);
-        lcd.setFont(FONT_07x09);
-        lcd.setAlignment(LEFT);
-        lcd.setForeColor(label);
-        const char h1[] = "PADS OR KNOB 2: PICK A DRUM";
-        lcd.drawText(h1, strlen(h1), 30, 438);
-        if (lanes) {   // lane labels over their boxes
-            lcd.setAlignment(CENTER);
-            lcd.setForeColor(kThemeAmber);
-            lcd.drawText("LANE A", 6, x0 + colW * 2, 180);
-            lcd.drawText("LANE B", 6, x0 + colW * 4, 180);
+        for (uint8_t c = 0; c < nCol; c++) {
+            const uint16_t x = 30 + c * (cw + gap);
+            lcd.setForeColor(page_mix(BLACK, colC[c], 0.7f));
+            lcd.drawRect(x, top, cw, bot - top);
+            const RGB16Color band = page_mix(BLACK, colC[c], 0.35f);
+            lcd.setForeColor(band);
+            lcd.fillRect(x + 1, top + 1, cw - 2, 22);
+            lcd.setFont(FONT_07x09);
+            lcd.setAlignment(LEFT);
+            lcd.setBackColor(band);
+            lcd.setForeColor(kThemeInk);
+            lcd.drawText(colT[c], strlen(colT[c]), x + 8, top + 8);
         }
+        lcd.setBackColor(BLACK);
+        lcd.setFont(FONT_07x09);
+        lcd.setAlignment(LEFT);
+        lcd.setForeColor(kThemeHeader);
+        const char* h = lanes ? "KNOB 2 OR PADS: PICK A DRUM.   KNOB 3: MOVE IT.   KNOB 4: DRUM EQ.   KNOB 8: LANE REVERB."
+                              : "KNOB 2 OR PADS: PICK A DRUM.   KNOB 3: MOVE IT.   SOUND FLOWS LEFT TO RIGHT.";
+        lcd.drawText(h, strlen(h), 30, 432);
         pageFullRedraw = false;
     }
 
-    // ---- title (+ layout) and summary (what the selected drum goes through)
+    // ---- title, CPU, summary for the selected drum
     lcd.setFont(FONT_14x18);
     lcd.setAlignment(LEFT);
     lcd.setBackColor(BLACK);
@@ -5863,124 +5887,96 @@ void Controller::page_drawRoute() {
     lcd.drawText(lanes ? "2 LANES" : "CHAIN  ", 7, 186, 136);
     page_drawCpu(930, 136);
     {
-        bool v[7];
-        pathOf((uint8_t)layerLibrary[routeLayer].mixerInMode, v);
+        const uint8_t code = (uint8_t)layerLibrary[routeLayer].mixerInMode;
+        const uint8_t c = colOf(code);
         int n = snprintf(text, sizeof(text), "DRUM %02u:", routeLayer + 1);
         bool any = false;
-        for (uint8_t c = 0; c < 6; c++) {
-            const uint8_t st = stageAt[c];
-            if (!v[st] || !stageOn[st]) continue;
-            n += snprintf(text + n, sizeof(text) - n, "%s %s", any ? " -" : "", kRouteStageName[st]);
+        auto add = [&](uint8_t st_) {
+            if (!stageOn[st_]) return;
+            static const char* const nm[6] = {"EQ", "FILTER 1", "FILTER 2", "EFFECT 1", "EFFECT 2", "REVERB"};
+            n += snprintf(text + n, sizeof(text) - n, "%s %s", any ? " -" : "", nm[st_]);
             any = true;
+        };
+        if (lanes) {
+            if (hasEq(code)) add(0);
+            if (c == 0) { add(1); add(3); if (revA) add(5); }
+            else if (c == 1) { add(2); add(4); if (revB) add(5); }
+            else if (c == 2) add(5);
+        } else {
+            for (uint8_t st = c; st < 6; st++) add(st);
         }
         if (!any) snprintf(text + n, sizeof(text) - n, " DRY, NOTHING CHANGES IT");
         page_drawSummary(text);
     }
 
-    // ---- stage boxes (drawn in column order)
-    for (uint8_t c = 0; c < 7; c++) {
-        const uint8_t st = stageAt[c];
-        const uint16_t bx = x0 + c * colW + (colW - boxW) / 2;
-        const bool on = stageOn[st];
-        lcd.setForeColor(on ? page_mix(BLACK, kThemeAccent, 0.8f) : kThemeLine);
-        lcd.drawRect(bx, boxY, boxW, boxH);
-        lcd.setFont(FONT_07x09);
-        lcd.setAlignment(CENTER);
-        lcd.setBackColor(BLACK);
-        char nm[13];
-        snprintf(nm, sizeof(nm), "%-11s", kRouteStageName[st]);
-        const int nl = (int)strlen(kRouteStageName[st]);
-        const int nleft = (11 - nl) / 2;
-        snprintf(nm, sizeof(nm), "%*s%-*s", nleft + nl, kRouteStageName[st], 11 - nleft - nl, "");
-        lcd.setForeColor(on ? kThemeInk : kThemeMid);
-        lcd.drawText(nm, strlen(nm), bx + boxW / 2, boxY + 7);
-        const char* sv = stageState(st);
-        char pad[13];
-        const int len = (int)strlen(sv);
-        const int left = (11 - len) / 2;
-        snprintf(pad, sizeof(pad), "%*s%-*s", left + len, sv, 11 - left - len, "");   // centred, fixed 11 chars
-        lcd.setForeColor(on ? kThemeAmber : kThemeMid);
-        lcd.drawText(pad, strlen(pad), bx + boxW / 2, boxY + 23);
-        if (c < 6) {   // arrow to the next box (2 LANES: none between lane A and lane B)
-            const uint16_t ax = bx + boxW + 2;
-            const uint16_t ay = boxY + boxH / 2;
-            lcd.setForeColor(BLACK);
-            lcd.fillRect(ax, ay - 3, 7, 7);
-            if (!(lanes && (c == 2))) {
-                lcd.setForeColor(kThemeLine);
-                lcd.drawHLine(ax, ay, 6);
-                lcd.drawPixel(ax + 4, ay - 2); lcd.drawPixel(ax + 5, ay - 1);
-                lcd.drawPixel(ax + 4, ay + 2); lcd.drawPixel(ax + 5, ay + 1);
-            }
-        }
-    }
-
-    // ---- one row per source
-    for (uint8_t r = 0; r < kLayerLibrarySize + 2; r++) {
-        const uint16_t y = rowY + r * rowH;
-        const bool isDrum = (r < kLayerLibrarySize);
-        const bool sel = isDrum && (r == routeLayer);
-        uint8_t code;
-        bool dim = false;
-        char name[16];
-        if (isDrum) {
-            const Layer& L = layerLibrary[r];
-            code = (uint8_t)L.mixerInMode;
-            char nm[13];
-            memcpy(nm, L.instLoadedData.nameShortL, 12);
-            nm[12] = 0;
-            for (int8_t k = 11; (k >= 0) && (nm[k] == ' '); k--) nm[k] = 0;
-            const char* p = nm;
-            while (*p == ' ') p++;
-            snprintf(name, sizeof(name), "%02u %-10.10s", r + 1, (*p && (*p != '-')) ? p : "------");
-            dim = L.mute || !L.samplePlay;
-        } else if (r == kLayerLibrarySize) {
-            code = (uint8_t)mixer.liMixerInMode;
-            snprintf(name, sizeof(name), "   LINE IN    ");
-            dim = mixer.liMute;
-        } else {
-            code = (uint8_t)MIXER_IN_SEND;   // the metronome is always dry
-            snprintf(name, sizeof(name), "   METRONOME  ");
-            dim = !metronome.active;
-        }
-        bool v[7];
-        pathOf(code, v);
-        uint8_t firstCol = 6;
-        for (uint8_t c = 0; c < 7; c++) if (v[stageAt[c]]) { firstCol = c; break; }
-
-        const RGB16Color bg = sel ? kRouteSelectBg : BLACK;
-        lcd.setBackColor(bg);
-        lcd.clearRect(30, y, 900, rowH - 1);
+    // ---- per column: info lines, chips, footer (each pixel painted once: no flicker)
+    for (uint8_t c = 0; c < nCol; c++) {
+        const uint16_t x = 30 + c * (cw + gap);
         lcd.setFont(FONT_07x09);
         lcd.setAlignment(LEFT);
-        lcd.setForeColor(sel ? kThemeAccent : (dim ? kThemeMid : kThemeInk));
-        lcd.drawText(name, strlen(name), 34, y + 3);
-
-        const uint16_t yc = y + rowH / 2 - 1;
-        const RGB16Color lineCol = sel ? kThemeAccent : (dim ? kThemeLine : page_mix(BLACK, kThemeInk, 0.55f));
-        // faint dots before the first stage (the sound skips these)
-        lcd.setForeColor(page_mix(BLACK, kThemeLine, 0.6f));
-        for (uint16_t x = x0 + colW / 2; x < x0 + firstCol * colW + colW / 2; x += 6) lcd.drawPixel(x, yc);
-        // solid line from the first stage to OUT
-        const uint16_t xs = x0 + firstCol * colW + colW / 2, xe = x0 + 6 * colW + colW / 2;
-        lcd.setForeColor(lineCol);
-        if (xe > xs) lcd.drawHLine(xs, yc, xe - xs);
-        // a node on every stage it goes through
-        for (uint8_t c = firstCol; c < 7; c++) {
-            const uint8_t st = stageAt[c];
-            if (!v[st]) continue;
-            const uint16_t cx = x0 + c * colW + colW / 2;
-            const RGB16Color nodeCol = (c == firstCol) ? (sel ? kThemeAccent : kThemeAmber) : lineCol;
-            lcd.setForeColor(nodeCol);
-            if (stageOn[st] || (st == 6)) {
-                lcd.fillRect(cx - 3, yc - 3, 7, 7);
-            } else {
-                lcd.setForeColor(bg);
-                lcd.fillRect(cx - 2, yc - 2, 5, 5);
-                lcd.setForeColor(nodeCol);
-                lcd.drawRect(cx - 3, yc - 3, 7, 7);
-            }
+        lcd.setBackColor(BLACK);
+        for (uint8_t k = 0; k < 2; k++) {
+            snprintf(text, sizeof(text), "%-*.*s", chars, chars, info[c][k]);
+            const bool off = (strstr(info[c][k], "OFF") != nullptr) || (strncmp(info[c][k], "NO", 2) == 0);
+            lcd.setForeColor(off ? kThemeMid : kThemeAmber);
+            lcd.drawText(text, chars, x + 8, top + 31 + k * 14);
         }
+        // members of this column, in drum order, then Line In
+        uint8_t who[kLayerLibrarySize + 1];
+        uint8_t count = 0;
+        for (uint8_t l = 0; l < kLayerLibrarySize; l++)
+            if (colOf((uint8_t)layerLibrary[l].mixerInMode) == c) who[count++] = l;
+        if (colOf((uint8_t)mixer.liMixerInMode) == c) who[count++] = kLayerLibrarySize;   // Line In
+        for (uint8_t r = 0; r < maxRows; r++) {
+            const uint16_t y = chip0 + r * chipStep;
+            const uint16_t cx = x + 6, cwid = cw - 12;
+            if (r >= count) {
+                lcd.setForeColor(BLACK);
+                lcd.fillRect(cx, y, cwid, chipH);
+                continue;
+            }
+            const bool more = (r == maxRows - 1) && (count > maxRows);
+            const uint8_t l = who[r];
+            const bool isDrum = (l < kLayerLibrarySize);
+            const bool sel = isDrum && !more && (l == routeLayer);
+            const RGB16Color bg = page_mix(BLACK, colC[c], sel ? 0.45f : 0.20f);
+            lcd.setForeColor(bg);
+            lcd.fillRect(cx + 1, y + 1, cwid - 2, chipH - 2);
+            lcd.setForeColor(sel ? colC[c] : page_mix(BLACK, colC[c], 0.6f));
+            lcd.drawRect(cx, y, cwid, chipH);
+            lcd.setBackColor(bg);
+            char label[24];
+            if (more) {
+                snprintf(label, sizeof(label), "+%u MORE", count - (maxRows - 1));
+            } else if (isDrum) {
+                char nm[13];
+                memcpy(nm, layerLibrary[l].instLoadedData.nameShortL, 12);
+                nm[12] = 0;
+                for (int8_t k = 11; (k >= 0) && (nm[k] == ' '); k--) nm[k] = 0;
+                const char* p = nm;
+                while (*p == ' ') p++;
+                snprintf(label, sizeof(label), "%02u %s", l + 1, (*p && (*p != '-')) ? p : "------");
+            } else {
+                snprintf(label, sizeof(label), "LINE IN");
+            }
+            const bool eqTag = lanes && !more && (isDrum ? hasEq((uint8_t)layerLibrary[l].mixerInMode) : hasEq((uint8_t)mixer.liMixerInMode));
+            const uint8_t room = (uint8_t)((cwid - 10) / 9) - (eqTag ? 3 : 0);
+            if (strlen(label) > room) label[room] = 0;
+            const bool dim = isDrum && !more && (layerLibrary[l].mute || !layerLibrary[l].samplePlay);
+            lcd.setForeColor(sel ? kThemeAccent : (dim ? kThemeMid : kThemeInk));
+            lcd.drawText(label, strlen(label), cx + 5, y + 4);
+            if (eqTag) {
+                lcd.setAlignment(RIGHT);
+                lcd.setForeColor(kThemeGood);
+                lcd.drawText("EQ", 2, cx + cwid - 5, y + 4);
+                lcd.setAlignment(LEFT);
+            }
+            lcd.setBackColor(BLACK);
+        }
+        // footer
+        snprintf(text, sizeof(text), "%-*.*s", chars, chars, foot[c]);
+        lcd.setForeColor((strstr(foot[c], "REVERB") && reverb.active) ? cPurple : kThemeMid);
+        lcd.drawText(text, chars, x + 8, bot - 16);
     }
     lcd.setBackColor(BLACK);
 }
@@ -6705,6 +6701,7 @@ uint32_t Controller::main_laneKey(uint8_t lane_) {
         mix(bank.beatLibrary[j].data);
         mix(((uint32_t)bank.beatLibrary[j].startInterval << 16) | bank.beatLibrary[j].endInterval);
         mix(bank.beatLibrary[j].fillTarget);
+        mix(bank.beatLibrary[j].gate);   // custom: velocity / gate changes redraw the lane
     }
     mix(L.mute | (L.fill << 1) | (L.style << 2) | (L.samplePlay << 3));
     mix(L.playSampleSector); mix(L.start); mix(L.end);
@@ -6751,7 +6748,7 @@ void Controller::main_buildLane(uint8_t lane_) {
         if (!b.getActive()) continue;
         if ((b.getFillType() == 0) && (b.getFillPattern() <= 2) && (b.getFillTarget() == NULL_FILL_TARGET)) {
             const uint8_t p = b.getFillPattern();
-            hT[n] = b.getStartInterval(); hV[n] = (p == 0) ? 255 : ((p == 1) ? 128 : 40); hBeat[n] = (int8_t)j; hG[n] = b.gate; n++;
+            hT[n] = b.getStartInterval(); hV[n] = (uint8_t)((((p == 0) ? 255 : ((p == 1) ? 128 : 40)) * (uint32_t)b.getVel()) / 16); hBeat[n] = (int8_t)j; hG[n] = b.getGate(); n++;
         } else if (b.getFillTarget() != NULL_FILL_TARGET) {
             const BeatFill& f = bank.beatFillLibrary[b.getFillTarget()];
             for (uint8_t k = 0; (k < f.getStepSize()) && (k < kBeatMicroLibrarySize) && (n < kBeatLibrarySize * 4 - 1); k++) {
@@ -7133,6 +7130,24 @@ void Controller::main_update() {
 /* Custom: Note Repeat (Metronome key) ---------------------------------------*/
 ////////////////////////////////////////////////////////////////////////////////
 
+uint8_t Controller::vel_pad() {
+    /// @brief Custom: velocity of a pad hit = PAD VELOCITY, moved up / down at random by HUMANIZE.
+    int16_t v = padVelocity;
+    if (humanize) {
+        velRand = velRand * 1664525u + 1013904223u;
+        v += (int16_t)((velRand >> 16) % (2u * humanize + 1u)) - (int16_t)humanize;
+    }
+    if (v < 1) v = 1;
+    if (v > 16) v = 16;
+    return (uint8_t)v;
+}
+
+uint8_t Controller::levels_padVel(uint8_t pad_) {
+    /// @brief Custom LEVELS mode: pad 1 = SOFTEST ... pad 10 = 16 (full), evenly spread.
+    const uint8_t lo = (levelsSoftest >= 1 && levelsSoftest <= 15) ? levelsSoftest : 4;
+    return (uint8_t)(lo + ((16 - lo) * pad_ + 4) / 9);
+}
+
 float Controller::noteRepeat_step() {
     /// @brief Repeat rate = the QUANTIZE grid (straight or triplet); 1:16 when QUANTIZE is OFF.
     if ((rhythm.quantize == kQuantizeOff) || (rhythm.quantize > kMaxQuantize)) return kQuantizeInterval[2];
@@ -7150,15 +7165,18 @@ int8_t Controller::noteRepeat_pitchPad() {
 
 void Controller::noteRepeat_pitchHit(int8_t pad_, bool record_, uint16_t at_) {
     /// @brief Custom: one pitched repeat in Notes (Notes drum at that pad's note).
-    const int8_t note = pitch_padNote((uint8_t)pad_);
+    const int8_t note = levelsMode ? 0 : pitch_padNote((uint8_t)pad_);
+    const uint8_t vel = levelsMode ? levels_padVel((uint8_t)pad_) : vel_pad();
     Layer& layer = layerLibrary[pitchLayer];
     pendingNote[pitchLayer] = note;
-    if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(pitchLayer, 1.0f);
+    if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(pitchLayer, vel_gain(vel));
     pendingNote[pitchLayer] = 0;
     if (record_) {
         recordNote = note;
+        recordVel = vel;
         layerSong_setBeat(pitchLayer, activeSongBank, at_, 0, 0, 0, 0, true);
         recordNote = 0;
+        recordVel = 16;
     }
     pitchHeldPad = pad_;   // PAD HELD gate: letting go of the pad stops the last repeat
     pitchLastPad = pad_;
@@ -7184,8 +7202,9 @@ void Controller::noteRepeat_tick() {
         if (noteRepeatLast[l] == (int32_t)playInterval) continue;   // already hit on this line (pad press)
         noteRepeatLast[l] = (int32_t)playInterval;
         Layer& layer = layerLibrary[l];
-        if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(l, 1.0f);
-        if (recordActive) layerSong_setBeat(l, activeSongBank, playInterval, 0, 0, 0, 0, true);
+        const uint8_t v = vel_pad();   // custom: humanize makes rolls breathe
+        if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(l, vel_gain(v));
+        if (recordActive) { recordVel = v; layerSong_setBeat(l, activeSongBank, playInterval, 0, 0, 0, 0, true); recordVel = 16; }
     }
 }
 
@@ -7211,7 +7230,7 @@ void Controller::noteRepeat_stopped() {
         noteRepeatStopTick[l] += period;
         if ((int32_t)(now - noteRepeatStopTick[l]) > (int32_t)period) noteRepeatStopTick[l] = now;   // don't burst after a stall
         Layer& layer = layerLibrary[l];
-        if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(l, 1.0f);
+        if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(l, vel_gain(vel_pad()));
     }
 }
 
@@ -7263,6 +7282,20 @@ void Controller::fileKnob(bool kit_, uint8_t tab_, int8_t step_) {
 
 void Controller::pitch_knob(uint8_t which_, int8_t step_) {
     if (page != PAGE_PITCH) return;
+    if (levelsMode) {   // custom LEVELS: DRUM, SOFTEST, PAD VELOCITY, HUMANIZE (top); LEVEL, TUNE (bottom)
+        switch (which_) {
+            case 0: pitchLayer = (uint8_t)((pitchLayer + kLayerLibrarySize + step_) % kLayerLibrarySize); break;
+            case 1: { int16_t v = (int16_t)levelsSoftest + step_; if (v < 1) v = 1; if (v > 15) v = 15; levelsSoftest = (uint8_t)v; } break;
+            case 2: { int16_t v = (int16_t)padVelocity + step_; if (v < 1) v = 1; if (v > 16) v = 16; padVelocity = (uint8_t)v; } break;
+            case 3: { int16_t v = (int16_t)humanize + step_; if (v < 0) v = 0; if (v > 6) v = 6; humanize = (uint8_t)v; } break;
+            case 5: { int16_t v = (int16_t)layerLibrary[pitchLayer].level + step_; if (v < 0) v = 0; if (v > kMaxLayerLevel) v = kMaxLayerLevel; layerInst_setLevel(pitchLayer, (uint8_t)v); } break;
+            case 6: { int16_t v = (int16_t)layerLibrary[pitchLayer].pitch + step_; if (v < kMinLayerPitch) v = kMinLayerPitch; if (v > kMaxLayerPitch) v = kMaxLayerPitch; layerInst_setPitch(pitchLayer, (uint8_t)v); } break;
+            default: break;
+        }
+        page_markDirty(PAGE_PITCH);
+        lcd_drawIo_PitchData();
+        return;
+    }
     Layer& L = layerLibrary[pitchLayer];
     switch (which_) {
         case 4: pitchRootPad = (uint8_t)((pitchRootPad + kLayerLibrarySize + step_) % kLayerLibrarySize); break;
@@ -7286,11 +7319,13 @@ void Controller::pitch_knob(uint8_t which_, int8_t step_) {
 void Controller::pitch_pad(uint8_t pad_) {
     /// @brief A pad in Pitch mode: play the chosen drum at that pad's note, record it into that drum's lane.
     if (pad_ >= kLayerLibrarySize) return;
-    const int8_t note = pitch_padNote(pad_);
+    const int8_t note = levelsMode ? 0 : pitch_padNote(pad_);   // custom: LEVELS = same pitch, pad = velocity
+    const uint8_t vel = levelsMode ? levels_padVel(pad_) : vel_pad();
     Layer& layer = layerLibrary[pitchLayer];
     pendingNote[pitchLayer] = note;
-    if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(pitchLayer, 1.0f);
+    if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(pitchLayer, vel_gain(vel));
     pendingNote[pitchLayer] = 0;
+    recordVel = vel;
     pitchHeldPad = (int8_t)pad_;
     pitchRecTick = -1;
     if (noteRepeatHeld) {   // custom: Note Repeat in Notes. Record on the nearest grid line, then roll.
@@ -7312,6 +7347,7 @@ void Controller::pitch_pad(uint8_t pad_) {
         }
         pitchLastPad = (int8_t)pad_;
         page_markDirty(PAGE_PITCH);
+        recordVel = 16;
         return;
     }
     if (recordActive && !metronome.precountState) {
@@ -7325,6 +7361,7 @@ void Controller::pitch_pad(uint8_t pad_) {
         pitchRecStart = st;
         pitchRecTick = playInterval;
     }
+    recordVel = 16;
     pitchLastPad = (int8_t)pad_;
     page_markDirty(PAGE_PITCH);
 }
@@ -7354,7 +7391,7 @@ void Controller::pitch_release(uint8_t pad_) {
         if (len < 1) len = 1;
         Bank& bank = layerLibrary[pitchLayer].bankLibrary[activeSongBank];
         for (int16_t j = 0; j <= bank.lastActiveBeatNum; j++)
-            if (bank.beatLibrary[j].getActive() && (bank.beatLibrary[j].startInterval == (uint16_t)pitchRecStart)) { bank.beatLibrary[j].gate = (uint16_t)len; break; }
+            if (bank.beatLibrary[j].getActive() && (bank.beatLibrary[j].startInterval == (uint16_t)pitchRecStart)) { bank.beatLibrary[j].setGate((uint16_t)len); break; }
     }
     pitchRecTick = -1;
     pitchRecStart = -1;
@@ -7375,6 +7412,29 @@ void Controller::lcd_drawIo_PitchData() {
     if (page != PAGE_PITCH) return;
     char text[16];
     const Layer& L = layerLibrary[pitchLayer];
+    if (levelsMode) {   // custom LEVELS knob boxes
+        const char* lh[8] = {"DRUM      ", "SOFTEST   ", "PAD VELOC.", "HUMANIZE  ", "          ", "LEVEL     ", "TUNE      ", "          "};
+        lcd_setMenuHeaderState(CYAN);
+        for (uint8_t k = 0; k < 8; k++) lcd.drawText(lh[k], kMenuHeaderTextSize, kMenuHeaderX[k], kMenuHeaderY[k]);
+        lcd_setMenuSignState(CYAN);
+        for (uint8_t k = 0; k < 8; k++) lcd.drawText((k == 5) ? "  %" : "   ", kMenuSignTextSize, kMenuSignBoxX[k], kMenuSignBoxY[k]);
+        const Layer& LL = layerLibrary[pitchLayer];
+        lcd_setMenuDataState(WHITE);
+        snprintf(text, sizeof(text), "%10u", pitchLayer + 1);
+        lcd.drawText(text, kMenuDataTextSize, kMenuDataX[0], kMenuDataY[0]);
+        snprintf(text, sizeof(text), "%10u", levelsSoftest);
+        lcd.drawText(text, kMenuDataTextSize, kMenuDataX[1], kMenuDataY[1]);
+        snprintf(text, sizeof(text), "%10u", padVelocity);
+        lcd.drawText(text, kMenuDataTextSize, kMenuDataX[2], kMenuDataY[2]);
+        if (humanize) snprintf(text, sizeof(text), "%7s%3u", "+-", humanize); else snprintf(text, sizeof(text), "%10s", "OFF");
+        lcd.drawText(text, kMenuDataTextSize, kMenuDataX[3], kMenuDataY[3]);
+        snprintf(text, sizeof(text), "%10s", "");
+        lcd.drawText(text, kMenuDataTextSize, kMenuDataX[4], kMenuDataY[4]);
+        lcd.drawText(text, kMenuDataTextSize, kMenuDataX[7], kMenuDataY[7]);
+        lcd.drawText(kNumberDataLibrary[LL.level].nameLongR, kMenuDataTextSize, kMenuDataX[5], kMenuDataY[5]);
+        lcd.drawText(kLayerPitchDataLibrary[LL.pitch].nameLongR, kMenuDataTextSize, kMenuDataX[6], kMenuDataY[6]);
+        return;
+    }
     const char* hdr[8] = {"PITCH-DRUM", "ROOT      ", "SCALE     ", "OCTAVE    ", "ROOT-PAD  ", "LEVEL     ", "TUNE      ", "GATE      "};
     lcd_setMenuHeaderState(CYAN);
     for (uint8_t k = 0; k < 8; k++) lcd.drawText(hdr[k], kMenuHeaderTextSize, kMenuHeaderX[k], kMenuHeaderY[k]);
@@ -7405,8 +7465,69 @@ void Controller::lcd_drawIo_PitchData() {
     lcd.drawText(pitchGate ? "  PAD HELD" : "  RING OUT", kMenuDataTextSize, kMenuDataX[7], kMenuDataY[7]);
 }
 
+void Controller::page_drawLevels() {
+    /// @brief Custom LEVELS page (Sync key twice): one drum on all 10 pads, softest to full.
+    char text[96];
+    if (pageFullRedraw) {
+        lcd.setBackColor(BLACK);
+        lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
+        lcd.setForeColor(kThemeLine);
+        lcd.drawHLine(30, 177, 900);
+        lcd.setFont(FONT_07x09);
+        lcd.setAlignment(LEFT);
+        lcd.setForeColor(kThemeHeader);
+        const char h1[] = "PADS: THE SAME DRUM, SOFT TO LOUD   NOTE REPEAT + PAD: ROLL AT THAT LEVEL   REC ON: HITS KEEP THEIR LEVEL";
+        lcd.drawText(h1, strlen(h1), 30, 420);
+        const char h2[] = "PAD VELOCITY AND HUMANIZE ALSO APPLY TO THE NORMAL PADS";
+        lcd.drawText(h2, strlen(h2), 30, 438);
+        lcd.setAlignment(RIGHT);
+        const char h3[] = "SYNC: BACK";
+        lcd.drawText(h3, strlen(h3), 930, 438);
+        pageFullRedraw = false;
+    }
+    const Layer& L = layerLibrary[pitchLayer];
+    char name[13];
+    memcpy(name, L.instLoadedData.nameShortL, 12); name[12] = 0;
+    for (int8_t k = 11; (k >= 0) && (name[k] == ' '); k--) name[k] = 0;
+    const char* nm = name; while (*nm == ' ') nm++;
+    lcd.setFont(FONT_14x18);
+    lcd.setAlignment(LEFT);
+    lcd.setBackColor(BLACK);
+    lcd.setForeColor(kThemeAccent);
+    snprintf(text, sizeof(text), "LEVELS  DRUM %02u %-12.12s", pitchLayer + 1, (*nm) ? nm : "-");
+    lcd.drawText(text, strlen(text), 30, 136);
+    lcd_drawIo_PitchData();
+    if (humanize) snprintf(text, sizeof(text), "SOFTEST %2u   PAD VELOCITY %2u   HUMANIZE +-%u", levelsSoftest, padVelocity, humanize);
+    else snprintf(text, sizeof(text), "SOFTEST %2u   PAD VELOCITY %2u   HUMANIZE OFF", levelsSoftest, padVelocity);
+    page_drawSummary(text);
+
+    // one column per pad: a bar as tall as the level (16 = full height)
+    const uint16_t colW = 90, x0 = 30, top = 200, h = 170, bw = 50;
+    for (uint8_t p = 0; p < kLayerLibrarySize; p++) {
+        const uint8_t v = levels_padVel(p);
+        const uint16_t cx = x0 + p * colW + colW / 2;
+        const bool hit = ((int8_t)p == pitchLastPad);
+        const uint16_t bh = (uint16_t)((h * v) / 16);
+        const uint16_t bx = cx - bw / 2;
+        lcd.setForeColor(BLACK);
+        if (h > bh) lcd.fillRect(bx, top, bw, h - bh);
+        lcd.setForeColor(hit ? kThemeAccent : page_mix(BLACK, kThemeAccent, 0.25f + 0.5f * v / 16.0f));
+        lcd.fillRect(bx, top + h - bh, bw, bh);
+        lcd.setFont(FONT_07x09);
+        lcd.setAlignment(CENTER);
+        lcd.setBackColor(BLACK);
+        lcd.setForeColor(kThemeHeader);
+        snprintf(text, sizeof(text), "PAD %-2u", p + 1);
+        lcd.drawText(text, strlen(text), cx, top + h + 8);
+        lcd.setForeColor(hit ? kThemeAccent : kThemeInk);
+        snprintf(text, sizeof(text), " %2u ", v);
+        lcd.drawText(text, strlen(text), cx, top + h + 22);
+    }
+}
+
 void Controller::page_drawPitch() {
     /// @brief Pitch page: which drum, root, scale, and the note each pad plays.
+    if (levelsMode) { page_drawLevels(); return; }   // custom
     char text[96];
     if (pageFullRedraw) {
         lcd.setBackColor(BLACK);
@@ -12067,7 +12188,7 @@ void Controller::lcd_drawMenuLabel(Menu menu_, int16_t num_) {
         case MIXER_MENU:        word = "ROUTE"; break;   // custom: Mixer key, first press
         case RHYTHM_MENU:       word = "RHYTHM"; break;
         case METRO_MENU:        word = "MIX"; break;     // custom: mix volumes + metronome
-        case IO_MENU:           word = (page == PAGE_PITCH) ? "NOTES" : "SYNC"; break;
+        case IO_MENU:           word = (page == PAGE_PITCH) ? (levelsMode ? "LEVELS" : "NOTES") : "SYNC"; break;
         case EQ_MENU:           word = "EQ"; break;
         case REVERB_MENU:       word = "REVERB"; break;
         case FILTER_0_MENU:     word = "FILT"; num = 1; break;
@@ -16014,7 +16135,9 @@ void Controller::lcd_drawLayerSong_BeatFillLevelData(uint8_t layerNum_) {
     const char* text;
     if (selectedBeatNum != -1) {
         // Show level mode for complex fills
-        ((bank.beatLibrary[selectedBeatNum].getFillType() == 0) && (bank.beatLibrary[selectedBeatNum].getFillPattern() <= 2)) ? text = kDataDashR : text = kFillLevelDataLibrary[bank.beatLibrary[selectedBeatNum].getFillLevel()].nameLongR;
+        static char velText[12];   // custom: plain hits show their velocity 1..16
+        snprintf(velText, sizeof(velText), "%10u", bank.beatLibrary[selectedBeatNum].getVel());
+        ((bank.beatLibrary[selectedBeatNum].getFillType() == 0) && (bank.beatLibrary[selectedBeatNum].getFillPattern() <= 2)) ? text = velText : text = kFillLevelDataLibrary[bank.beatLibrary[selectedBeatNum].getFillLevel()].nameLongR;
     } else {
         // Show dash if not available
         text = kDataDashR;
@@ -24839,10 +24962,12 @@ void Controller::layerSong_menuUp(uint8_t tab_) {
                 break;
 
             case 5:
-                // Update level mode for complex fills.
                 if ((fillType > 0) || ((fillType == 0) && (fillPattern > 2))) {
                     (fillLevel < kMaxFillLevel) ? fillLevel += 1 : fillLevel = kMinFillLevel;
                     layerSong_setSelectedBeatFillLevel(fillLevel);
+                } else if (beat.getVel() < 16) {   // custom: a plain hit's velocity 1..16
+                    beat.setVel(beat.getVel() + 1);
+                    lcd_drawLayerSong_BeatFillLevelData(selectedLayerNum);
                 }
                 break;
         }
@@ -24886,10 +25011,12 @@ void Controller::layerSong_menuDown(uint8_t tab_) {
                 break;
 
             case 5:
-                // Update level mode for complex fills.
                 if ((fillType > 0) || ((fillType == 0) && (fillPattern > 2))) {
                     (fillLevel > kMinFillLevel) ? fillLevel -= 1 : fillLevel = kMaxFillLevel;
                     layerSong_setSelectedBeatFillLevel(fillLevel);
+                } else if (beat.getVel() > 1) {   // custom: a plain hit's velocity 1..16
+                    beat.setVel(beat.getVel() - 1);
+                    lcd_drawLayerSong_BeatFillLevelData(selectedLayerNum);
                 }
                 break;
         }
@@ -25053,6 +25180,7 @@ void Controller::layerSong_setBeat(uint8_t layerNum_, uint8_t bankTab_, uint16_t
             bank.setBeat(beatNum, startInterval, endInterval);
             bank.beatLibrary[beatNum].note = recordNote;   // custom: Pitch mode note (0 = normal hit)
             bank.beatLibrary[beatNum].gate = 0;
+            bank.beatLibrary[beatNum].setVel(recordVel);   // custom: velocity
             bank.setBeatFill(beatNum, fillType_, fillPattern_, fillTime_, fillLevel_);
             layerSong_calculateLastActiveBeatNum(layerNum_, bankTab_);
             layerSong_calculatePlayBeatNum(layerNum_, bankTab_, playInterval);
@@ -28012,9 +28140,9 @@ void Controller::interruptPlay() {
                             }
                             swingDelayTicks[i] = groove_swingDelay(i, playInterval);   // custom per-drum swing
                             pendingNote[i] = beat.note;                                  // custom Pitch mode note
-                            if (beat.gate && songInterval) { gateOff[i] = (uint16_t)((playInterval + beat.gate) % songInterval); gateArmed[i] = true; }
+                            if (beat.getGate() && songInterval) { gateOff[i] = (uint16_t)((playInterval + beat.getGate()) % songInterval); gateArmed[i] = true; }
                             else gateArmed[i] = false;
-                            if (fillVolMultiplier > 0.0f) layer_playBeat(layer.number, fillVolMultiplier);
+                            if (fillVolMultiplier > 0.0f) layer_playBeat(layer.number, fillVolMultiplier * vel_gain(beat.getVel()));   // custom: velocity
                             swingDelayTicks[i] = 0;
                             pendingNote[i] = 0;
 
@@ -28033,7 +28161,7 @@ void Controller::interruptPlay() {
                             if ((!layer.mute) && (layer.samplePlay) && ((playBeatMicroNum == 0) || ((playBeatMicroNum != 0) && (layer.fill)))) {
                                 fillVolMultiplier = kNumberDataLibrary[beatMicro.getLevel()].powMultiplier;
                                 pendingNote[i] = beat.note;   // custom: rolls keep their note
-                                if (fillVolMultiplier > 0.0f) layer_playBeat(layer.number, fillVolMultiplier);
+                                if (fillVolMultiplier > 0.0f) layer_playBeat(layer.number, fillVolMultiplier * vel_gain(beat.getVel()));
                                 pendingNote[i] = 0;
                             }
 
