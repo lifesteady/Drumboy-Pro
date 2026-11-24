@@ -2301,7 +2301,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.70 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.71 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -5367,6 +5367,11 @@ const uint8_t kMaxEffect                            = 1;
 
 const uint8_t kMinEffectType                        = 0;
 const uint8_t kMaxEffectType                        = 9;   // custom: + SPACE
+
+// Custom: order of the TYPE knob. EXPANDER, OVERDRIVE and DISTORTION are hidden (still loadable).
+const uint8_t kEffectTypeOrder[]                    = {0x00 /*DELAY*/, 0x09 /*SPACE*/, 0x01 /*CHORUS*/, 0x02 /*FLANGER*/,
+                                                       0x03 /*PHASER*/, 0x04 /*PUNCH*/, 0x08 /*BITCRUSHER*/};
+const uint8_t kEffectTypeOrderSize                  = sizeof(kEffectTypeOrder);
 
 const bool kInitialEffectActive                     = false;
 const uint8_t kInitialEffectType[2]                 = {0, 2};

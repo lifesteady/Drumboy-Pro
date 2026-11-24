@@ -3843,7 +3843,7 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
             break;
 
         case ENC_EFFECT_0_TYPE:
-            (effect[0].type < kMaxEffectType) ? effect_setType(0, effect[0].type + 1) : effect_setType(0, kMinEffectType);
+            effect_setType(0, effect_stepType(effect[0].type, 1));
             break;
 
         case ENC_EFFECT_0_PARAM_A:
@@ -3889,7 +3889,7 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
             break;
 
         case ENC_EFFECT_1_TYPE:
-            (effect[1].type < kMaxEffectType) ? effect_setType(1, effect[1].type + 1) : effect_setType(1, kMinEffectType);
+            effect_setType(1, effect_stepType(effect[1].type, 1));
             break;
 
         case ENC_EFFECT_1_PARAM_A:
@@ -4465,7 +4465,7 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
             break;
 
         case ENC_EFFECT_0_TYPE:
-            (effect[0].type > kMinEffectType) ? effect_setType(0, effect[0].type - 1) : effect_setType(0, kMaxEffectType);
+            effect_setType(0, effect_stepType(effect[0].type, -1));
             break;
 
         case ENC_EFFECT_0_PARAM_A:
@@ -4505,7 +4505,7 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
             break;
 
         case ENC_EFFECT_1_TYPE:
-            (effect[1].type > kMinEffectType) ? effect_setType(1, effect[1].type - 1) : effect_setType(1, kMaxEffectType);
+            effect_setType(1, effect_stepType(effect[1].type, -1));
             break;
 
         case ENC_EFFECT_1_PARAM_A:
@@ -19948,7 +19948,7 @@ void Controller::effect_menuUp() {
             break;
 
         case 1:
-            (effect_.type < kMaxEffectType) ? effect_setType(effectNum_, effect_.type + 1) : effect_setType(effectNum_, kMinEffectType);
+            effect_setType(effectNum_, effect_stepType(effect_.type, 1));
             break;
 
         case 2:
@@ -20007,7 +20007,7 @@ void Controller::effect_menuDown() {
             break;
 
         case 1:
-            (effect_.type > kMinEffectType) ? effect_setType(effectNum_, effect_.type - 1) : effect_setType(effectNum_, kMaxEffectType);
+            effect_setType(effectNum_, effect_stepType(effect_.type, -1));
             break;
 
         case 2:
@@ -20072,6 +20072,17 @@ void Controller::effect_setActive(uint8_t effectNum_, bool active_) {
             lcd_updateGlobalMenuData(function);
         }
     }
+}
+
+uint8_t Controller::effect_stepType(uint8_t type_, int8_t step_) {
+    /// @brief Custom: the TYPE knob walks a curated order (tape echo next to delay; EXPANDER,
+    /// OVERDRIVE and DISTORTION hidden). Hidden types still work if an old song uses them.
+    uint8_t pos = 0;
+    bool found = false;
+    for (uint8_t i = 0; i < kEffectTypeOrderSize; i++) if (kEffectTypeOrder[i] == type_) { pos = i; found = true; break; }
+    if (!found) return kEffectTypeOrder[0];
+    pos = (uint8_t)((pos + kEffectTypeOrderSize + step_) % kEffectTypeOrderSize);
+    return kEffectTypeOrder[pos];
 }
 
 void Controller::effect_setType(uint8_t effectNum_, uint8_t type_) {
