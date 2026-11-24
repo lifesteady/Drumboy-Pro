@@ -2301,7 +2301,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.62 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.70 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -4223,13 +4223,13 @@ const uint8_t kMinCompressorThreshold               = 0;
 const uint8_t kMaxCompressorThreshold               = 24;
 
 const uint8_t kMinCompressorRate                    = 0;
-const uint8_t kMaxCompressorRate                    = 29;
+const uint8_t kMaxCompressorRate                    = 5;    // custom PUNCH: ratio choices
 
 const uint8_t kMinCompressorAttackTime              = 0;
-const uint8_t kMaxCompressorAttackTime              = 18;
+const uint8_t kMaxCompressorAttackTime              = 4;    // custom PUNCH: STYLE choices
 
 const uint8_t kMinCompressorReleaseTime             = 0;
-const uint8_t kMaxCompressorReleaseTime             = 18;
+const uint8_t kMaxCompressorReleaseTime             = 2;    // custom PUNCH: THRUST choices
 
 const uint8_t kMinCompressorDry                     = 0;
 const uint8_t kMaxCompressorDry                     = 100;
@@ -4238,10 +4238,10 @@ const uint8_t kMinCompressorWet                     = 0;
 const uint8_t kMaxCompressorWet                     = 100;
 
 const bool kInitialCompressorActive                 = false;
-const uint8_t kInitialCompressorThreshold           = 18;
-const uint8_t kInitialCompressorRate                = 3;
-const uint8_t kInitialCompressorAttackTime          = 0;
-const uint8_t kInitialCompressorReleaseTime         = 9;
+const uint8_t kInitialCompressorThreshold           = 14;   // -10 dB
+const uint8_t kInitialCompressorRate                = 2;    // 4:1
+const uint8_t kInitialCompressorAttackTime          = 1;    // PUNCH style
+const uint8_t kInitialCompressorReleaseTime         = 1;    // THRUST MEDIUM
 const uint8_t kInitialCompressorDry                 = 0;
 const uint8_t kInitialCompressorWet                 = 100;
 
@@ -4283,36 +4283,13 @@ struct CompressorRateData {
 };
 
 const struct CompressorRateData kCompressorRateDataLibrary[] = {
-    {"        01", 1.0f}, 
-    {"        02", 2.0f}, 
-    {"        03", 3.0f}, 
-    {"        04", 4.0f}, 
-    {"        05", 5.0f}, 
-    {"        06", 6.0f}, 
-    {"        07", 7.0f}, 
-    {"        08", 8.0f}, 
-    {"        09", 9.0f}, 
-    {"        10", 10.0f}, 
-    {"        11", 11.0f}, 
-    {"        12", 12.0f}, 
-    {"        13", 13.0f}, 
-    {"        14", 14.0f}, 
-    {"        15", 15.0f}, 
-    {"        16", 16.0f}, 
-    {"        17", 17.0f}, 
-    {"        18", 18.0f}, 
-    {"        19", 19.0f}, 
-    {"        20", 20.0f}, 
-    {"        21", 21.0f}, 
-    {"        22", 22.0f}, 
-    {"        23", 23.0f}, 
-    {"        24", 24.0f}, 
-    {"        25", 25.0f}, 
-    {"        26", 26.0f}, 
-    {"        27", 27.0f}, 
-    {"        28", 28.0f}, 
-    {"        29", 29.0f}, 
-    {"        30", 30.0f}};
+    {"         2", 2.0f},
+    {"         3", 3.0f},
+    {"         4", 4.0f},
+    {"         6", 6.0f},
+    {"        10", 10.0f},
+    {"        20", 20.0f}
+};
 
 struct CompressorAttackTimeData {
     char nameLongR[11];
@@ -4320,25 +4297,12 @@ struct CompressorAttackTimeData {
 };
 
 const struct CompressorAttackTimeData kCompressorAttackTimeDataLibrary[] = {
-    {"        01", 0.001f}, 
-    {"        02", 0.002f}, 
-    {"        03", 0.003f}, 
-    {"        04", 0.004f}, 
-    {"        05", 0.005f}, 
-    {"        06", 0.006f}, 
-    {"        07", 0.007f}, 
-    {"        08", 0.008f}, 
-    {"        09", 0.009f}, 
-    {"        10", 0.010f}, 
-    {"        20", 0.020f}, 
-    {"        30", 0.030f}, 
-    {"        40", 0.040f}, 
-    {"        50", 0.050f}, 
-    {"        60", 0.060f}, 
-    {"        70", 0.070f}, 
-    {"        80", 0.080f}, 
-    {"        90", 0.090f}, 
-    {"       100", 0.100f}};
+    {"      SNAP", 0.010f},     // custom PUNCH styles: name + attack (release in kPunchStyleRelease)
+    {"     PUNCH", 0.030f},
+    {"      GLUE", 0.003f},
+    {"      SLAM", 0.0003f},
+    {"    SMOOTH", 0.001f}
+};
 
 struct CompressorReleaseTimeData {
     char nameLongR[11];
@@ -4346,27 +4310,14 @@ struct CompressorReleaseTimeData {
 };
 
 const struct CompressorReleaseTimeData kCompressorReleaseTimeDataLibrary[] = {
-    {"        10", 0.010f}, 
-    {"        20", 0.020f}, 
-    {"        30", 0.030f}, 
-    {"        40", 0.040f}, 
-    {"        50", 0.050f}, 
-    {"        60", 0.060f}, 
-    {"        70", 0.070f}, 
-    {"        80", 0.080f}, 
-    {"        90", 0.090f}, 
-    {"       100", 0.100f}, 
-    {"       200", 0.200f}, 
-    {"       300", 0.300f}, 
-    {"       400", 0.400f}, 
-    {"       500", 0.500f}, 
-    {"       600", 0.600f}, 
-    {"       700", 0.700f}, 
-    {"       800", 0.800f}, 
-    {"       900", 0.900f}, 
-    {"        1K", 1.000f}};
+    {"    NORMAL", 0.0f},       // custom PUNCH THRUST: how much the detector ignores low end
+    {"    MEDIUM", 1.0f},
+    {"      LOUD", 2.0f}
+};
 
-struct Compressor {
+const float kPunchStyleRelease[5] = {0.08f, 0.15f, 0.40f, 0.06f, 0.80f};   // custom PUNCH: release per style (s)
+
+struct Compressor {   // custom: now the PUNCH compressor (API 2500 flavour)
     bool active;
 
     uint8_t aThreshold;
@@ -4384,6 +4335,12 @@ struct Compressor {
     float attackAlpha;
     float releaseAlpha;
     float gainSmoothPrev;
+
+    // custom PUNCH
+    float thrustCoef = 0.0f;      // detector high-pass (0 = off)
+    float thrustX = 0.0f, thrustY = 0.0f;
+    float makeup = 1.0f;          // automatic make-up gain (linear)
+    float grDisplay = 0.0f;       // gain reduction for the page meter (dB, <= 0)
 
     const bool limitMix                             = true;
     const uint8_t limitMixData                      = 125;
@@ -4405,17 +4362,23 @@ struct Compressor {
         attackTime = kCompressorAttackTimeDataLibrary[kInitialCompressorAttackTime].data;
         releaseTime = kCompressorReleaseTimeDataLibrary[kInitialCompressorReleaseTime].data;
 
-        attackAlpha = expf(-2.19722f / (AUDIO_SAMPLE_RATE * attackTime));
-        releaseAlpha = expf(-2.19722f / (AUDIO_SAMPLE_RATE * releaseTime));
         gainSmoothPrev = 0.0f;
+        update();
     }
 
     void update() {
+        // custom PUNCH: C = style (attack + its own release), D = THRUST, threshold/ratio set make-up gain
+        const uint8_t st = (cAttackTime <= kMaxCompressorAttackTime) ? cAttackTime : 1;
         attackAlpha = expf(-2.19722f / (AUDIO_SAMPLE_RATE * attackTime));
-        releaseAlpha = expf(-2.19722f / (AUDIO_SAMPLE_RATE * releaseTime));
+        releaseAlpha = expf(-2.19722f / (AUDIO_SAMPLE_RATE * kPunchStyleRelease[st]));
+        const uint8_t th = (dReleaseTime <= kMaxCompressorReleaseTime) ? dReleaseTime : 1;
+        const float fc = (th == 0) ? 0.0f : ((th == 1) ? 120.0f : 350.0f);
+        thrustCoef = (fc > 0.0f) ? expf(-2.0f * 3.14159265f * fc / AUDIO_SAMPLE_RATE) : 0.0f;
+        const float r = (rate > 1.0f) ? rate : 1.0f;
+        makeup = powf(10.0f, (-threshold * (1.0f - 1.0f / r) * 0.5f) / 20.0f);
     }
 
-    void cleanMemory() {}
+    void cleanMemory() { thrustX = thrustY = 0.0f; gainSmoothPrev = 0.0f; grDisplay = 0.0f; }
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -5328,6 +5291,73 @@ struct Bitcrusher {
     void cleanMemory() {}
 };
 
+
+////////////////////////////////////////////////////////////////////////////////
+/* Custom Effect-Space (tape echo, RE-201 flavour) ---------------------------*/
+////////////////////////////////////////////////////////////////////////////////
+
+const uint8_t kMinSpaceRate = 0, kMaxSpaceRate = 15, kInitialSpaceRate = 8;
+const uint8_t kMinSpaceIntensity = 0, kMaxSpaceIntensity = 100, kInitialSpaceIntensity = 45;
+const uint8_t kMinSpaceHeads = 0, kMaxSpaceHeads = 6, kInitialSpaceHeads = 3;
+const uint8_t kMinSpaceAge = 0, kMaxSpaceAge = 100, kInitialSpaceAge = 40;
+const uint8_t kMinSpaceDry = 0, kMaxSpaceDry = 100, kInitialSpaceDry = 100;
+const uint8_t kMinSpaceWet = 0, kMaxSpaceWet = 100, kInitialSpaceWet = 25;
+const bool kInitialSpaceActive = false;
+
+struct SpaceRateData { char nameLongR[11]; float data; };   // head 1 delay (s); heads 2 and 3 are 2x and 3x
+const struct SpaceRateData kSpaceRateDataLibrary[] = {
+    {"        50", 0.050f}, {"        60", 0.060f}, {"        70", 0.070f}, {"        80", 0.080f},
+    {"        90", 0.090f}, {"       100", 0.100f}, {"       115", 0.115f}, {"       130", 0.130f},
+    {"       150", 0.150f}, {"       170", 0.170f}, {"       190", 0.190f}, {"       210", 0.210f},
+    {"       235", 0.235f}, {"       260", 0.260f}, {"       290", 0.290f}, {"       320", 0.320f}};
+
+struct SpaceHeadsData { char nameLongR[11]; uint8_t mask; };
+const struct SpaceHeadsData kSpaceHeadsDataLibrary[] = {
+    {"         1", 1}, {"         2", 2}, {"         3", 4}, {"       1+2", 3},
+    {"       2+3", 6}, {"       1+3", 5}, {"     1+2+3", 7}};
+
+struct Space {
+    bool active;
+    uint8_t aRate;          // tape speed (head 1 time)
+    uint8_t bIntensity;     // feedback (self-oscillates near the top)
+    uint8_t cHeads;         // which playback heads
+    uint8_t dAge;           // wow / flutter + darker, dirtier repeats
+    uint8_t eDry;
+    uint8_t fWet;
+
+    float targetDelay = 0.0f;   // head 1 in samples
+    float curDelay = 0.0f;      // glides toward target (tape speed change = pitch bend)
+    uint32_t writeIdx = 0;
+    float wowPhase = 0.0f, flutterPhase = 0.0f;
+    float lp = 0.0f, lpOut = 0.0f, hpX = 0.0f, hpY = 0.0f;
+    float lpCoef = 0.3f, fbGain = 0.4f, wowDepth = 0.0f, flutterDepth = 0.0f;
+
+    const bool limitMix                             = true;
+    const uint8_t limitMixData                      = 125;
+
+    void reset() {
+        active = kInitialSpaceActive;
+        aRate = kInitialSpaceRate; bIntensity = kInitialSpaceIntensity; cHeads = kInitialSpaceHeads;
+        dAge = kInitialSpaceAge; eDry = kInitialSpaceDry; fWet = kInitialSpaceWet;
+        update();
+        curDelay = targetDelay;
+        cleanMemory();
+    }
+    void update() {
+        targetDelay = kSpaceRateDataLibrary[(aRate <= kMaxSpaceRate) ? aRate : kInitialSpaceRate].data * AUDIO_SAMPLE_RATE;
+        if (curDelay < 1.0f) curDelay = targetDelay;
+        const uint8_t mask = kSpaceHeadsDataLibrary[(cHeads <= kMaxSpaceHeads) ? cHeads : kInitialSpaceHeads].mask;
+        const uint8_t n = (mask & 1) + ((mask >> 1) & 1) + ((mask >> 2) & 1);
+        fbGain = 1.08f * ((float)bIntensity / 100.0f) / (n ? (float)n : 1.0f);
+        const float a = (float)dAge / 100.0f;
+        wowDepth = 0.0035f * a;
+        flutterDepth = 0.0012f * a;
+        const float fc = 7000.0f - 5200.0f * a;   // repeats get darker with age
+        lpCoef = 1.0f - expf(-2.0f * 3.14159265f * fc / AUDIO_SAMPLE_RATE);
+    }
+    void cleanMemory() { writeIdx = 0; lp = lpOut = hpX = hpY = 0.0f; curDelay = targetDelay; }
+};
+
 ////////////////////////////////////////////////////////////////////////////////
 /* Effect Constants ----------------------------------------------------------*/
 ////////////////////////////////////////////////////////////////////////////////
@@ -5336,7 +5366,7 @@ const uint8_t kMinEffect                            = 0;
 const uint8_t kMaxEffect                            = 1;
 
 const uint8_t kMinEffectType                        = 0;
-const uint8_t kMaxEffectType                        = 8;
+const uint8_t kMaxEffectType                        = 9;   // custom: + SPACE
 
 const bool kInitialEffectActive                     = false;
 const uint8_t kInitialEffectType[2]                 = {0, 2};
@@ -5350,7 +5380,8 @@ typedef enum {
     EF_EXPANDER                                     = 0x05,
     EF_OVERDRIVE                                    = 0x06,
     EF_DISTORTION                                   = 0x07,
-    EF_BITCRUSHER                                   = 0x08
+    EF_BITCRUSHER                                   = 0x08,
+    EF_SPACE                                        = 0x09   // custom tape echo
 } EffectType;
 
 typedef enum {
@@ -5368,28 +5399,30 @@ const struct EffectTypeData kEffectTypeDataLibrary[] = {
     {"    CHORUS", EF_COMP_MODE_HEAVY},
     {"   FLANGER", EF_COMP_MODE_HEAVY},
     {"    PHASER", EF_COMP_MODE_HEAVY},
-    {"COMPRESSOR", EF_COMP_MODE_LIGHT},
+    {"     PUNCH", EF_COMP_MODE_LIGHT},   // custom: was COMPRESSOR
     {"  EXPANDER", EF_COMP_MODE_LIGHT},
     {" OVERDRIVE", EF_COMP_MODE_LIGHT},
     {"DISTORTION", EF_COMP_MODE_LIGHT},
-    {"BITCRUSHER", EF_COMP_MODE_LIGHT}};
+    {"BITCRUSHER", EF_COMP_MODE_LIGHT},
+    {"     SPACE", EF_COMP_MODE_HEAVY}};
 
 const uint8_t kEffectLibrarySize                    = 2;
-const uint8_t kSubEffectLibrarySize                 = 9;
+const uint8_t kSubEffectLibrarySize                 = 10;  // custom: + SPACE
+const uint8_t kSubEffectFileCount                   = 9;   // song files keep the stock 9-effect layout
 
-const char aHeader[kSubEffectLibrarySize][11]       = {"TIME      ", "TIME      ", "TIME      ", "START     ", "THRESHOLD ", "THRESHOLD ", "GAIN      ", "GAIN      ", "RESOLUTION"};
-const char bHeader[kSubEffectLibrarySize][11]       = {"LEVEL     ", "FEEDBACK  ", "FEEDBACK  ", "END       ", "RATE      ", "RATE      ", "THRESHOLD ", "THRESHOLD ", "SAMPLERATE"};
-const char cHeader[kSubEffectLibrarySize][11]       = {"FEEDBACK  ", "RATE      ", "RATE      ", "RATE      ", "ATTACK    ", "ATTACK    ", "TONE      ", "TONE      ", "THRESHOLD "};
-const char dHeader[kSubEffectLibrarySize][11]       = {"DAMPING   ", "DEPTH     ", "WIDTH     ", "FEEDBACK  ", "RELEASE   ", "RELEASE   ", "COLOR     ", "BIAS      ", "SMOOTH    "};
-const char eHeader[kSubEffectLibrarySize][11]       = {"DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       "};
-const char fHeader[kSubEffectLibrarySize][11]       = {"WET       ", "WET       ", "WET       ", "WET       ", "WET       ", "WET       ", "WET       ", "WET       ", "WET       "};
+const char aHeader[kSubEffectLibrarySize][11]       = {"TIME      ", "TIME      ", "TIME      ", "START     ", "THRESHOLD ", "THRESHOLD ", "GAIN      ", "GAIN      ", "RESOLUTION", "RATE      "};
+const char bHeader[kSubEffectLibrarySize][11]       = {"LEVEL     ", "FEEDBACK  ", "FEEDBACK  ", "END       ", "RATIO     ", "RATE      ", "THRESHOLD ", "THRESHOLD ", "SAMPLERATE", "INTENSITY "};
+const char cHeader[kSubEffectLibrarySize][11]       = {"FEEDBACK  ", "RATE      ", "RATE      ", "RATE      ", "STYLE     ", "ATTACK    ", "TONE      ", "TONE      ", "THRESHOLD ", "HEADS     "};
+const char dHeader[kSubEffectLibrarySize][11]       = {"DAMPING   ", "DEPTH     ", "WIDTH     ", "FEEDBACK  ", "THRUST    ", "RELEASE   ", "COLOR     ", "BIAS      ", "SMOOTH    ", "AGE       "};
+const char eHeader[kSubEffectLibrarySize][11]       = {"DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       "};
+const char fHeader[kSubEffectLibrarySize][11]       = {"WET       ", "WET       ", "WET       ", "WET       ", "WET       ", "WET       ", "WET       ", "WET       ", "WET       ", "WET       "};
 
-const char aSign[kSubEffectLibrarySize][4]          = {"  %", " MS", " MS", " HZ", " DB", " DB", " DB", " DB", " BR"};
-const char bSign[kSubEffectLibrarySize][4]          = {"  %", "  %", "  %", " HZ", "  X", "  X", " DB", " DB", "  %"};
-const char cSign[kSubEffectLibrarySize][4]          = {"  %", " HZ", " HZ", " HZ", " MS", " MS", " HZ", " HZ", " DB"};
-const char dSign[kSubEffectLibrarySize][4]          = {"   ", "   ", "   ", "   ", " MS", " MS", "   ", "   ", "   "};
-const char eSign[kSubEffectLibrarySize][4]          = {"  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %"};
-const char fSign[kSubEffectLibrarySize][4]          = {"  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %"};
+const char aSign[kSubEffectLibrarySize][4]          = {"  %", " MS", " MS", " HZ", " DB", " DB", " DB", " DB", " BR", " MS"};
+const char bSign[kSubEffectLibrarySize][4]          = {"  %", "  %", "  %", " HZ", " :1", "  X", " DB", " DB", "  %", "  %"};
+const char cSign[kSubEffectLibrarySize][4]          = {"  %", " HZ", " HZ", " HZ", "   ", " MS", " HZ", " HZ", " DB", "   "};
+const char dSign[kSubEffectLibrarySize][4]          = {"   ", "   ", "   ", "   ", "   ", " MS", "   ", "   ", "   ", "   "};
+const char eSign[kSubEffectLibrarySize][4]          = {"  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %"};
+const char fSign[kSubEffectLibrarySize][4]          = {"  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %"};
 
 struct SubEffect {
     bool activeA;
@@ -5511,6 +5544,7 @@ struct Effect {
     Overdrive overdrive;
     Distortion distortion;
     Bitcrusher bitcrusher;
+    Space space;                 // custom tape echo (shares this effect's delay buffer)
 
     uint32_t delayAddress;
     uint32_t chorusAddress;
@@ -5895,6 +5929,28 @@ struct Effect {
         subEffect[8].eData = subEffect[8].kInitialEData;
         subEffect[8].fData = subEffect[8].kInitialFData;
 
+        // Custom: Space (tape echo)
+        subEffect[9].activeA = subEffect[9].activeB = subEffect[9].activeC = true;
+        subEffect[9].activeD = subEffect[9].activeE = subEffect[9].activeF = true;
+        subEffect[9].kMinAData = kMinSpaceRate;      subEffect[9].kMaxAData = kMaxSpaceRate;
+        subEffect[9].kMinBData = kMinSpaceIntensity; subEffect[9].kMaxBData = kMaxSpaceIntensity;
+        subEffect[9].kMinCData = kMinSpaceHeads;     subEffect[9].kMaxCData = kMaxSpaceHeads;
+        subEffect[9].kMinDData = kMinSpaceAge;       subEffect[9].kMaxDData = kMaxSpaceAge;
+        subEffect[9].kMinEData = kMinSpaceDry;       subEffect[9].kMaxEData = kMaxSpaceDry;
+        subEffect[9].kMinFData = kMinSpaceWet;       subEffect[9].kMaxFData = kMaxSpaceWet;
+        subEffect[9].kInitialAData = kInitialSpaceRate;
+        subEffect[9].kInitialBData = kInitialSpaceIntensity;
+        subEffect[9].kInitialCData = kInitialSpaceHeads;
+        subEffect[9].kInitialDData = kInitialSpaceAge;
+        subEffect[9].kInitialEData = kInitialSpaceDry;
+        subEffect[9].kInitialFData = kInitialSpaceWet;
+        subEffect[9].aData = kInitialSpaceRate;
+        subEffect[9].bData = kInitialSpaceIntensity;
+        subEffect[9].cData = kInitialSpaceHeads;
+        subEffect[9].dData = kInitialSpaceAge;
+        subEffect[9].eData = kInitialSpaceDry;
+        subEffect[9].fData = kInitialSpaceWet;
+
         delay.reset();
         chorus.reset();
         flanger.reset();
@@ -5904,6 +5960,7 @@ struct Effect {
         overdrive.reset();
         distortion.reset();
         bitcrusher.reset();
+        space.reset();
 
         memset((void*)delayAddress, 0, kDelayBufferSize * sizeof(float));
         memset((void*)chorusAddress, 0, kChorusBufferSize * sizeof(float));

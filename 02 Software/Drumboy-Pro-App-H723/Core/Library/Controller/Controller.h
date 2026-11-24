@@ -497,6 +497,7 @@ class Controller {
     void page_drawSampleKnobs();
     void page_restoreInstMenu();
     void page_drawMain();
+    void page_drawPunchMeter(uint8_t effectNum_);
     void main_update();
     void main_buildLane(uint8_t lane_);
     void main_renderColumn(uint16_t col_, uint16_t row0_ = 0, uint16_t rows_ = kMainHeight);

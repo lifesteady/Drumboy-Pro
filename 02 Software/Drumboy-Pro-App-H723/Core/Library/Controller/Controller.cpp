@@ -6618,6 +6618,21 @@ void Controller::page_drawMain() {
 
 void Controller::main_update() {
     /// @brief Main loop: keeps the custom main screen alive and refreshed.
+    // custom PUNCH page: gain-reduction meter moves with the music (meter only, ~30 fps)
+    if ((page == PAGE_EFFECT_0) || (page == PAGE_EFFECT_1)) {
+        static uint32_t meterTick = 0;
+        const uint8_t en = (page == PAGE_EFFECT_1) ? 1 : 0;
+        if ((effect[en].type == EF_COMPRESSOR) && ((HAL_GetTick() - meterTick) >= 33)) {
+            meterTick = HAL_GetTick();
+            const LcdFont font = lcd.getFont();
+            const LcdAlign align = lcd.getAlignment();
+            lcd.setProtect(false);
+            page_drawPunchMeter(en);
+            lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
+            lcd.setFont(font);
+            lcd.setAlignment(align);
+        }
+    }
     if (!kMainView) return;
     if (alertFlag) return;
     if (page == PAGE_NONE) { page_open(PAGE_MAIN); return; }
@@ -7693,6 +7708,27 @@ void Controller::page_drawEq() {
     }
 }
 
+void Controller::page_drawPunchMeter(uint8_t effectNum_) {
+    /// @brief Custom PUNCH page: live gain-reduction meter right of the graph (0 to -24 dB, top down).
+    const Compressor& cp = effect[effectNum_].compressor;
+    const uint16_t mx = 884, mw = 18, top = 190, bot = 400, h = bot - top;
+    float gr = -cp.grDisplay;
+    if (!effect[effectNum_].active) gr = 0.0f;
+    if (gr > 24.0f) gr = 24.0f;
+    const uint16_t fill = (uint16_t)(h * gr / 24.0f);
+    lcd.setForeColor(kThemeLine);
+    lcd.drawRect(mx - 2, top - 2, mw + 4, h + 4);
+    lcd.setForeColor(kThemeAmber);
+    if (fill) lcd.fillRect(mx, top, mw, fill);
+    lcd.setForeColor(BLACK);
+    if (fill < h) lcd.fillRect(mx, top + fill, mw, h - fill);
+    lcd.setFont(FONT_07x09);
+    lcd.setAlignment(CENTER);
+    lcd.setBackColor(BLACK);
+    lcd.setForeColor(kThemeHeader);
+    lcd.drawText("GR", 2, mx + mw / 2, bot + 8);
+}
+
 void Controller::page_drawEffect(uint8_t effectNum_) {
     /// @brief Effect page: one picture per effect type, from the live values the audio code uses.
     ///  DELAY: echo train (dry + repeats, darker as damping filters them).
@@ -7815,9 +7851,74 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
             else { yl[0] = "10MS"; yl[1] = " 5MS"; yl[2] = " 0MS"; }
         } break;
 
-        case EF_COMPRESSOR:
+        case EF_COMPRESSOR: {
+            // Custom PUNCH: level in -> level out with soft knee and auto make-up; live gain-reduction meter on the right.
+            Compressor& cp = e.compressor;
+            const float dry = cp.eDry / 100.0f, wet = cp.fWet / 100.0f;
+            const float dbMin = -48.0f;
+            const float mk = 20.0f * log10f(cp.makeup > 1.0e-6f ? cp.makeup : 1.0e-6f);
+            const float slope = (1.0f / cp.rate) - 1.0f;
+            for (uint16_t i = 0; i < gw; i++) {
+                const float in = dbMin + (-dbMin) * i / (gw - 1);
+                const float over = in - cp.threshold;
+                float gr = 0.0f;
+                if (over >= 3.0f) gr = slope * over;
+                else if (over > -3.0f) gr = slope * (over + 3.0f) * (over + 3.0f) / 12.0f;
+                const float outDb = in + gr + mk;
+                const float lin = dry * powf(10.0f, in / 20.0f) + wet * powf(10.0f, outDb / 20.0f);
+                const float mixDb = (lin > 1.0e-6f) ? 20.0f * log10f(lin) : -120.0f;
+                curveY[i] = yFromUnit((mixDb - dbMin) / (-dbMin));
+                if ((i % 4) < 2) refY[i] = yFromUnit((in - dbMin) / (-dbMin));
+            }
+            markX = (int16_t)((cp.threshold - dbMin) / (-dbMin) * (gw - 1));
+            snprintf(title, sizeof(title), "PUNCH %u", effectNum_ + 1);
+            snprintf(info, sizeof(info), "THRESHOLD %+3d DB   RATIO %2u:1   %-6s   THRUST %-6s", (int)cp.threshold, (unsigned)cp.rate,
+                     trim(kCompressorAttackTimeDataLibrary[cp.cAttackTime].nameLongR), trim(kCompressorReleaseTimeDataLibrary[cp.dReleaseTime].nameLongR));
+            xl[0] = "-48"; xl[1] = "-36"; xl[2] = "-24"; xl[3] = "-12"; xl[4] = "0DB";
+            yl[0] = "0DB"; yl[1] = "-24"; yl[2] = "-48";
+        } break;
+
+        case EF_SPACE: {
+            // Custom SPACE: the echo train an impulse would make (tape level T = in + feedback * heads,
+            // output = heads), over 4x the head-3 time; later repeats drawn darker.
+            Space& s = e.space;
+            const float headSec = kSpaceRateDataLibrary[s.aRate].data;
+            const float win = headSec * 3.0f * 4.0f;
+            const uint8_t mask = kSpaceHeadsDataLibrary[s.cHeads].mask;
+            float* T = (float*)(RAM_MAIN_ADDRESS + 0x6800);   // tape level per column (spare SDRAM)
+            float* O = T + 800;
+            for (uint16_t i = 0; i < gw; i++) { T[i] = 0.0f; O[i] = 0.0f; }
+            T[0] = 1.0f;
+            const float colPerSec = gw / win;
+            for (uint16_t i = 0; i < gw; i++) {
+                float sum = 0.0f;
+                for (uint8_t hh = 0; hh < 3; hh++) {
+                    if (!(mask & (1u << hh))) continue;
+                    const int32_t j = (int32_t)i - (int32_t)(headSec * (hh + 1) * colPerSec + 0.5f);
+                    if (j >= 0) sum += T[j];
+                }
+                O[i] = sum;
+                if (i > 0) T[i] += s.fbGain * sum * (0.95f - 0.25f * s.dAge / 100.0f);
+            }
+            for (uint16_t i = 0; i < gw; i++) {
+                float a = fabsf(O[i]);
+                if (i == 0) a = 1.0f;
+                if (a > 0.004f) {
+                    if (a > 1.0f) a = 1.0f;
+                    barTop[i] = yFromUnit(a);
+                    barShade[i] = (uint8_t)(100.0f - 70.0f * ((float)i / gw));
+                    if (i + 1 < gw) { barTop[i + 1] = barTop[i]; barShade[i + 1] = barShade[i]; }
+                }
+            }
+            snprintf(title, sizeof(title), "SPACE %u", effectNum_ + 1);
+            snprintf(info, sizeof(info), "RATE %3u MS   INTENSITY %3u   HEADS %-5s   AGE %3u", (unsigned)(headSec * 1000.0f + 0.5f), s.bIntensity,
+                     trim(kSpaceHeadsDataLibrary[s.cHeads].nameLongR), s.dAge);
+            for (uint8_t q = 0; q < 5; q++) { snprintf(xbuf[q], 8, "%ums", (unsigned)(win * 250.0f * q + 0.5f)); xl[q] = xbuf[q]; }
+            yl[0] = "100%"; yl[1] = " 50%"; yl[2] = "   0";
+        } break;
+
         case EF_EXPANDER: {
-            const bool comp = (e.type == EF_COMPRESSOR);
+            const bool comp = false;
             const float th = comp ? e.compressor.threshold : e.expander.threshold;
             const float ratio = comp ? e.compressor.rate : e.expander.rate;
             const float dry = (comp ? e.compressor.eDry : e.expander.eDry) / 100.0f;
@@ -7989,6 +8090,7 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
             prevY = -1;
         }
     }
+    if (e.type == EF_COMPRESSOR) page_drawPunchMeter(effectNum_);   // custom
 }
 
 void Controller::page_drawLfo() {
@@ -8721,7 +8823,7 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
                     effect_setActive(1, (bool)data[57]);
                     effect_setType(1, data[58]);
                     for (uint8_t i = 0; i < kEffectLibrarySize; i++) {
-                        for (uint8_t j = 0; j < kSubEffectLibrarySize; j++) {
+                        for (uint8_t j = 0; j < kSubEffectFileCount; j++) {
                             uint16_t baseNum = 59 + (54 * i) + (6 * j);
                             effect_setAData(i, j, data[baseNum + 0]);
                             effect_setBData(i, j, data[baseNum + 1]);
@@ -8729,6 +8831,19 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
                             effect_setDData(i, j, data[baseNum + 3]);
                             effect_setEData(i, j, data[baseNum + 4]);
                             effect_setFData(i, j, data[baseNum + 5]);
+                        }
+                    }
+
+                    // custom: SPACE settings (only in files that have them)
+                    if (data[177] == 'S') {
+                        const uint16_t pos[2][6] = {{490, 491, 492, 493, 494, 495}, {496, 497, 498, 499, 175, 176}};
+                        for (uint8_t i = 0; i < kEffectLibrarySize; i++) {
+                            effect_setAData(i, EF_SPACE, data[pos[i][0]]);
+                            effect_setBData(i, EF_SPACE, data[pos[i][1]]);
+                            effect_setCData(i, EF_SPACE, data[pos[i][2]]);
+                            effect_setDData(i, EF_SPACE, data[pos[i][3]]);
+                            effect_setEData(i, EF_SPACE, data[pos[i][4]]);
+                            effect_setFData(i, EF_SPACE, data[pos[i][5]]);
                         }
                     }
 
@@ -9080,7 +9195,7 @@ void Controller::sd_encodeProject(uint8_t* data) {
     data[57] = effect[1].active;
     data[58] = effect[1].type;
     for (uint8_t i = 0; i < kEffectLibrarySize; i++) {
-        for (uint8_t j = 0; j < kSubEffectLibrarySize; j++) {
+        for (uint8_t j = 0; j < kSubEffectFileCount; j++) {
             uint16_t baseNum = 59 + (54 * i) + (6 * j);
             data[baseNum + 0] = effect[i].subEffect[j].aData;
             data[baseNum + 1] = effect[i].subEffect[j].bData;
@@ -9089,6 +9204,17 @@ void Controller::sd_encodeProject(uint8_t* data) {
             data[baseNum + 4] = effect[i].subEffect[j].eData;
             data[baseNum + 5] = effect[i].subEffect[j].fData;
         }
+    }
+
+    // custom: SPACE settings (effect 0 -> bytes 490-495, effect 1 -> 496-499 + 175-176, marker 177)
+    {
+        const uint16_t pos[2][6] = {{490, 491, 492, 493, 494, 495}, {496, 497, 498, 499, 175, 176}};
+        for (uint8_t i = 0; i < kEffectLibrarySize; i++) {
+            const SubEffect& se = effect[i].subEffect[EF_SPACE];
+            const uint8_t v[6] = {se.aData, se.bData, se.cData, se.dData, se.eData, se.fData};
+            for (uint8_t k = 0; k < 6; k++) data[pos[i][k]] = v[k];
+        }
+        data[177] = 'S';
     }
 
     // 2.9 REVERB SETTINGS
@@ -9542,7 +9668,7 @@ SdResult Controller::sd_loadDrumkit(uint8_t kitNum_) {
                     effect_setActive(1, (bool)data[57]);
                     effect_setType(1, data[58]);
                     for (uint8_t i = 0; i < kEffectLibrarySize; i++) {
-                        for (uint8_t j = 0; j < kSubEffectLibrarySize; j++) {
+                        for (uint8_t j = 0; j < kSubEffectFileCount; j++) {
                             uint16_t baseNum = 59 + (54 * i) + (6 * j);
                             effect_setAData(i, j, data[baseNum + 0]);
                             effect_setBData(i, j, data[baseNum + 1]);
@@ -9550,6 +9676,19 @@ SdResult Controller::sd_loadDrumkit(uint8_t kitNum_) {
                             effect_setDData(i, j, data[baseNum + 3]);
                             effect_setEData(i, j, data[baseNum + 4]);
                             effect_setFData(i, j, data[baseNum + 5]);
+                        }
+                    }
+
+                    // custom: SPACE settings (only in files that have them)
+                    if (data[177] == 'S') {
+                        const uint16_t pos[2][6] = {{490, 491, 492, 493, 494, 495}, {496, 497, 498, 499, 175, 176}};
+                        for (uint8_t i = 0; i < kEffectLibrarySize; i++) {
+                            effect_setAData(i, EF_SPACE, data[pos[i][0]]);
+                            effect_setBData(i, EF_SPACE, data[pos[i][1]]);
+                            effect_setCData(i, EF_SPACE, data[pos[i][2]]);
+                            effect_setDData(i, EF_SPACE, data[pos[i][3]]);
+                            effect_setEData(i, EF_SPACE, data[pos[i][4]]);
+                            effect_setFData(i, EF_SPACE, data[pos[i][5]]);
                         }
                     }
 
@@ -9840,7 +9979,7 @@ SdResult Controller::sd_saveDrumkit(uint8_t kitNum_) {
     data[57] = effect[1].active;
     data[58] = effect[1].type;
     for (uint8_t i = 0; i < kEffectLibrarySize; i++) {
-        for (uint8_t j = 0; j < kSubEffectLibrarySize; j++) {
+        for (uint8_t j = 0; j < kSubEffectFileCount; j++) {
             uint16_t baseNum = 59 + (54 * i) + (6 * j);
             data[baseNum + 0] = effect[i].subEffect[j].aData;
             data[baseNum + 1] = effect[i].subEffect[j].bData;
@@ -9849,6 +9988,17 @@ SdResult Controller::sd_saveDrumkit(uint8_t kitNum_) {
             data[baseNum + 4] = effect[i].subEffect[j].eData;
             data[baseNum + 5] = effect[i].subEffect[j].fData;
         }
+    }
+
+    // custom: SPACE settings (effect 0 -> bytes 490-495, effect 1 -> 496-499 + 175-176, marker 177)
+    {
+        const uint16_t pos[2][6] = {{490, 491, 492, 493, 494, 495}, {496, 497, 498, 499, 175, 176}};
+        for (uint8_t i = 0; i < kEffectLibrarySize; i++) {
+            const SubEffect& se = effect[i].subEffect[EF_SPACE];
+            const uint8_t v[6] = {se.aData, se.bData, se.cData, se.dData, se.eData, se.fData};
+            for (uint8_t k = 0; k < 6; k++) data[pos[i][k]] = v[k];
+        }
+        data[177] = 'S';
     }
 
     // 2.9 REVERB SETTINGS
@@ -12120,6 +12270,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
                     case EF_BITCRUSHER:
                         textPtr = kBitcrusherResolutionDataLibrary[effect[0].bitcrusher.aResolution].nameLongR;
                         break;
+
+                    case EF_SPACE:   // custom
+                        textPtr = kSpaceRateDataLibrary[effect[0].space.aRate].nameLongR;
+                        break;
                 }
                 break;
 
@@ -12159,6 +12313,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
 
                     case EF_BITCRUSHER:
                         textPtr = kBitcrusherSampleRateDataLibrary[effect[0].bitcrusher.bSampleRate].nameLongR;
+                        break;
+
+                    case EF_SPACE:   // custom
+                        textPtr = kNumberDataLibrary[effect[0].space.bIntensity].nameLongR;
                         break;
                 }
                 break;
@@ -12200,6 +12358,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
                     case EF_BITCRUSHER:
                         textPtr = kBitcrusherThresholdDataLibrary[effect[0].bitcrusher.cThreshold].nameLongR;
                         break;
+
+                    case EF_SPACE:   // custom
+                        textPtr = kSpaceHeadsDataLibrary[effect[0].space.cHeads].nameLongR;
+                        break;
                 }
                 break;
 
@@ -12239,6 +12401,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
 
                     case EF_BITCRUSHER:
                         textPtr = kNumberDataLibrary[effect[0].bitcrusher.dSmooth].nameLongR;
+                        break;
+
+                    case EF_SPACE:   // custom
+                        textPtr = kNumberDataLibrary[effect[0].space.dAge].nameLongR;
                         break;
                 }
                 break;
@@ -12280,6 +12446,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
                     case EF_BITCRUSHER:
                         textPtr = kNumberDataLibrary[effect[0].bitcrusher.eDry].nameLongR;
                         break;
+
+                    case EF_SPACE:   // custom
+                        textPtr = kNumberDataLibrary[effect[0].space.eDry].nameLongR;
+                        break;
                 }
                 break;
 
@@ -12319,6 +12489,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
 
                     case EF_BITCRUSHER:
                         textPtr = kNumberDataLibrary[effect[0].bitcrusher.fWet].nameLongR;
+                        break;
+
+                    case EF_SPACE:   // custom
+                        textPtr = kNumberDataLibrary[effect[0].space.fWet].nameLongR;
                         break;
                 }
                 break;
@@ -12370,6 +12544,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
                     case EF_BITCRUSHER:
                         textPtr = kBitcrusherResolutionDataLibrary[effect[1].bitcrusher.aResolution].nameLongR;
                         break;
+
+                    case EF_SPACE:   // custom
+                        textPtr = kSpaceRateDataLibrary[effect[1].space.aRate].nameLongR;
+                        break;
                 }
                 break;
 
@@ -12411,6 +12589,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
                     case EF_BITCRUSHER:
                         textPtr = kBitcrusherSampleRateDataLibrary[effect[1].bitcrusher.bSampleRate].nameLongR;
                         break;
+
+                    case EF_SPACE:   // custom
+                        textPtr = kNumberDataLibrary[effect[1].space.bIntensity].nameLongR;
+                        break;
                 }
                 break;
 
@@ -12450,6 +12632,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
 
                     case EF_BITCRUSHER:
                         textPtr = kBitcrusherThresholdDataLibrary[effect[1].bitcrusher.cThreshold].nameLongR;
+                        break;
+
+                    case EF_SPACE:   // custom
+                        textPtr = kSpaceHeadsDataLibrary[effect[1].space.cHeads].nameLongR;
                         break;
                 }
                 break;
@@ -12491,6 +12677,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
                     case EF_BITCRUSHER:
                         textPtr = kNumberDataLibrary[effect[1].bitcrusher.dSmooth].nameLongR;
                         break;
+
+                    case EF_SPACE:   // custom
+                        textPtr = kNumberDataLibrary[effect[1].space.dAge].nameLongR;
+                        break;
                 }
                 break;
 
@@ -12531,6 +12721,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
                     case EF_BITCRUSHER:
                         textPtr = kNumberDataLibrary[effect[1].bitcrusher.eDry].nameLongR;
                         break;
+
+                    case EF_SPACE:   // custom
+                        textPtr = kNumberDataLibrary[effect[1].space.eDry].nameLongR;
+                        break;
                 }
                 break;
 
@@ -12570,6 +12764,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
 
                     case EF_BITCRUSHER:
                         textPtr = kNumberDataLibrary[effect[1].bitcrusher.fWet].nameLongR;
+                        break;
+
+                    case EF_SPACE:   // custom
+                        textPtr = kNumberDataLibrary[effect[1].space.fWet].nameLongR;
                         break;
                 }
                 break;
@@ -13836,6 +14034,10 @@ void Controller::lcd_drawEffect_AData(uint8_t effectNum_) {
             textPtr = kBitcrusherResolutionDataLibrary[effect_.bitcrusher.aResolution].nameLongR;
             break;
 
+        case EF_SPACE:   // custom
+            textPtr = kSpaceRateDataLibrary[effect_.space.aRate].nameLongR;
+            break;
+
         default:
             textPtr = "----------";
             break;
@@ -13898,6 +14100,10 @@ void Controller::lcd_drawEffect_BData(uint8_t effectNum_) {
         case EF_BITCRUSHER:
             textPtr = kBitcrusherSampleRateDataLibrary[effect_.bitcrusher.bSampleRate].nameLongR;
             break;
+
+        case EF_SPACE:   // custom
+            textPtr = kNumberDataLibrary[effect_.space.bIntensity].nameLongR;
+            break;
     }
     // 3. VALUE DRAW
     // Draw resolved parameter-B value.
@@ -13956,6 +14162,10 @@ void Controller::lcd_drawEffect_CData(uint8_t effectNum_) {
 
         case EF_BITCRUSHER:
             textPtr = kBitcrusherThresholdDataLibrary[effect_.bitcrusher.cThreshold].nameLongR;
+            break;
+
+        case EF_SPACE:   // custom
+            textPtr = kSpaceHeadsDataLibrary[effect_.space.cHeads].nameLongR;
             break;
     }
     // 3. VALUE DRAW
@@ -14016,6 +14226,10 @@ void Controller::lcd_drawEffect_DData(uint8_t effectNum_) {
         case EF_BITCRUSHER:
             textPtr = kNumberDataLibrary[effect_.bitcrusher.dSmooth].nameLongR;
             break;
+
+        case EF_SPACE:   // custom
+            textPtr = kNumberDataLibrary[effect_.space.dAge].nameLongR;
+            break;
     }
     // 3. VALUE DRAW
     // Draw resolved parameter-D value.
@@ -14075,6 +14289,10 @@ void Controller::lcd_drawEffect_EData(uint8_t effectNum_) {
         case EF_BITCRUSHER:
             textPtr = kNumberDataLibrary[effect_.bitcrusher.eDry].nameLongR;
             break;
+
+        case EF_SPACE:   // custom
+            textPtr = kNumberDataLibrary[effect_.space.eDry].nameLongR;
+            break;
     }
     // 3. VALUE DRAW
     // Draw resolved parameter-E value.
@@ -14133,6 +14351,10 @@ void Controller::lcd_drawEffect_FData(uint8_t effectNum_) {
 
         case EF_BITCRUSHER:
             textPtr = kNumberDataLibrary[effect_.bitcrusher.fWet].nameLongR;
+            break;
+
+        case EF_SPACE:   // custom
+            textPtr = kNumberDataLibrary[effect_.space.fWet].nameLongR;
             break;
     }
     // 3. VALUE DRAW
@@ -20041,6 +20263,13 @@ void Controller::effect_setAData(uint8_t effectNum_, uint8_t subEffectNum_, uint
                 bitcrusher.resolution = kBitcrusherResolutionDataLibrary[aData_].data;
                 bitcrusher.update();
             } break;
+
+            case EF_SPACE: {  // custom
+                Space& space = effect_.space;
+                subEffect_.aData = aData_;
+                space.aRate = aData_;
+                space.update();
+            } break;
         }
 
         // 3. UI & GLOBAL REFRESH
@@ -20153,6 +20382,13 @@ void Controller::effect_setBData(uint8_t effectNum_, uint8_t subEffectNum_, uint
                 bitcrusher.sampleRate = kBitcrusherSampleRateDataLibrary[bData_].data;
                 bitcrusher.update();
             } break;
+
+            case EF_SPACE: {  // custom
+                Space& space = effect_.space;
+                subEffect_.bData = bData_;
+                space.bIntensity = bData_;
+                space.update();
+            } break;
         }
 
         // 3. UI & GLOBAL REFRESH
@@ -20247,6 +20483,13 @@ void Controller::effect_setCData(uint8_t effectNum_, uint8_t subEffectNum_, uint
                 bitcrusher.threshold = kBitcrusherThresholdDataLibrary[cData_].data;
                 bitcrusher.update();
             } break;
+
+            case EF_SPACE: {  // custom
+                Space& space = effect_.space;
+                subEffect_.cData = cData_;
+                space.cHeads = cData_;
+                space.update();
+            } break;
         }
 
         // 3. UI & GLOBAL REFRESH
@@ -20333,6 +20576,13 @@ void Controller::effect_setDData(uint8_t effectNum_, uint8_t subEffectNum_, uint
                 subEffect_.dData = dData_;
                 bitcrusher.dSmooth = dData_;
                 bitcrusher.update();
+            } break;
+
+            case EF_SPACE: {  // custom
+                Space& space = effect_.space;
+                subEffect_.dData = dData_;
+                space.dAge = dData_;
+                space.update();
             } break;
         }
 
@@ -20496,6 +20746,21 @@ void Controller::effect_setEData(uint8_t effectNum_, uint8_t subEffectNum_, uint
                 bitcrusher.fWet = targetWet;
                 targetDryFloat = kNumberDataLibrary[bitcrusher.eDry].stdMultiplier;
                 targetWetFloat = kNumberDataLibrary[bitcrusher.fWet].stdMultiplier;
+            } break;
+
+            case EF_SPACE: {
+                Space& space = effect_.space;
+                targetDry = eData_;
+                targetWet = space.fWet;
+                if ((space.limitMix) && ((targetDry + targetWet) > space.limitMixData)) {
+                    targetWet = space.limitMixData - targetDry;
+                }
+                subEffect_.eData = targetDry;
+                subEffect_.fData = targetWet;
+                space.eDry = targetDry;
+                space.fWet = targetWet;
+                targetDryFloat = kNumberDataLibrary[space.eDry].stdMultiplier;
+                targetWetFloat = kNumberDataLibrary[space.fWet].stdMultiplier;
             } break;
         }
 
@@ -20670,6 +20935,21 @@ void Controller::effect_setFData(uint8_t effectNum_, uint8_t subEffectNum_, uint
                 bitcrusher.fWet = targetWet;
                 targetDryFloat = kNumberDataLibrary[bitcrusher.eDry].stdMultiplier;
                 targetWetFloat = kNumberDataLibrary[bitcrusher.fWet].stdMultiplier;
+            } break;
+
+            case EF_SPACE: {
+                Space& space = effect_.space;
+                targetDry = space.eDry;
+                targetWet = fData_;
+                if ((space.limitMix) && ((targetDry + targetWet) > space.limitMixData)) {
+                    targetDry = space.limitMixData - targetWet;
+                }
+                subEffect_.eData = targetDry;
+                subEffect_.fData = targetWet;
+                space.eDry = targetDry;
+                space.fWet = targetWet;
+                targetDryFloat = kNumberDataLibrary[space.eDry].stdMultiplier;
+                targetWetFloat = kNumberDataLibrary[space.fWet].stdMultiplier;
             } break;
         }
 
@@ -20933,6 +21213,11 @@ void Controller::effect_updateMixFloats(uint8_t effectNum_) {
             effect_.dryFloat = kNumberDataLibrary[effect_.bitcrusher.eDry].stdMultiplier;
             effect_.wetFloat = kNumberDataLibrary[effect_.bitcrusher.fWet].stdMultiplier;
             break;
+
+        case EF_SPACE:
+            effect_.dryFloat = kNumberDataLibrary[effect_.space.eDry].stdMultiplier;
+            effect_.wetFloat = kNumberDataLibrary[effect_.space.fWet].stdMultiplier;
+            break;
     }
 }
 
@@ -20982,6 +21267,11 @@ void Controller::effect_cleanMemory(uint8_t effectNum_, uint8_t type_) {
 
         case EF_BITCRUSHER:
             effect_.bitcrusher.cleanMemory();
+            break;
+
+        case EF_SPACE:
+            effect_.space.cleanMemory();
+            memset((void*)effect_.delayAddress, 0, kDelayBufferSize * sizeof(float));   // fresh tape
             break;
     }
 }
@@ -26382,74 +26672,36 @@ float Controller::processAudioEffectHelper(uint8_t effectNum_, float audio_) {
             } break;
 
             case EF_COMPRESSOR: {
-                // 1. SETUP & DEFINITIONS
-                // Resolve compressor parameters and local envelope variables.
+                // Custom PUNCH (API 2500 flavour): THRUST high-passes what the detector hears so low end
+                // passes and the snare / room get squeezed; 6 dB soft knee; automatic make-up gain;
+                // gentle output saturation. DRY + WET = parallel ("New York") compression.
                 Compressor& comp_ = effect_.compressor;
-
-                // Local Cache
-                float threshold = comp_.threshold;
-                float gainSmooth = comp_.gainSmoothPrev;
-                float attackAlpha = comp_.attackAlpha;
-                float releaseAlpha = comp_.releaseAlpha;
-
-                // Signal Variables
-                float absInput, in_dB;
-                float gain_reduction = 0.0f;
-                float attenuation = 1.0f;
-                float mixData;
-
-                // Constants
-                const float kMinLogdB = -96.0f;
-                const float kIdleThreshold = -0.001f;
-
-                // 2. INPUT ANALYSIS (Level Detection)
-                // Convert input magnitude to dB domain with floor protection.
-                absInput = fabsf(input);
-
-                // Avoid log(0)
-                if (absInput < 1.0e-6f) absInput = 1.0e-6f;
-
-                // Fast Linear to dB Conversion
-                in_dB = fast_lin2db(absInput);
-                if (in_dB < kMinLogdB) in_dB = kMinLogdB;
-
-                // 3. GAIN CALCULATION (Optimized Math)
-                // Compute gain reduction only when signal exceeds threshold.
-                if (in_dB > threshold) {
-                    float diff = in_dB - threshold;
-                    float ratioInv = 1.0f / comp_.rate;
-                    gain_reduction = diff * (ratioInv - 1.0f);
+                float det = input;
+                if (comp_.thrustCoef > 0.0f) {
+                    const float y = comp_.thrustCoef * (comp_.thrustY + input - comp_.thrustX);
+                    comp_.thrustX = input;
+                    comp_.thrustY = y + 1.0e-20f;
+                    det = (comp_.dReleaseTime >= 2) ? (y * 1.4f) : (y * 0.7f + input * 0.3f);
                 }
-
-                // else: gain_reduction remains 0.0f
-
-                // 4. ENVELOPE (Ballistics)
-                // Smooth gain changes using attack/release envelope behavior.
-                if (gain_reduction >= kIdleThreshold && gainSmooth >= kIdleThreshold) {
-                    gainSmooth = 0.0f;
-                    attenuation = 1.0f;
-                } else {
-                    // Determine Alpha (Attack or Release)
-                    float alpha = (gain_reduction < gainSmooth) ? attackAlpha : releaseAlpha;
-
-                    // One-Pole Filter Application
-                    gainSmooth = ((1.0f - alpha) * gain_reduction) + (alpha * gainSmooth);
-
-                    // Convert dB back to Linear Gain
-                    attenuation = fast_db2lin(gainSmooth);
-                }
-
-                // Write back state to struct
-                comp_.gainSmoothPrev = gainSmooth;
-
-                // 5. OUTPUT MIX & TRANSITION
-                // Apply attenuation, mix wet/dry path, and handle transitions.
-                mixData = (input * attenuation * effect_.wetFloat) + (input * effect_.dryFloat);
-                if (effect_.genTransition.active) {
-                    output = (mixData * effect_.genTransition.activeWet) + (input * effect_.genTransition.activeDry);
-                } else {
-                    output = mixData;
-                }
+                float absIn = fabsf(det);
+                if (absIn < 1.0e-6f) absIn = 1.0e-6f;
+                float inDb = fast_lin2db(absIn);
+                if (inDb < -96.0f) inDb = -96.0f;
+                const float over = inDb - comp_.threshold;
+                const float slope = (1.0f / comp_.rate) - 1.0f;   // negative
+                float gr = 0.0f;
+                if (over >= 3.0f) gr = slope * over;
+                else if (over > -3.0f) gr = slope * (over + 3.0f) * (over + 3.0f) / 12.0f;
+                float g = comp_.gainSmoothPrev;
+                const float alpha = (gr < g) ? comp_.attackAlpha : comp_.releaseAlpha;
+                g = ((1.0f - alpha) * gr) + (alpha * g);
+                if (g > -0.0001f) g = 0.0f;
+                comp_.gainSmoothPrev = g;
+                if (g < comp_.grDisplay) comp_.grDisplay = g; else comp_.grDisplay += (g - comp_.grDisplay) * 0.0005f;
+                float wet = input * ((g < 0.0f) ? fast_db2lin(g) : 1.0f) * comp_.makeup;
+                wet = 1.1f * filterFastTanh(wet * (1.0f / 1.1f));   // a little API-style grit at the peaks
+                const float mixData = (wet * effect_.wetFloat) + (input * effect_.dryFloat);
+                output = (effect_.genTransition.active) ? ((mixData * effect_.genTransition.activeWet) + (input * effect_.genTransition.activeDry)) : mixData;
             } break;
 
             case EF_EXPANDER: {
@@ -26741,6 +26993,45 @@ float Controller::processAudioEffectHelper(uint8_t effectNum_, float audio_) {
                 bit_.sampleCounter = counter;
                 bit_.sampleData = currentSample;
 
+            } break;
+
+            case EF_SPACE: {
+                // Custom SPACE (RE-201 flavour): one tape loop, three playback heads at 1x / 2x / 3x the
+                // head-1 time, wow + flutter wobble the read position, tape speed glides when RATE changes
+                // (pitch bend), and every repeat passes a darkening filter + tape saturation.
+                Space& s = effect_.space;
+                float* buf = (float*)effect_.delayAddress;
+                const uint32_t N = kDelayBufferSize;
+                s.curDelay += (s.targetDelay - s.curDelay) * 0.00006f;
+                s.wowPhase += 0.55f * kInvSampleRate;      if (s.wowPhase >= 1.0f) s.wowPhase -= 1.0f;
+                s.flutterPhase += 5.7f * kInvSampleRate;   if (s.flutterPhase >= 1.0f) s.flutterPhase -= 1.0f;
+                const float mod = 1.0f + s.wowDepth * sinFast(s.wowPhase) + s.flutterDepth * sinFast(s.flutterPhase);
+                const uint8_t mask = kSpaceHeadsDataLibrary[(s.cHeads <= kMaxSpaceHeads) ? s.cHeads : kInitialSpaceHeads].mask;
+                float heads = 0.0f;
+                for (uint8_t hh = 0; hh < 3; hh++) {
+                    if (!(mask & (1u << hh))) continue;
+                    float d = s.curDelay * (float)(hh + 1) * mod;
+                    if (d > (float)(N - 4)) d = (float)(N - 4);
+                    float pos = (float)s.writeIdx - d;
+                    if (pos < 0.0f) pos += (float)N;
+                    const uint32_t i0 = (uint32_t)pos;
+                    const float fr = pos - (float)i0;
+                    const uint32_t i1 = (i0 + 1 >= N) ? 0 : (i0 + 1);
+                    heads += buf[i0] + (buf[i1] - buf[i0]) * fr;
+                }
+                // feedback: darker each pass, low end trimmed, tape saturation
+                s.lp += s.lpCoef * (heads * s.fbGain - s.lp);
+                const float hpY = 0.995f * (s.hpY + s.lp - s.hpX);
+                s.hpX = s.lp;
+                s.hpY = hpY + 1.0e-20f;
+                float writeVal = input + 1.15f * filterFastTanh(hpY * (1.0f / 1.15f));
+                if (!(writeVal > -4.0f && writeVal < 4.0f)) writeVal = 0.0f;
+                buf[s.writeIdx] = writeVal;
+                s.writeIdx = (s.writeIdx + 1 >= N) ? 0 : (s.writeIdx + 1);
+                s.lpOut += s.lpCoef * (heads - s.lpOut);
+                const float wet = filterFastTanh(s.lpOut);
+                const float mixData = (wet * effect_.wetFloat) + (input * effect_.dryFloat);
+                output = (effect_.genTransition.active) ? ((mixData * effect_.genTransition.activeWet) + (input * effect_.genTransition.activeDry)) : mixData;
             } break;
 
             default:
