@@ -551,6 +551,7 @@ class Controller {
     uint16_t mainLaneY[kLayerLibrarySize] = {0};
     uint16_t mainLaneH[kLayerLibrarySize] = {0};
     char mainCounter[24] = "";
+    uint8_t lastPadLayer = 0xFF;                                        // last pad played normally (Notes focus)
     uint8_t pitchLayer = 0;                                             // Pitch mode: which drum the pads play
     uint8_t pitchRootPad = 0;                                           // which pad (0-9) plays the root
     uint8_t pitchRoot = 0;                                              // 0 = C .. 11 = B

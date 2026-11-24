@@ -1700,6 +1700,7 @@ void Controller::keyboard_action() {
                             }
                         } else {
                             Layer& layer = layerLibrary[layerNum];
+                            lastPadLayer = layerNum;   // custom: Notes mode opens on this drum
                             if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(layerNum, 1.0f);
                             if (recordActive) {
                                 undo_checkpoint(UNDO_RECORD);   // custom: one undo step per take
@@ -2655,8 +2656,13 @@ void Controller::keyboard_action() {
                                 if (!alertFlag) {
                                     if (page == PAGE_PITCH) { page_close(); global_select(); }
                                     else {
+                                        // Notes follows the drum you're on: the selected drum (INST / SEQ),
+                                        // otherwise the last pad you played.
+                                        if ((selectedLayerNum >= 0) && (selectedLayerNum < kLayerLibrarySize)) pitchLayer = (uint8_t)selectedLayerNum;
+                                        else if (lastPadLayer < kLayerLibrarySize) pitchLayer = lastPadLayer;
                                         if (menu != IO_MENU) io_select();
                                         page_open(PAGE_PITCH);
+                                        lcd_drawMenuLabel(IO_MENU, -1);
                                     }
                                 }
                                 break;
@@ -5445,6 +5451,7 @@ void Controller::page_close(bool toStock_) {
     }
     if (wasPitch) {
         encoder_update();
+        if (menu == IO_MENU) lcd_drawMenuLabel(IO_MENU, -1);
         if (menu == IO_MENU) {   // put the Sync menu's own boxes back
             lcd.setBackColor(BLACK);
             for (uint8_t k = 4; k < 8; k++) lcd_clearMenuTab(k);
@@ -6794,7 +6801,7 @@ void Controller::page_drawPitch() {
     lcd.setAlignment(LEFT);
     lcd.setBackColor(BLACK);
     lcd.setForeColor(kThemeAccent);
-    snprintf(text, sizeof(text), "PITCH  DRUM %02u %-12.12s", pitchLayer + 1, (*nm) ? nm : "-");
+    snprintf(text, sizeof(text), "NOTES  DRUM %02u %-12.12s", pitchLayer + 1, (*nm) ? nm : "-");
     lcd.drawText(text, strlen(text), 30, 136);
     lcd_drawIo_PitchData();
     snprintf(text, sizeof(text), "ROOT %-2s ON PAD %-2u   SCALE %-11s   OCTAVE %+d", kPitchNoteName[pitchRoot % 12], pitchRootPad + 1, kPitchScaleName[pitchScale % kPitchScaleCount], pitchOctave);
@@ -11120,7 +11127,7 @@ void Controller::lcd_drawMenuLabel(Menu menu_, int16_t num_) {
         case MIXER_MENU:        word = "MIX"; break;
         case RHYTHM_MENU:       word = "RHYTHM"; break;
         case METRO_MENU:        word = "METRO"; break;
-        case IO_MENU:           word = "SYNC"; break;
+        case IO_MENU:           word = (page == PAGE_PITCH) ? "NOTES" : "SYNC"; break;
         case EQ_MENU:           word = "EQ"; break;
         case REVERB_MENU:       word = "REVERB"; break;
         case FILTER_0_MENU:     word = "FILT"; num = 1; break;
@@ -21866,7 +21873,11 @@ void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
                 }
 
                 // Custom: Pitch mode note for this hit (semitones on top of the drum's PITCH).
-                if (pendingNote[layerNum_] != 0) tBD.increment *= exp2f((float)pendingNote[layerNum_] / 12.0f);
+                if (pendingNote[layerNum_] != 0) {
+                    tBD.increment *= exp2f((float)pendingNote[layerNum_] / 12.0f);
+                    if (tBD.increment > 8.0f) tBD.increment = 8.0f;
+                    if (tBD.increment < 0.0625f) tBD.increment = 0.0625f;
+                }
 
                 // Custom: per-drum envelope (attack / hold / decay), counted in output samples.
                 {
@@ -21926,6 +21937,9 @@ void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
                         tBD.counterFade = 0;
                         break;
                 }
+                // Custom guard: with big pitch steps (high Notes) the stock fade start could land
+                // outside the sample; keep it inside.
+                if ((tBD.counterFadeStart > tBD.counterEnd) || (tBD.counterFadeStart < tBD.counterStart)) tBD.counterFadeStart = (tBD.directionMode == 0) ? tBD.counterStart : tBD.counterEnd;
                 tBD.newBeatFlag = false;
 
                 // activate beat if no delay
