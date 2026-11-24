@@ -212,6 +212,10 @@ void Controller::initialize() {
     effect[0].initialize();
     effect[1].initialize();
     reverb.initialize();
+    new (&verbPlus) rvp::Engine();   // custom: extra reverb engines (object + tank in DTCM, reflections in SDRAM)
+    verbPlus.setup((float*)RAM_VERB_FAST_ADDRESS, (float*)RAM_VERB_ADDRESS);
+    verbPlus.clear();
+    reverb_configurePlus();
 
     // Reset specific filter parameters and set master Low-Pass Filters (LPF)
     filter_reset(0);
@@ -396,6 +400,18 @@ void Controller::update() {
 
         // Custom: Note Repeat while the sequencer is stopped (free-running at the grid rate).
         noteRepeat_stopped();
+
+        // Custom: live CPU readout on the Routing and Reverb pages.
+        if (((page == PAGE_ROUTE) || (page == PAGE_REVERB)) && ((HAL_GetTick() - routeCpuTick) >= 500)) {
+            routeCpuTick = HAL_GetTick();
+            const LcdFont f = lcd.getFont();
+            const LcdAlign a = lcd.getAlignment();
+            lcd.setProtect(false);
+            page_drawCpu(930, 136);
+            lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
+            lcd.setFont(f);
+            lcd.setAlignment(a);
+        }
 
         // 4. FILESYSTEM MAINTENANCE
         // Recover SD subsystem if media access is lost.
@@ -1658,6 +1674,8 @@ void Controller::keyboard_action() {
                             } else {
                                 pitch_pad(layerNum);   // custom: pads play one drum in a scale
                             }
+                        } else if ((page == PAGE_ROUTE) && (menu == MIXER_MENU) && (!alertFlag)) {
+                            route_pad(layerNum);   // custom: Routing page, pad = pick drum (and hear it)
                         } else if ((page == PAGE_GROOVE) && (menu == RHYTHM_MENU) && (!alertFlag)) {
                             // Custom: Groove page. Pad = pick drum (and hear it); ADD + pad = Timing Correct.
                             if (keyboard.shiftKeyPress) {
@@ -1973,7 +1991,9 @@ void Controller::keyboard_action() {
                                             break;
 
                                         case MIXER_MENU:
-                                            mixer_menuLeft();
+                                            // Custom: on the Routing page LEFT moves the drum's entry earlier in the chain.
+                                            if (page == PAGE_ROUTE) route_shift(false);
+                                            else mixer_menuLeft();
                                             break;
 
                                         case METRO_MENU:
@@ -2041,7 +2061,8 @@ void Controller::keyboard_action() {
                                             break;
 
                                         case MIXER_MENU:
-                                            mixer_menuRight();
+                                            if (page == PAGE_ROUTE) route_shift(true);
+                                            else mixer_menuRight();
                                             break;
 
                                         case METRO_MENU:
@@ -3931,7 +3952,7 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
             // Reverb functions
 
         case ENC_REVERB_ACTIVE:
-            reverb_setActive(!reverb.active);
+            reverb_stepTypeKnob(true);   // custom: TYPE knob (OFF, STANDARD .. NONLIN)
             break;
 
         case ENC_REVERB_SIZE:
@@ -4541,7 +4562,7 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
             // Reverb functions
 
         case ENC_REVERB_ACTIVE:
-            reverb_setActive(!reverb.active);
+            reverb_stepTypeKnob(false);   // custom: TYPE knob
             break;
 
         case ENC_REVERB_SIZE:
@@ -5498,6 +5519,225 @@ void Controller::page_close(bool toStock_) {
 
 void Controller::page_toggle(PageView page_) {
     (page == page_) ? page_close() : page_open(page_);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+/* Custom: Routing page (Mixer key) -----------------------------------------*/
+////////////////////////////////////////////////////////////////////////////////
+// The chain is one line: EQ -> FILTER 1 -> FILTER 2 -> EFFECT 1 -> EFFECT 2 -> REVERB -> OUT.
+// Each drum enters it at one point and goes through everything after that point.
+
+static const RGB16Color kRouteSelectBg = (RGB16Color)(((20 >> 3) << 11) | ((40 >> 2) << 5) | (16 >> 3));   // same green tint as the main screen
+static const char* const kRouteStageName[7] = {"EQ", "FILTER 1", "FILTER 2", "EFFECT 1", "EFFECT 2", "REVERB", "OUT"};
+
+void Controller::page_drawCpu(uint16_t x_, uint16_t y_) {
+    /// @brief "CPU 34%  PEAK 51%", right aligned, coloured by how busy the audio is.
+    const float avg = cpuLoad, pk = cpuPeak;
+    char t[24];
+    snprintf(t, sizeof(t), "CPU %3u%%  PEAK %3u%%", (unsigned)(avg * 100.0f + 0.5f), (unsigned)(pk * 100.0f + 0.5f));
+    lcd.setFont(FONT_10x14);
+    lcd.setAlignment(RIGHT);
+    lcd.setBackColor(BLACK);
+    lcd.setForeColor((pk > 0.85f) ? kThemeAccent : ((pk > 0.65f) ? kThemeAmber : kThemeGood));
+    lcd.drawText(t, strlen(t), x_, y_ + 2);
+}
+
+void Controller::route_setEntry(uint8_t layerNum_, uint8_t entry_) {
+    /// @brief Puts a drum into the chain at one point (0 = EQ .. 5 = REVERB, 6 = straight to OUT).
+    if ((layerNum_ >= kLayerLibrarySize) || (entry_ > MIXER_IN_SEND)) return;
+    static const uint8_t kMap[7][4] = {{1, 2, 2, 1}, {0, 2, 2, 1}, {0, 1, 2, 1}, {0, 0, 2, 1}, {0, 0, 1, 1}, {0, 0, 0, 1}, {0, 0, 0, 0}};
+    Layer& layer = layerLibrary[layerNum_];
+    layer.eq = kMap[entry_][0];
+    layer.filter = kMap[entry_][1];
+    layer.effect = kMap[entry_][2];
+    layer.reverb = kMap[entry_][3];
+    layerInst_calculateMixMode(layerNum_);
+}
+
+void Controller::route_shift(bool later_) {
+    const uint8_t now = (uint8_t)layerLibrary[routeLayer].mixerInMode;
+    if (later_ && (now < MIXER_IN_SEND)) route_setEntry(routeLayer, now + 1);
+    else if (!later_ && (now > MIXER_IN_EQ)) route_setEntry(routeLayer, now - 1);
+    page_markDirty(PAGE_ROUTE);
+}
+
+void Controller::route_pad(uint8_t layerNum_) {
+    routeLayer = layerNum_;
+    Layer& layer = layerLibrary[layerNum_];
+    if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(layerNum_, 1.0f);
+    page_markDirty(PAGE_ROUTE);
+}
+
+void Controller::page_drawRoute() {
+    /// @brief Routing page: the chain as 7 boxes, then one row per drum (and Line In, Metronome)
+    /// showing where it enters and which stages it goes through. Filled square = that stage is on
+    /// and changes the sound; hollow = it's off, the sound just passes through.
+    const RGB16Color label = kThemeHeader;
+    const uint16_t x0 = 190, colW = 106, boxW = 96, boxY = 188, boxH = 42;
+    const uint16_t rowY = 242, rowH = 15;
+    char text[96];
+
+    bool stageOn[7];
+    stageOn[0] = eq.active;
+    stageOn[1] = filter[0].active && (filter[0].type >= kMinFilterType) && (filter[0].type <= kMaxFilterType);
+    stageOn[2] = filter[1].active && (filter[1].type >= kMinFilterType) && (filter[1].type <= kMaxFilterType);
+    stageOn[3] = effect[0].active;
+    stageOn[4] = effect[1].active;
+    stageOn[5] = reverb.active;
+    stageOn[6] = true;
+
+    auto stageState = [&](uint8_t c_) -> const char* {
+        static char buf[12];
+        const char* src = "";
+        switch (c_) {
+            case 0: { const int8_t pr = eq_matchPreset(); src = !eq.active ? "OFF" : ((pr >= 0) ? kEqPresets[pr].name : "CUSTOM"); } break;
+            case 1:
+            case 2: {
+                static const char* const fn[] = {"OFF", "LOWPASS", "HIGHPASS", "BANDPASS", "BANDSTOP", "CLASSIC", "VINTAGE"};
+                const Filter& f = filter[c_ - 1];
+                src = stageOn[c_] ? fn[(f.type <= 6) ? f.type : 0] : "OFF";
+            } break;
+            case 3:
+            case 4: {
+                const Effect& e = effect[c_ - 3];
+                src = stageOn[c_] ? kEffectTypeDataLibrary[(e.type < kSubEffectLibrarySize) ? e.type : 0].nameLongR : "OFF";
+            } break;
+            case 5: src = reverb.active ? kReverbTypeName[(reverb.type < rvp::kTypeCount) ? reverb.type : 0] : "OFF"; break;
+            default: src = "MASTER"; break;
+        }
+        while (*src == ' ') src++;
+        snprintf(buf, sizeof(buf), "%s", src);
+        return buf;
+    };
+
+    if (pageFullRedraw) {
+        lcd.setBackColor(BLACK);
+        lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
+        lcd.setForeColor(kThemeLine);
+        lcd.drawHLine(30, 177, 900);
+        lcd.setFont(FONT_07x09);
+        lcd.setAlignment(LEFT);
+        lcd.setForeColor(label);
+        const char h1[] = "PAD: PICK DRUM    LEFT / RIGHT: ENTER EARLIER / LATER    FILLED: STAGE ON   HOLLOW: BYPASSED";
+        lcd.drawText(h1, strlen(h1), 30, 438);
+        lcd.setAlignment(RIGHT);
+        const char h2[] = "MIXER: NEXT";
+        lcd.drawText(h2, strlen(h2), 930, 438);
+        pageFullRedraw = false;
+    }
+
+    // ---- title + summary (what the selected drum goes through)
+    lcd.setFont(FONT_14x18);
+    lcd.setAlignment(LEFT);
+    lcd.setBackColor(BLACK);
+    lcd.setForeColor(kThemeAccent);
+    lcd.drawText("ROUTING", 7, 30, 136);
+    page_drawCpu(930, 136);
+    {
+        const Layer& L = layerLibrary[routeLayer];
+        const uint8_t e = (uint8_t)L.mixerInMode;
+        int n = snprintf(text, sizeof(text), "DRUM %02u:", routeLayer + 1);
+        bool any = false;
+        for (uint8_t c = e; c < 6; c++) {
+            if (!stageOn[c]) continue;
+            n += snprintf(text + n, sizeof(text) - n, "%s %s", any ? " -" : "", kRouteStageName[c]);
+            any = true;
+        }
+        if (!any) snprintf(text + n, sizeof(text) - n, " DRY, NOTHING CHANGES IT");
+        page_drawSummary(text);
+    }
+
+    // ---- stage boxes
+    for (uint8_t c = 0; c < 7; c++) {
+        const uint16_t bx = x0 + c * colW + (colW - boxW) / 2;
+        const bool on = stageOn[c];
+        lcd.setForeColor(on ? page_mix(BLACK, kThemeAccent, 0.8f) : kThemeLine);
+        lcd.drawRect(bx, boxY, boxW, boxH);
+        lcd.setFont(FONT_07x09);
+        lcd.setAlignment(CENTER);
+        lcd.setBackColor(BLACK);
+        lcd.setForeColor(on ? kThemeInk : kThemeMid);
+        lcd.drawText(kRouteStageName[c], strlen(kRouteStageName[c]), bx + boxW / 2, boxY + 8);
+        const char* st = stageState(c);
+        char pad[13];
+        const int len = (int)strlen(st);
+        const int left = (11 - len) / 2;
+        snprintf(pad, sizeof(pad), "%*s%-*s", left + len, st, 11 - left - len, "");   // centred, fixed 11 chars
+        lcd.setForeColor(on ? kThemeAmber : kThemeMid);
+        lcd.drawText(pad, strlen(pad), bx + boxW / 2, boxY + 25);
+        if (c < 6) {   // arrow to the next box
+            const uint16_t ax = bx + boxW + 2;
+            const uint16_t ay = boxY + boxH / 2;
+            lcd.setForeColor(kThemeLine);
+            lcd.drawHLine(ax, ay, 6);
+            lcd.drawPixel(ax + 4, ay - 2); lcd.drawPixel(ax + 5, ay - 1);
+            lcd.drawPixel(ax + 4, ay + 2); lcd.drawPixel(ax + 5, ay + 1);
+        }
+    }
+
+    // ---- one row per source
+    for (uint8_t r = 0; r < kLayerLibrarySize + 2; r++) {
+        const uint16_t y = rowY + r * rowH;
+        const bool isDrum = (r < kLayerLibrarySize);
+        const bool sel = isDrum && (r == routeLayer);
+        uint8_t entry;
+        bool dim = false;
+        char name[16];
+        if (isDrum) {
+            const Layer& L = layerLibrary[r];
+            entry = (uint8_t)L.mixerInMode;
+            char nm[13];
+            memcpy(nm, L.instLoadedData.nameShortL, 12);
+            nm[12] = 0;
+            for (int8_t k = 11; (k >= 0) && (nm[k] == ' '); k--) nm[k] = 0;
+            const char* p = nm;
+            while (*p == ' ') p++;
+            snprintf(name, sizeof(name), "%02u %-10.10s", r + 1, (*p && (*p != '-')) ? p : "------");
+            dim = L.mute || !L.samplePlay;
+        } else if (r == kLayerLibrarySize) {
+            entry = (uint8_t)mixer.liMixerInMode;
+            snprintf(name, sizeof(name), "   LINE IN    ");
+            dim = mixer.liMute;
+        } else {
+            entry = (uint8_t)metronome.mixerInMode;
+            snprintf(name, sizeof(name), "   METRONOME  ");
+            dim = !metronome.active;
+        }
+        if (entry > MIXER_IN_SEND) entry = MIXER_IN_SEND;
+
+        const RGB16Color bg = sel ? kRouteSelectBg : BLACK;
+        lcd.setBackColor(bg);
+        lcd.clearRect(30, y, 900, rowH - 1);
+        lcd.setFont(FONT_07x09);
+        lcd.setAlignment(LEFT);
+        lcd.setForeColor(sel ? kThemeAccent : (dim ? kThemeMid : kThemeInk));
+        lcd.drawText(name, strlen(name), 34, y + 3);
+
+        const uint16_t yc = y + rowH / 2 - 1;
+        const RGB16Color lineCol = sel ? kThemeAccent : (dim ? kThemeLine : page_mix(BLACK, kThemeInk, 0.55f));
+        // faint dots before the entry point (the sound skips these)
+        lcd.setForeColor(page_mix(BLACK, kThemeLine, 0.6f));
+        for (uint16_t x = x0 + colW / 2; x < x0 + entry * colW + colW / 2; x += 6) lcd.drawPixel(x, yc);
+        // solid line from the entry point to OUT
+        const uint16_t xs = x0 + entry * colW + colW / 2, xe = x0 + 6 * colW + colW / 2;
+        lcd.setForeColor(lineCol);
+        if (xe > xs) lcd.drawHLine(xs, yc, xe - xs);
+        // a node on every stage it goes through
+        for (uint8_t c = entry; c < 7; c++) {
+            const uint16_t cx = x0 + c * colW + colW / 2;
+            const RGB16Color nodeCol = (c == entry) ? (sel ? kThemeAccent : kThemeAmber) : lineCol;
+            lcd.setForeColor(nodeCol);
+            if (stageOn[c] || (c == 6)) {
+                lcd.fillRect(cx - 3, yc - 3, 7, 7);
+            } else {
+                lcd.setForeColor(bg);
+                lcd.fillRect(cx - 2, yc - 2, 5, 5);
+                lcd.setForeColor(nodeCol);
+                lcd.drawRect(cx - 3, yc - 3, 7, 7);
+            }
+        }
+    }
+    lcd.setBackColor(BLACK);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -6652,6 +6892,32 @@ float Controller::noteRepeat_step() {
     return kQuantizeInterval[rhythm.quantize];
 }
 
+int8_t Controller::noteRepeat_pitchPad() {
+    /// @brief Custom: in Notes, the pad a roll plays = the last pad pressed while it's still held,
+    /// otherwise the lowest held pad (so sliding across pads walks the roll up / down the scale).
+    if ((noteRepeatPitchPad >= 0) && (noteRepeatPads & (1u << noteRepeatPitchPad))) return noteRepeatPitchPad;
+    for (uint8_t p = 0; p < kLayerLibrarySize; p++)
+        if (noteRepeatPads & (1u << p)) return (int8_t)p;
+    return -1;
+}
+
+void Controller::noteRepeat_pitchHit(int8_t pad_, bool record_, uint16_t at_) {
+    /// @brief Custom: one pitched repeat in Notes (Notes drum at that pad's note).
+    const int8_t note = pitch_padNote((uint8_t)pad_);
+    Layer& layer = layerLibrary[pitchLayer];
+    pendingNote[pitchLayer] = note;
+    if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(pitchLayer, 1.0f);
+    pendingNote[pitchLayer] = 0;
+    if (record_) {
+        recordNote = note;
+        layerSong_setBeat(pitchLayer, activeSongBank, at_, 0, 0, 0, 0, true);
+        recordNote = 0;
+    }
+    pitchHeldPad = pad_;   // PAD HELD gate: letting go of the pad stops the last repeat
+    pitchLastPad = pad_;
+    page_markDirty(PAGE_PITCH);
+}
+
 void Controller::noteRepeat_tick() {
     /// @brief Sequencer interrupt: on every grid line, re-trigger (and record) each held pad.
     if (!noteRepeatHeld || (noteRepeatPads == 0) || metronome.precountState) return;
@@ -6659,6 +6925,13 @@ void Controller::noteRepeat_tick() {
     const int32_t idx = (int32_t)((float)playInterval / step + 0.5f);
     const int32_t grid = (int32_t)((float)idx * step + 0.5f);
     if (grid != (int32_t)playInterval) return;
+    if ((page == PAGE_PITCH) && (menu == IO_MENU)) {   // custom: Notes = pitched rolls on the Notes drum
+        const int8_t pad = noteRepeat_pitchPad();
+        if ((pad < 0) || (noteRepeatLast[pitchLayer] == (int32_t)playInterval)) return;
+        noteRepeatLast[pitchLayer] = (int32_t)playInterval;
+        noteRepeat_pitchHit(pad, recordActive, (uint16_t)playInterval);
+        return;
+    }
     for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
         if (!(noteRepeatPads & (1u << l))) continue;
         if (noteRepeatLast[l] == (int32_t)playInterval) continue;   // already hit on this line (pad press)
@@ -6675,6 +6948,16 @@ void Controller::noteRepeat_stopped() {
     const float msPerTick = 60000.0f / ((float)(rhythm.tempo ? rhythm.tempo : 90) * (float)kMeasureInterval);
     const uint32_t period = (uint32_t)(noteRepeat_step() * msPerTick + 0.5f);
     const uint32_t now = HAL_GetTick();
+    if ((page == PAGE_PITCH) && (menu == IO_MENU)) {   // custom: Notes = pitched rolls
+        const int8_t pad = noteRepeat_pitchPad();
+        if (pad < 0) return;
+        uint32_t& next = noteRepeatStopTick[pitchLayer];
+        if ((int32_t)(now - next) < (int32_t)period) return;
+        next += period;
+        if ((int32_t)(now - next) > (int32_t)period) next = now;
+        noteRepeat_pitchHit(pad, false, 0);
+        return;
+    }
     for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
         if (!(noteRepeatPads & (1u << l))) continue;
         if ((int32_t)(now - noteRepeatStopTick[l]) < (int32_t)period) continue;
@@ -6691,6 +6974,9 @@ void Controller::noteRepeat_stopped() {
 // The 10 pads play ONE drum at 10 notes of a scale. Each recorded hit keeps its note
 // (Beat::note, semitones), so a bass line lives in that drum's own lane.
 
+static_assert(RAM_VERB_ADDRESS + rvp::slowFloats() * 4 <= 0xC0FB9640, "reverb RAM overlaps image RAM");
+static_assert(RAM_VERB_FAST_ADDRESS + rvp::fastFloats() * 4 <= 0x20020000, "reverb tank does not fit DTCM");
+static_assert(RAM_VERB_ENGINE_ADDRESS + sizeof(rvp::Engine) <= RAM_VERB_FAST_ADDRESS, "reverb engine object overlaps its tank");
 static_assert(sizeof(Beat) == 10, "Beat layout changed: check undo / RAM budget");
 
 int8_t Controller::pitch_padNote(uint8_t pad_) {
@@ -6758,6 +7044,27 @@ void Controller::pitch_pad(uint8_t pad_) {
     pendingNote[pitchLayer] = 0;
     pitchHeldPad = (int8_t)pad_;
     pitchRecTick = -1;
+    if (noteRepeatHeld) {   // custom: Note Repeat in Notes. Record on the nearest grid line, then roll.
+        noteRepeatPitchPad = (int8_t)pad_;
+        noteRepeatStopTick[pitchLayer] = HAL_GetTick();
+        if (playActive && !metronome.precountState) {
+            const float step = noteRepeat_step();
+            int32_t at = (int32_t)((int32_t)((float)playInterval / step + 0.5f) * step + 0.5f);
+            if (at >= (int32_t)songInterval) at = 0;
+            noteRepeatLast[pitchLayer] = at;
+            if (recordActive) {
+                undo_checkpoint(UNDO_RECORD);
+                recordNote = note;
+                HAL_NVIC_DisableIRQ(TIM15_IRQn);
+                layerSong_setBeat(pitchLayer, activeSongBank, (uint16_t)at, 0, 0, 0, 0, true);
+                HAL_NVIC_EnableIRQ(TIM15_IRQn);
+                recordNote = 0;
+            }
+        }
+        pitchLastPad = (int8_t)pad_;
+        page_markDirty(PAGE_PITCH);
+        return;
+    }
     if (recordActive && !metronome.precountState) {
         undo_checkpoint(UNDO_RECORD);
         recordNote = note;
@@ -6860,7 +7167,7 @@ void Controller::page_drawPitch() {
         lcd.setFont(FONT_07x09);
         lcd.setAlignment(LEFT);
         lcd.setForeColor(kThemeHeader);
-        const char h1[] = "PADS PLAY THE DRUM AT THESE NOTES    REC ON: HITS GO INTO THAT DRUM LANE WITH THEIR NOTE";
+        const char h1[] = "PADS: PLAY NOTES   NOTE REPEAT + PADS: PITCHED ROLLS   REC ON: HITS KEEP THEIR NOTE";
         lcd.drawText(h1, strlen(h1), 30, 420);
         const char h2[] = "KNOBS: DRUM / ROOT / SCALE / OCTAVE, ROOT PAD / LEVEL / TUNE    ADD + PAD: ROOT ON THAT PAD";
         lcd.drawText(h2, strlen(h2), 30, 438);
@@ -7226,6 +7533,9 @@ void Controller::page_draw() {
         case PAGE_PITCH:
             page_drawPitch();
             break;
+        case PAGE_ROUTE:
+            page_drawRoute();
+            break;
         default:
             break;
     }
@@ -7251,8 +7561,21 @@ void Controller::page_drawReverb() {
     // ---- 1. numbers from the real settings
     const float g = 0.70f + (0.15f * reverb.size / 100.0f) + (0.13f * reverb.decay / 100.0f);
     const float combSeconds = 1378.0f / 44100.0f;
-    const float tail = (-3.0f / log10f(g)) * combSeconds;                   // seconds to -60 dB
-    const float tailHf = tail * (1.0f - 0.75f * reverb.damping / 100.0f);    // highs die sooner
+    float tail = (-3.0f / log10f(g)) * combSeconds;                         // seconds to -60 dB
+    float tailHf = tail * (1.0f - 0.75f * reverb.damping / 100.0f);          // highs die sooner
+    // custom: the extra engines report their own decay (checked against real impulse responses)
+    const uint8_t vt = reverb.type;
+    const bool nonlin = (vt == rvp::T_NONLIN);
+    const float nlGate = 0.060f + 0.490f * reverb.size / 100.0f;              // NONLIN gate length
+    const float nlShape = (reverb.decay / 100.0f - 0.5f) * 2.0f;             // -1 reverse .. +1 falling
+    if ((vt != rvp::T_STANDARD) && !nonlin) {
+        tail = verbPlus.tailSeconds(false);
+        tailHf = verbPlus.tailSeconds(true);
+        if (tailHf > tail) tailHf = tail;
+    } else if (nonlin) {
+        tail = nlGate;
+        tailHf = nlGate;
+    }
     const float preSec = kReverbPreDelayDataLibrary[reverb.preDelay].data;   // 0 .. 0.1 s
     const float widthSec = kReverbSurroundDataLibrary[reverb.surround].data; // 0 .. 0.02 s
     const float axis = 4.0f;                                                 // fixed: changes are visible
@@ -7298,12 +7621,24 @@ void Controller::page_drawReverb() {
     lcd.setForeColor(on ? kThemeAccent : kThemeMid);
     lcd.drawText(on ? "REVERB    " : "REVERB OFF", 10, 30, 136);
 
-    char info[48];
+    char info[96];
     const uint16_t tailT = (uint16_t)(tail * 10.0f + 0.5f);
     const uint16_t hfT = (uint16_t)(tailHf * 10.0f + 0.5f);
-    snprintf(info, sizeof(info), "DECAY TAIL %u.%u S   HIGHS %u.%u S   PRE-DELAY %u MS   WET %u", tailT / 10, tailT % 10,
-             hfT / 10, hfT % 10, (unsigned)(preSec * 1000.0f + 0.5f), reverb.wet);
+    // custom: type first (yellow), then fixed-width numbers
+    const char* tn = kReverbTypeName[(vt < rvp::kTypeCount) ? vt : 0];
+    if (nonlin)
+        snprintf(info, sizeof(info), "%-8s  GATE %3u MS  %-7s  PRE-DELAY %3u MS  WET %3u", tn, (unsigned)(nlGate * 1000.0f + 0.5f),
+                 (reverb.decay < 40) ? "REVERSE" : ((reverb.decay > 60) ? "FALLING" : "FLAT"), (unsigned)(preSec * 1000.0f + 0.5f), reverb.wet);
+    else
+        snprintf(info, sizeof(info), "%-8s  TAIL %2u.%u S  HIGHS %2u.%u S  PRE-DELAY %3u MS  WET %3u", tn, tailT / 10, tailT % 10,
+                 hfT / 10, hfT % 10, (unsigned)(preSec * 1000.0f + 0.5f), reverb.wet);
     page_drawSummary(info);
+    lcd.setFont(FONT_10x14);
+    lcd.setAlignment(LEFT);
+    lcd.setBackColor(BLACK);
+    lcd.setForeColor(on ? kThemeAmber : kThemeMid);
+    lcd.drawText(tn, strlen(tn), 30, 158);
+    page_drawCpu(930, 136);
 
     // ---- 5. columns: each pixel of the graph written once per redraw (black, fill, edge)
     // Fills kept dark: the real panel shows these much more saturated than a monitor.
@@ -7329,6 +7664,21 @@ void Controller::page_drawReverb() {
             if (tr < tail) hR = (int16_t)(level0 * (1.0f - tr / tail) + 0.5f);
             if (tr < tailHf) hRHf = (int16_t)(level0 * (1.0f - tr / tailHf) + 0.5f);
         }
+        if (nonlin) {   // custom: NONLIN = a burst with a shaped level that stops dead
+            auto nlH = [&](float t_) -> int16_t {
+                if ((t_ < 0.0f) || (t_ >= nlGate)) return 0;
+                float e = 1.0f - nlShape * ((t_ / nlGate) - 0.5f) * 1.7f;
+                if (e < 0.06f) e = 0.06f;
+                const float eMax = 1.0f + fabsf(nlShape) * 0.85f;
+                float h = level0 * (1.0f + (20.0f * log10f(e / eMax)) / 60.0f);
+                return (h < 1.0f) ? 1 : (int16_t)(h + 0.5f);
+            };
+            const float hfK = 1.0f - 0.6f * reverb.damping / 100.0f;
+            hL = nlH(tl);
+            hLHf = (int16_t)(hL * hfK);
+            hR = nlH(tr);
+            hRHf = (int16_t)(hR * hfK);
+        }
 
         // Upper half (L): black space, outer tail, inner high-frequency tail, edge
         lcd.setForeColor(BLACK);
@@ -7353,8 +7703,20 @@ void Controller::page_drawReverb() {
     }
 
     // ---- 6. early reflections: count and spread grow with room size
+    // custom: only STANDARD and ROOM have separate early reflections (ROOM: its real tap times)
     const uint8_t spacing = 3 + (reverb.size * 25) / 100;   // 3 .. 28 px
-    for (uint8_t i = 0; i < 8; i++) {
+    if (vt == rvp::T_ROOM) {
+        for (uint8_t i = 0; i < 12; i++) {
+            const uint16_t x = gx + prePx + (uint16_t)(((verbPlus.erL[i] / AUDIO_SAMPLE_RATE) / axis) * gw);
+            const int16_t hER = (int16_t)(level0 * (1.0f - 0.05f * i));
+            if ((x + widthPx + 1) >= (gx + gw) || hER <= 0) break;
+            lcd.setForeColor(ink);
+            lcd.drawVLine(x, base - hER, hER);
+            lcd.setForeColor(label);
+            lcd.drawVLine(x + widthPx, base + 1, (int16_t)(hER * 0.9f));
+        }
+    }
+    for (uint8_t i = 0; i < ((vt == rvp::T_STANDARD) ? 8 : 0); i++) {
         const uint16_t x = gx + prePx + 4 + (i * spacing);
         const int16_t hER = (int16_t)(level0 * (0.98f - 0.09f * i));
         if ((x + widthPx + 1) >= (gx + gw) || hER <= 0) break;
@@ -8849,6 +9211,8 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
 
                     // Reverb processor parameters
                     reverb_setActive(data[167]);
+                    // custom: reverb type (older files: STANDARD)
+                    reverb_setType(((data[178] & 0xF0) == kReverbTypeFileMark) ? (data[178] & 0x0F) : rvp::T_STANDARD);
                     reverb_setSize(data[168]);
                     reverb_setDecay(data[169]);
                     reverb_setDamping(data[170]);
@@ -9219,6 +9583,7 @@ void Controller::sd_encodeProject(uint8_t* data) {
 
     // 2.9 REVERB SETTINGS
     data[167] = reverb.active;
+    data[178] = kReverbTypeFileMark | reverb.type;   // custom: reverb type
     data[168] = reverb.size;
     data[169] = reverb.decay;
     data[170] = reverb.damping;
@@ -9694,6 +10059,8 @@ SdResult Controller::sd_loadDrumkit(uint8_t kitNum_) {
 
                     // Reverb processor parameters
                     reverb_setActive(data[167]);
+                    // custom: reverb type (older files: STANDARD)
+                    reverb_setType(((data[178] & 0xF0) == kReverbTypeFileMark) ? (data[178] & 0x0F) : rvp::T_STANDARD);
                     reverb_setSize(data[168]);
                     reverb_setDecay(data[169]);
                     reverb_setDamping(data[170]);
@@ -10003,6 +10370,7 @@ SdResult Controller::sd_saveDrumkit(uint8_t kitNum_) {
 
     // 2.9 REVERB SETTINGS
     data[167] = reverb.active;
+    data[178] = kReverbTypeFileMark | reverb.type;   // custom: reverb type
     data[168] = reverb.size;
     data[169] = reverb.decay;
     data[170] = reverb.damping;
@@ -12775,7 +13143,7 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
                 // Reverb functions
 
             case ENC_REVERB_ACTIVE:
-                (reverb.active) ? textPtr = kDataOn : textPtr = kDataOff;
+                textPtr = kReverbTypeKnobName[reverb.active ? (reverb.type + 1) : 0];   // custom
                 break;
 
             case ENC_REVERB_SIZE:
@@ -14421,8 +14789,7 @@ void Controller::lcd_drawReverb_ActiveData() {
 
     // 2. VALUE DRAW
     // Draw ON/OFF state.
-    const char* textPtr;
-    (reverb.active) ? textPtr = kDataOn : textPtr = kDataOff;
+    const char* textPtr = kReverbTypeKnobName[reverb.active ? (reverb.type + 1) : 0];   // custom: TYPE
     lcd.drawText(textPtr, kMenuDataTextSize, kMenuDataX[0], kMenuDataY[0]);
 }
 
@@ -17116,6 +17483,9 @@ void Controller::mixer_select() {
         // 4. ENCODER CONTEXT UPDATE
         // Rebind encoders to Mixer menu local/global parameter mapping.
         encoder_update();
+
+        // Custom: the Mixer menu shows the Routing page (signal chain).
+        if (!alertFlag && kMainView) page_open(PAGE_ROUTE);
     }
 }
 
@@ -17421,6 +17791,7 @@ void Controller::mixer_setLiIn(uint8_t mode_) {
         // Refresh Mixer tab data (if visible) and global summary field.
         if (menu == MIXER_MENU) lcd_drawMixer_LiInData();
         lcd_updateGlobalMenuData(ENC_MIXER_LIMIXERIN);
+        page_markDirty(PAGE_ROUTE);   // custom
 
         // 5. DEFERRED PRESET PERSISTENCE
         // Restart system preset autosave timer when persistence is enabled.
@@ -21325,6 +21696,7 @@ void Controller::reverb_reset() {
     // 1. PARAMETER RESET
     // Re-apply default active, time-domain, modulation, and mix values.
     reverb_setActive(kInitialReverbActive);
+    reverb_setType(rvp::T_STANDARD);   // custom
     reverb_setSize(kInitialReverbSize);
     reverb_setDecay(kInitialReverbDecay);
     reverb_setDamping(kInitialReverbDamping);
@@ -21367,7 +21739,7 @@ void Controller::reverb_menuUp() {
     // Route encoder-up action to tab-specific reverb setting.
     switch (menuTab) {
         case 0:
-            reverb_setActive(!reverb.active);
+            reverb_stepTypeKnob(true);
             break;
 
         case 1:
@@ -21419,7 +21791,7 @@ void Controller::reverb_menuDown() {
     // Route encoder-down action to tab-specific reverb setting.
     switch (menuTab) {
         case 0:
-            reverb_setActive(!reverb.active);
+            reverb_stepTypeKnob(false);
             break;
 
         case 1:
@@ -21466,6 +21838,8 @@ void Controller::reverb_setActive(bool active_) {
             // 3. RUNTIME TRANSITION APPLY
             // Start active/inactive crossfade transition for smooth output change.
             // if (active_) reverb.cleanMemory();
+            // custom: nothing is running while off, so an old tail can't come back on switch-on
+            if (active_ && !reverb.active && (reverb.type != rvp::T_STANDARD)) verbPlus.clear();
             reverb_genTransition(REV_MODE_ACTIVE, reverb.active, active_);
             reverb.active = active_;
 
@@ -21477,6 +21851,52 @@ void Controller::reverb_setActive(bool active_) {
     }
 }
 
+void Controller::reverb_configurePlus() {
+    /// @brief Custom: pass SIZE / DECAY / DAMPING to the extra reverb engine.
+    if (reverb.type != rvp::T_STANDARD) verbPlus.configure(reverb.type, reverb.size, reverb.decay, reverb.damping);
+}
+
+void Controller::reverb_setType(uint8_t type_) {
+    /// @brief Custom: switch reverb engine. The audio fades the wet path out and stops, the
+    /// new engine's memory is cleared here (main loop), then the audio fades back in.
+    if (type_ >= rvp::kTypeCount) type_ = rvp::T_STANDARD;
+    if (type_ == reverb.type) return;
+    verbIdle = false;
+    verbHold = true;
+    const uint32_t t0 = HAL_GetTick();   // the audio needs ~2 blocks (1.5 ms) to fade out
+    while (!verbIdle && ((HAL_GetTick() - t0) < 20)) { }
+    reverb.type = type_;
+    if (type_ == rvp::T_STANDARD) {
+        reverb.cleanCombBuffer();
+        reverb.cleanApassBuffer();
+        reverb.comb1Filter = reverb.comb2Filter = reverb.comb3Filter = reverb.comb4Filter = 0.0f;
+        reverb.comb5Filter = reverb.comb6Filter = reverb.comb7Filter = reverb.comb8Filter = 0.0f;
+    } else {
+        verbPlus.clear();
+        reverb_configurePlus();
+    }
+    verbHold = false;
+    if (menu == REVERB_MENU) lcd_drawReverb_ActiveData();
+    page_markDirty(PAGE_REVERB);
+    page_markDirty(PAGE_ROUTE);
+    lcd_updateGlobalMenuData(ENC_REVERB_ACTIVE);
+}
+
+void Controller::reverb_stepTypeKnob(bool up_) {
+    /// @brief Custom: TYPE knob = OFF, STANDARD, VINTAGE, PLATE, ROOM, NONLIN (no wrap).
+    const int8_t now = reverb.active ? (reverb.type + 1) : 0;
+    const int8_t next = now + (up_ ? 1 : -1);
+    if ((next < 0) || (next > rvp::kTypeCount)) return;
+    if (reverb.genTransition.active) return;   // let an on/off fade finish first
+    if (next == 0) {
+        reverb_setActive(false);
+    } else {
+        reverb_setType(next - 1);
+        if (!reverb.active) reverb_setActive(true);
+    }
+    page_markDirty(PAGE_ROUTE);
+}
+
 void Controller::reverb_setSize(uint8_t size_) {
     /// @brief Sets reverb room-size index and refreshes dependent UI/global state.
 
@@ -21486,6 +21906,7 @@ void Controller::reverb_setSize(uint8_t size_) {
         // 2. DATA UPDATE
         // Apply size update through reverb parameter API.
         reverb.setSize(size_);
+        reverb_configurePlus();   // custom
 
         // 3. UI & GLOBAL REFRESH
         // Refresh Reverb tab data (if visible) and global summary field.
@@ -21503,6 +21924,7 @@ void Controller::reverb_setDecay(uint8_t decay_) {
         // 2. DATA UPDATE
         // Apply decay update through reverb parameter API.
         reverb.setDecay(decay_);
+        reverb_configurePlus();   // custom
 
         // 3. UI & GLOBAL REFRESH
         // Refresh Reverb tab data (if visible) and global summary field.
@@ -21520,6 +21942,7 @@ void Controller::reverb_setDamping(uint8_t damping_) {
         // 2. DATA UPDATE
         // Apply damping update through reverb parameter API.
         reverb.setDamping(damping_);
+        reverb_configurePlus();   // custom
 
         // 3. UI & GLOBAL REFRESH
         // Refresh Reverb tab data (if visible) and global summary field.
@@ -25471,6 +25894,9 @@ void Controller::processAudioBlock(uint32_t* inputBuffer_, uint32_t* outputBuffe
         SPI3->IFCR = SPI_IFCR_UDRC;
     }
 
+    // Custom: CPU meter. Cycles spent on this block vs the cycles one block lasts.
+    const uint32_t cpuStart = DWT_CYCCNT;
+
     // 1. SYSTEM READINESS CHECK
     // Bypass processing during initialization menu to prevent audio artifacts.
     if (menu != INIT_MENU) {
@@ -25500,6 +25926,13 @@ void Controller::processAudioBlock(uint32_t* inputBuffer_, uint32_t* outputBuffe
         // 4. FINAL OUTPUT PROCESSING
         // Apply final mix and write to I2S output buffer.
         processAudioSend(outputBuffer_);
+    }
+
+    {
+        static const float kBlockCycles = (float)I2S_BLOCK_SIZE / AUDIO_SAMPLE_RATE;
+        const float load = (float)(DWT_CYCCNT - cpuStart) / (kBlockCycles * (float)SystemCoreClock);
+        cpuLoad += 0.01f * (load - cpuLoad);
+        cpuPeak = (load > cpuPeak) ? load : cpuPeak * 0.9995f;
     }
 }
 
@@ -26106,17 +26539,12 @@ void Controller::processAudioReverb() {
     }
 
     // 3. REVERB ENGINE PROCESSING
-    // Run pre-delay, comb/all-pass, and surround output generation.
+    // Run pre-delay, the selected engine, and surround output generation.
+    // Custom: STANDARD = the original Freeverb (mono wet); VINTAGE / PLATE / ROOM / NONLIN come
+    // from ReverbPlus.h (stereo wet). verbWetGain fades the wet path while the type is switched.
     if ((reverb.active) || (reverb.genTransition.active)) {
-        // Cache parameters locally for faster access during the sample loop
-        float cFB = reverb.combFeedback;
-        float cD1 = reverb.combDecay1;
-        float cD2 = reverb.combDecay2;
-        float apFB = reverb.apassFeedback;
-
-        // Pre-calculate scaler for comb filter inputs to prevent clipping
-        const float kCombInputScale = 0.015f;
-
+        const bool hold = verbHold;
+        bool idle = false;
         for (uint16_t i = 0; i < I2S_BLOCK_SIZE; i++) {
             float inputSample = audioReverb_L[i];
 
@@ -26130,51 +26558,46 @@ void Controller::processAudioReverb() {
             if (++reverb.preDelay_playInterval >= reverb.kPreDelayBufferSize) reverb.preDelay_playInterval = 0;
             if (++reverb.preDelay_recordInterval >= reverb.kPreDelayBufferSize) reverb.preDelay_recordInterval = 0;
 
-            // 3.2 COMB FILTERS (Parallel)
-            float inputComb = reverbInput * kCombInputScale;
+            // 3.2 ENGINE
+            float wetL = 0.0f, wetR = 0.0f;
+            if (hold) {
+                verbWetGain -= (1.0f / 64.0f);
+                if (verbWetGain <= 0.0f) { verbWetGain = 0.0f; idle = true; }
+            } else if (verbWetGain < 1.0f) {
+                verbWetGain += (1.0f / 64.0f);
+                if (verbWetGain > 1.0f) verbWetGain = 1.0f;
+            }
+            if (!idle) {
+                processAudioReverbWet(reverbInput, wetL, wetR);
+                wetL *= verbWetGain;
+                wetR *= verbWetGain;
+            }
 
-            reverb.comb1Out = processReverbComb(reverb.comb1Buffer, reverb.comb1Index, reverb.comb1Size, reverb.comb1Filter, inputComb, cFB, cD1, cD2);
-            reverb.comb2Out = processReverbComb(reverb.comb2Buffer, reverb.comb2Index, reverb.comb2Size, reverb.comb2Filter, inputComb, cFB, cD1, cD2);
-            reverb.comb3Out = processReverbComb(reverb.comb3Buffer, reverb.comb3Index, reverb.comb3Size, reverb.comb3Filter, inputComb, cFB, cD1, cD2);
-            reverb.comb4Out = processReverbComb(reverb.comb4Buffer, reverb.comb4Index, reverb.comb4Size, reverb.comb4Filter, inputComb, cFB, cD1, cD2);
-            reverb.comb5Out = processReverbComb(reverb.comb5Buffer, reverb.comb5Index, reverb.comb5Size, reverb.comb5Filter, inputComb, cFB, cD1, cD2);
-            reverb.comb6Out = processReverbComb(reverb.comb6Buffer, reverb.comb6Index, reverb.comb6Size, reverb.comb6Filter, inputComb, cFB, cD1, cD2);
-            reverb.comb7Out = processReverbComb(reverb.comb7Buffer, reverb.comb7Index, reverb.comb7Size, reverb.comb7Filter, inputComb, cFB, cD1, cD2);
-            reverb.comb8Out = processReverbComb(reverb.comb8Buffer, reverb.comb8Index, reverb.comb8Size, reverb.comb8Filter, inputComb, cFB, cD1, cD2);
-
-            float combSum = reverb.comb1Out + reverb.comb2Out + reverb.comb3Out + reverb.comb4Out + reverb.comb5Out + reverb.comb6Out + reverb.comb7Out + reverb.comb8Out;
-
-            // 3.3 ALL-PASS FILTERS (Serial Diffusion)
-            reverb.apass1Out = processReverbAllpass(reverb.apass1Buffer, reverb.apass1Index, reverb.apass1Size, combSum, apFB);
-            reverb.apass2Out = processReverbAllpass(reverb.apass2Buffer, reverb.apass2Index, reverb.apass2Size, reverb.apass1Out, apFB);
-            reverb.apass3Out = processReverbAllpass(reverb.apass3Buffer, reverb.apass3Index, reverb.apass3Size, reverb.apass2Out, apFB);
-            reverb.apass4Out = processReverbAllpass(reverb.apass4Buffer, reverb.apass4Index, reverb.apass4Size, reverb.apass3Out, apFB);
-
-            float processedSignal = reverb.apass4Out;
-
-            // 3.4 OUTPUT MIXING & SURROUND
-            float finalReverb;
-            float outL, outR;
+            // 3.3 OUTPUT MIXING & SURROUND
+            float finalL, finalR, outL, outR;
 
             // Apply manual wet/dry mix
-            float mixedSignal = (processedSignal * reverb.wetFloat) + (inputSample * reverb.dryFloat);
+            const float mixedL = (wetL * reverb.wetFloat) + (inputSample * reverb.dryFloat);
+            const float mixedR = (wetR * reverb.wetFloat) + (inputSample * reverb.dryFloat);
 
             // Handle Parameter Transitions
             if (reverb.genTransition.active) {
-                finalReverb = (mixedSignal * reverb.genTransition.activeWet) + (inputSample * reverb.genTransition.activeDry);
-                reverb.surroundBuffer[reverb.surround_recordInterval] = finalReverb;
+                finalL = (mixedL * reverb.genTransition.activeWet) + (inputSample * reverb.genTransition.activeDry);
+                finalR = (mixedR * reverb.genTransition.activeWet) + (inputSample * reverb.genTransition.activeDry);
+                reverb.surroundBuffer[reverb.surround_recordInterval] = finalR;
 
                 if ((reverb.genTransition.mode == REV_MODE_ACTIVE) || (reverb.genTransition.mode == REV_MODE_SURROUND)) {
-                    outL = finalReverb;
-                    outR = (reverb.surroundBuffer[reverb.surround_playInterval] * reverb.genTransition.activeWet) + (finalReverb * reverb.genTransition.activeDry);
+                    outL = finalL;
+                    outR = (reverb.surroundBuffer[reverb.surround_playInterval] * reverb.genTransition.activeWet) + (finalR * reverb.genTransition.activeDry);
                 } else {
-                    outL = finalReverb;
+                    outL = finalL;
                     outR = reverb.surroundBuffer[reverb.surround_playInterval];
                 }
             } else {
-                finalReverb = mixedSignal;
-                reverb.surroundBuffer[reverb.surround_recordInterval] = finalReverb;
-                outL = finalReverb;
+                finalL = mixedL;
+                finalR = mixedR;
+                reverb.surroundBuffer[reverb.surround_recordInterval] = finalR;
+                outL = finalL;
                 outR = reverb.surroundBuffer[reverb.surround_playInterval];
             }
 
@@ -26186,10 +26609,38 @@ void Controller::processAudioReverb() {
             audioReverb_L[i] = outL;
             audioReverb_R[i] = outR;
         }
+        verbIdle = idle;   // custom: tells reverb_setType the engine has stopped
     } else {
         // Bypass mode: Effect is inactive, copy mono accumulation to stereo output
+        verbIdle = verbHold;   // custom: nothing running, type can be switched at once
         memcpy(audioReverb_R, audioReverb_L, I2S_BLOCK_SIZE * sizeof(float));
     }
+}
+
+void Controller::processAudioReverbWet(float in_, float& wetL_, float& wetR_) {
+    /// @brief Custom: one sample through the selected reverb engine (wet only).
+    if (reverb.type != rvp::T_STANDARD) {
+        verbPlus.process(in_, wetL_, wetR_);
+        return;
+    }
+
+    // STANDARD: the original 8 parallel combs + 4 serial all-passes (mono).
+    const float inputComb = in_ * 0.015f;
+    const float cFB = reverb.combFeedback, cD1 = reverb.combDecay1, cD2 = reverb.combDecay2, apFB = reverb.apassFeedback;
+    reverb.comb1Out = processReverbComb(reverb.comb1Buffer, reverb.comb1Index, reverb.comb1Size, reverb.comb1Filter, inputComb, cFB, cD1, cD2);
+    reverb.comb2Out = processReverbComb(reverb.comb2Buffer, reverb.comb2Index, reverb.comb2Size, reverb.comb2Filter, inputComb, cFB, cD1, cD2);
+    reverb.comb3Out = processReverbComb(reverb.comb3Buffer, reverb.comb3Index, reverb.comb3Size, reverb.comb3Filter, inputComb, cFB, cD1, cD2);
+    reverb.comb4Out = processReverbComb(reverb.comb4Buffer, reverb.comb4Index, reverb.comb4Size, reverb.comb4Filter, inputComb, cFB, cD1, cD2);
+    reverb.comb5Out = processReverbComb(reverb.comb5Buffer, reverb.comb5Index, reverb.comb5Size, reverb.comb5Filter, inputComb, cFB, cD1, cD2);
+    reverb.comb6Out = processReverbComb(reverb.comb6Buffer, reverb.comb6Index, reverb.comb6Size, reverb.comb6Filter, inputComb, cFB, cD1, cD2);
+    reverb.comb7Out = processReverbComb(reverb.comb7Buffer, reverb.comb7Index, reverb.comb7Size, reverb.comb7Filter, inputComb, cFB, cD1, cD2);
+    reverb.comb8Out = processReverbComb(reverb.comb8Buffer, reverb.comb8Index, reverb.comb8Size, reverb.comb8Filter, inputComb, cFB, cD1, cD2);
+    const float combSum = reverb.comb1Out + reverb.comb2Out + reverb.comb3Out + reverb.comb4Out + reverb.comb5Out + reverb.comb6Out + reverb.comb7Out + reverb.comb8Out;
+    reverb.apass1Out = processReverbAllpass(reverb.apass1Buffer, reverb.apass1Index, reverb.apass1Size, combSum, apFB);
+    reverb.apass2Out = processReverbAllpass(reverb.apass2Buffer, reverb.apass2Index, reverb.apass2Size, reverb.apass1Out, apFB);
+    reverb.apass3Out = processReverbAllpass(reverb.apass3Buffer, reverb.apass3Index, reverb.apass3Size, reverb.apass2Out, apFB);
+    reverb.apass4Out = processReverbAllpass(reverb.apass4Buffer, reverb.apass4Index, reverb.apass4Size, reverb.apass3Out, apFB);
+    wetL_ = wetR_ = reverb.apass4Out;
 }
 
 void Controller::processAudioSend(uint32_t* outputBuffer) {

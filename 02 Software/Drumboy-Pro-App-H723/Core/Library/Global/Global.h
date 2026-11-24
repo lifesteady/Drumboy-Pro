@@ -9,6 +9,7 @@
 #include "Lfo.h"
 #include "MCP23017.h"
 #include "Metronome.h"
+#include "ReverbPlus.h"   // custom: VINTAGE / PLATE / ROOM / NONLIN reverbs
 #include "fatfs.h"
 #include "main.h"
 #include "sdmmc.h"
@@ -300,6 +301,11 @@ static inline float atanFast(float phaseNorm) {
 
 /* DTCMRAM 0x20000000 128KB --------------------------------------------------*/
 
+// Custom: the firmware never used DTCM (fast, CPU-only RAM), so the extra reverb engines live
+// there: the engine object first, then its tank delay lines (see ReverbPlus.h).
+#define RAM_VERB_ENGINE_ADDRESS                     0x20000000
+#define RAM_VERB_FAST_ADDRESS                       0x20000600
+
 /* RAM_D1 0x24000000 320KB ---------------------------------------------------*/
 
 /* RAM_D2 0x30000000 32KB ----------------------------------------------------*/
@@ -382,6 +388,8 @@ const uint32_t kPreviewDelayMs                      = 150;                      
 static_assert(RAM_PREVIEW_ADDRESS >= (0xC0E77200 + 2 * 96000), "preview buffer overlaps chorus RAM");
 static_assert(RAM_PREVIEW_ADDRESS + kPreviewMaxSamples * 4 <= RAM_MAIN_ADDRESS, "preview buffer overlaps main-screen RAM");
 static_assert(RAM_MAIN_ADDRESS + 0x8000 <= 0xC0FB9640, "main-screen RAM overlaps image RAM");
+// Custom: ROOM early-reflection line of the extra reverbs (16 KB), after the main-screen tables.
+#define RAM_VERB_ADDRESS                            (RAM_MAIN_ADDRESS + 0x8000)
 
 #define RAM_IMAGE_LOGO_ADDRESS                      0xC0FB9640                  // 170px * 170px
 #define RAM_IMAGE_LOGO_PALETTE_ADDRESS              0xC0FB9640                  // 128 bytes
@@ -1435,7 +1443,7 @@ const EncoderFuncData kEncoderFuncDataLibrary[] = {
     {ENC_EFFECT_1_PARAM_E,    ENC_RES_F, "DRY       ", "EFF-2 ", "  %", true},
     {ENC_EFFECT_1_PARAM_F,    ENC_RES_F, "WET       ", "EFF-2 ", "  %", true},
 
-    {ENC_REVERB_ACTIVE,       ENC_RES_S, "ACTIVE    ", "REVERB", "   ", true},
+    {ENC_REVERB_ACTIVE,       ENC_RES_S, "TYPE      ", "REVERB", "   ", true},   // custom: OFF + 5 reverb types
     {ENC_REVERB_SIZE,         ENC_RES_F, "SIZE      ", "REVERB", "  %", true},
     {ENC_REVERB_DECAY,        ENC_RES_F, "DECAY     ", "REVERB", "  %", true},
     {ENC_REVERB_PREDELAY,     ENC_RES_F, "PREDELAY  ", "REVERB", "  %", true},
@@ -2243,7 +2251,8 @@ typedef enum {
     PAGE_GROOVE                                     = 0x08,  // Rhythm key twice: per-drum swing + timing correct
     PAGE_SAMPLE                                     = 0x09,  // Layer Inst tapped alone: waveform, trim, envelope
     PAGE_MAIN                                       = 0x0A,  // custom main screen: zoomed lanes, decay hits, focus lane
-    PAGE_PITCH                                      = 0x0B   // Sync key: one drum played across the 10 pads in a scale
+    PAGE_PITCH                                      = 0x0B,  // Sync key: one drum played across the 10 pads in a scale
+    PAGE_ROUTE                                      = 0x0C   // Mixer key: signal chain and where each drum enters it
 } PageView;
 
 // Custom Pitch mode: scales (semitone steps from the root). Pads 1-10 climb the scale from the root.
@@ -2301,7 +2310,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.71 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.80 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -6001,6 +6010,10 @@ const uint8_t kMaxReverbDry                         = 100;
 const uint8_t kMinReverbWet                         = 0;
 const uint8_t kMaxReverbWet                         = 100;
 
+// Custom: reverb TYPE knob (first knob, was ACTIVE): OFF, then the five reverbs.
+const char kReverbTypeKnobName[rvp::kTypeCount + 1][11] = {"       OFF", "  STANDARD", "   VINTAGE", "     PLATE", "      ROOM", "    NONLIN"};
+const char kReverbTypeName[rvp::kTypeCount][9] = {"STANDARD", "VINTAGE", "PLATE", "ROOM", "NONLIN"};
+const uint8_t kReverbTypeFileMark = 0xB0;              // song byte 178 = 0xB0 | type
 const bool kInitialReverbActive                     = false;  // custom: new songs start dry (stock: true)
 const uint8_t kInitialReverbSize                    = 25;
 const uint8_t kInitialReverbDecay                   = 50;
@@ -6117,6 +6130,7 @@ struct ReverbMixTransition {
 
 struct Reverb {
     bool active;
+    uint8_t type = rvp::T_STANDARD;                 // custom: which reverb engine
     uint8_t size;                                   // 0-100: Physical room scale
     uint8_t decay;                                  // 0-100: Tail duration length
     uint8_t damping;                                // 0-100: High-frequency absorption (LPF)

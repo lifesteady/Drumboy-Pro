@@ -2,6 +2,7 @@
 #define __CONTROLLER_H
 
 #include <cctype>
+#include <new>
 
 #include "Dac.h"
 #include "Global.h"
@@ -488,6 +489,18 @@ class Controller {
     float noteRepeat_step();
     void noteRepeat_tick();
     void noteRepeat_stopped();
+    int8_t noteRepeat_pitchPad();
+    void noteRepeat_pitchHit(int8_t pad_, bool record_, uint16_t at_);
+    // custom: extra reverbs, CPU meter, routing page
+    void reverb_setType(uint8_t type_);
+    void reverb_stepTypeKnob(bool up_);
+    void reverb_configurePlus();
+    void processAudioReverbWet(float in_, float& wetL_, float& wetR_);
+    void page_drawRoute();
+    void route_shift(bool later_);
+    void route_pad(uint8_t layerNum_);
+    void route_setEntry(uint8_t layerNum_, uint8_t entry_);
+    void page_drawCpu(uint16_t x_, uint16_t y_);
     void sd_encodeProject(uint8_t* data);
     uint32_t project_hash();
     void project_markSaved();
@@ -574,6 +587,15 @@ class Controller {
     int8_t pitchLastPad = -1;                                           // last pad played (highlighted)
     int8_t recordNote = 0;                                              // note stamped on hits written by layerSong_setBeat
     volatile int8_t pendingNote[kLayerLibrarySize] = {0};               // note for the hit being triggered
+    rvp::Engine& verbPlus = *reinterpret_cast<rvp::Engine*>(RAM_VERB_ENGINE_ADDRESS);   // VINTAGE / PLATE / ROOM / NONLIN (in DTCM)
+    volatile bool verbHold = false;                                     // main thread is switching reverb type
+    volatile bool verbIdle = false;                                     // audio has faded the wet path out and stopped
+    float verbWetGain = 1.0f;                                           // wet fade used while switching
+    volatile float cpuLoad = 0.0f;                                      // audio CPU use, 0..1 (smoothed)
+    volatile float cpuPeak = 0.0f;                                      // audio CPU peak, slowly falling
+    uint8_t routeLayer = 0;                                             // Routing page: selected drum
+    uint32_t routeCpuTick = 0;
+    volatile int8_t noteRepeatPitchPad = -1;                            // Notes: pad the roll plays
     volatile bool noteRepeatHeld = false;                               // Metronome key held = Note Repeat
     volatile uint16_t noteRepeatPads = 0;                               // pads currently held (bit per drum)
     volatile int32_t noteRepeatLast[kLayerLibrarySize] = {0};           // last tick each drum repeated on
