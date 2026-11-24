@@ -420,7 +420,7 @@ void Controller::update() {
             rhythmLockActionFlag = false;
             rhythm.measureLock = true;
             rhythm.barLock = true;
-            rhythm.quantizeLock = true;
+            rhythm.quantizeLock = false;   // custom: quantize is non-destructive now, no lock needed
             if (menu == RHYTHM_MENU) {
                 lcd_drawRhythm_MeasureData();
                 lcd_drawRhythm_BarData();
@@ -7715,7 +7715,7 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
                 }
             }
             snprintf(title, sizeof(title), "DELAY %u", effectNum_ + 1);
-            snprintf(info, sizeof(info), "TIME %s: %u MS   FEEDBACK %u   LEVEL %u   DAMPING %u", trim(kDelayTimeDataLibrary[d.aTime].nameLongR),
+            snprintf(info, sizeof(info), "TIME %5s %4u MS   FEEDBACK %3u   LEVEL %3u   DAMPING %3u", trim(kDelayTimeDataLibrary[d.aTime].nameLongR),
                      (unsigned)(sec * 1000.0f + 0.5f), d.cFeedback, d.bLevel, d.dDamping);
             for (uint8_t q = 0; q < 5; q++) { snprintf(xbuf[q], 8, "%ums", (unsigned)(win * 250.0f * q + 0.5f)); xl[q] = xbuf[q]; }
             yl[0] = "100%"; yl[1] = " 50%"; yl[2] = "   0";
@@ -7730,13 +7730,13 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
                 Chorus& c = e.chorus;
                 rate = c.rate; lo = c.time * (1.0f - c.depth); hi = c.time * (1.0f + c.depth);
                 snprintf(title, sizeof(title), "CHORUS %u", effectNum_ + 1);
-                snprintf(info, sizeof(info), "DELAY %u MS   DEPTH %u   RATE %s HZ   FEEDBACK %u", (unsigned)(c.time * 1000.0f + 0.5f), c.dDepth,
+                snprintf(info, sizeof(info), "DELAY %3u MS   DEPTH %3u   RATE %5s HZ   FEEDBACK %3u", (unsigned)(c.time * 1000.0f + 0.5f), c.dDepth,
                          trim(kChorusRateDataLibrary[c.cRate].nameLongR), (unsigned)(c.feedback * 100.0f + 0.5f));
             } else if (e.type == EF_FLANGER) {
                 Flanger& f = e.flanger;
                 rate = f.rate; lo = f.time * (1.0f - f.width); hi = f.time * (1.0f + f.width);
                 snprintf(title, sizeof(title), "FLANGER %u", effectNum_ + 1);
-                snprintf(info, sizeof(info), "DELAY %s MS   WIDTH %u   RATE %s HZ   FEEDBACK %u", trim(kFlangerTimeDataLibrary[f.aTime].nameLongR), f.dWidth,
+                snprintf(info, sizeof(info), "DELAY %5s MS   WIDTH %3u   RATE %5s HZ   FEEDBACK %3u", trim(kFlangerTimeDataLibrary[f.aTime].nameLongR), f.dWidth,
                          trim(kFlangerRateDataLibrary[f.cRate].nameLongR), (unsigned)(f.feedback * 100.0f + 0.5f));
             } else {
                 Phaser& ph = e.phaser;
@@ -7745,7 +7745,7 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
                 if (lo < 20.0f) lo = 20.0f;
                 logY = true;
                 snprintf(title, sizeof(title), "PHASER %u", effectNum_ + 1);
-                snprintf(info, sizeof(info), "SWEEP %s - %s HZ   RATE %s HZ   FEEDBACK %u", trim(kPhaserFreqDataLibrary[ph.aStartFreq].nameLongR),
+                snprintf(info, sizeof(info), "SWEEP %5s - %5s HZ   RATE %5s HZ   FEEDBACK %3u", trim(kPhaserFreqDataLibrary[ph.aStartFreq].nameLongR),
                          trim(kPhaserFreqDataLibrary[ph.bEndFreq].nameLongR), trim(kPhaserRateDataLibrary[ph.cRate].nameLongR), ph.dFeedback);
             }
             if (rate < 0.05f) rate = 0.05f;
@@ -7801,7 +7801,7 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
             const uint8_t aIdx = comp ? e.compressor.cAttackTime : e.expander.cAttackTime;
             const uint8_t rIdx = comp ? e.compressor.dReleaseTime : e.expander.dReleaseTime;
             snprintf(title, sizeof(title), comp ? "COMPRESSOR %u" : "EXPANDER %u", effectNum_ + 1);
-            snprintf(info, sizeof(info), "THRESHOLD %+d DB   RATIO %u:1   ATTACK %u MS   RELEASE %u MS", (int)th, (unsigned)ratio,
+            snprintf(info, sizeof(info), "THRESHOLD %+3d DB   RATIO %2u:1   ATTACK %3u MS   RELEASE %4u MS", (int)th, (unsigned)ratio,
                      (unsigned)((comp ? kCompressorAttackTimeDataLibrary[aIdx].data : kExpanderAttackTimeDataLibrary[aIdx].data) * 1000.0f + 0.5f),
                      (unsigned)((comp ? kCompressorReleaseTimeDataLibrary[rIdx].data : kExpanderReleaseTimeDataLibrary[rIdx].data) * 1000.0f + 0.5f));
             xl[0] = "-48"; xl[1] = "-36"; xl[2] = "-24"; xl[3] = "-12"; xl[4] = "0DB";
@@ -7834,7 +7834,7 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
             }
             snprintf(title, sizeof(title), od ? "OVERDRIVE %u" : "DISTORTION %u", effectNum_ + 1);
             const uint8_t tone = od ? e.overdrive.cTone : e.distortion.cTone;
-            snprintf(info, sizeof(info), "GAIN %u DB   CEILING %+d DB   TONE %s HZ   %s %u",
+            snprintf(info, sizeof(info), "GAIN %2u DB   CEILING %+3d DB   TONE %5s HZ   %s %3u",
                      (unsigned)(od ? kOverdriveGainDataLibrary[e.overdrive.aGain].data : kDistortionGainDataLibrary[e.distortion.aGain].data),
                      (int)(od ? kOverdriveThresholdDataLibrary[e.overdrive.bThreshold].data : kDistortionThresholdDataLibrary[e.distortion.bThreshold].data),
                      od ? trim(kOverdriveToneDataLibrary[tone].nameLongR) : trim(kDistortionToneDataLibrary[tone].nameLongR), od ? "LOW CUT" : "ASYMMETRY", od ? e.overdrive.dDriveColor : e.distortion.dAsym);
@@ -7874,7 +7874,7 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
                 if ((i % 4) < 2) refY[i] = yFromUnit((x + range) / (2.0f * range));
             }
             snprintf(title, sizeof(title), "BITCRUSHER %u", effectNum_ + 1);
-            snprintf(info, sizeof(info), "%u BIT   RATE 1/%u   %s   THRESHOLD %+d DB   SMOOTH %u",
+            snprintf(info, sizeof(info), "%2u BIT   RATE 1/%-3u   %s   THRESHOLD %+3d DB   SMOOTH %3u",
                      (unsigned)kBitcrusherResolutionDataLibrary[b.aResolution].data, (unsigned)hold, (b.mode == BIT_FOLD) ? "FOLD" : "CLIP",
                      (int)kBitcrusherThresholdDataLibrary[b.cThreshold].data, b.dSmooth);
             xl[0] = "0"; xl[1] = ""; xl[2] = "TEST TONE"; xl[3] = ""; xl[4] = "9MS";
@@ -11462,7 +11462,7 @@ void Controller::lcd_transitionMenu() {
             }
             rhythm.measureLock = true;
             rhythm.barLock = true;
-            rhythm.quantizeLock = true;
+            rhythm.quantizeLock = false;   // custom: never locked
             break;
 
         case IO_MENU:
