@@ -469,6 +469,10 @@ class Controller {
     void page_close();
     void page_toggle(PageView page_);
     void lfo_toggleTarget(uint8_t layerNum_);
+    void preview_schedule(uint8_t layerNum_);
+    void preview_update();
+    void preview_stopVoices();
+    void preview_play(uint8_t layerNum_);
     void lfo_stepTarget(int8_t step_);
     void page_markDirty(PageView page_);
     void page_update();
@@ -480,6 +484,9 @@ class Controller {
     void page_drawEffect(uint8_t effectNum_);
     void page_drawLfo();
     void layerInst_lfoGesture(uint8_t layerNum_, uint8_t lfo_);
+    bool previewPending = false;                                        // sample preview waiting for the knob to settle
+    uint8_t previewLayer = 0;
+    uint32_t previewTick = 0;
     uint8_t lfoTargetParam = 1;                                         // LFO page: selected target row (0 LEVEL .. 7 PROBABILITY)
     bool lfoKeyUsed = false;                                            // LFO key was combined with a pad
     void sd_getLibraries();

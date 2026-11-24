@@ -382,6 +382,9 @@ void Controller::update() {
         // Custom: redraw an open full-screen page when its settings changed (rate limited).
         page_update();
 
+        // Custom: audition the sample chosen in the INST menu once the knob has settled.
+        preview_update();
+
         // 4. FILESYSTEM MAINTENANCE
         // Recover SD subsystem if media access is lost.
         if (!sd.ready) {
@@ -3894,14 +3897,14 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
         case ENC_INST_1_INST:
         case ENC_INST_2_INST:
             if (instLibrarySize > 0)
-                (layerLibrary[selectedLayerNum].instSelected < (instLibrarySize - 1)) ? layerInst_setInstSelected(selectedLayerNum, layerLibrary[selectedLayerNum].instSelected + 1) : layerInst_setInstSelected(selectedLayerNum, -1);
+                (layerLibrary[selectedLayerNum].instSelected < (instLibrarySize - 1)) ? layerInst_setInstSelected(selectedLayerNum, layerLibrary[selectedLayerNum].instSelected + 1) : layerInst_setInstSelected(selectedLayerNum, -1);  preview_schedule(selectedLayerNum);
             break;
 
         case ENC_INST_0_SAMPLE:
         case ENC_INST_1_SAMPLE:
         case ENC_INST_2_SAMPLE:
             if ((layerLibrary[selectedLayerNum].instSelected != -1) && (sampleLibrarySize[layerLibrary[selectedLayerNum].instSelected] > 0))
-                (layerLibrary[selectedLayerNum].sampleSelected < (sampleLibrarySize[layerLibrary[selectedLayerNum].instSelected] - 1)) ? layerInst_setSampleSelected(selectedLayerNum, layerLibrary[selectedLayerNum].sampleSelected + 1) : layerInst_setSampleSelected(selectedLayerNum, 0);
+                (layerLibrary[selectedLayerNum].sampleSelected < (sampleLibrarySize[layerLibrary[selectedLayerNum].instSelected] - 1)) ? layerInst_setSampleSelected(selectedLayerNum, layerLibrary[selectedLayerNum].sampleSelected + 1) : layerInst_setSampleSelected(selectedLayerNum, 0);  preview_schedule(selectedLayerNum);
             break;
 
         case ENC_INST_0_LEVEL:
@@ -4457,14 +4460,14 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
         case ENC_INST_1_INST:
         case ENC_INST_2_INST:
             if (instLibrarySize > 0)
-                (layerLibrary[selectedLayerNum].instSelected > -1) ? layerInst_setInstSelected(selectedLayerNum, layerLibrary[selectedLayerNum].instSelected - 1) : layerInst_setInstSelected(selectedLayerNum, instLibrarySize - 1);
+                (layerLibrary[selectedLayerNum].instSelected > -1) ? layerInst_setInstSelected(selectedLayerNum, layerLibrary[selectedLayerNum].instSelected - 1) : layerInst_setInstSelected(selectedLayerNum, instLibrarySize - 1);  preview_schedule(selectedLayerNum);
             break;
 
         case ENC_INST_0_SAMPLE:
         case ENC_INST_1_SAMPLE:
         case ENC_INST_2_SAMPLE:
             if ((layerLibrary[selectedLayerNum].instSelected != -1) && (sampleLibrarySize[layerLibrary[selectedLayerNum].instSelected] > 0))
-                (layerLibrary[selectedLayerNum].sampleSelected > 0) ? layerInst_setSampleSelected(selectedLayerNum, layerLibrary[selectedLayerNum].sampleSelected - 1) : layerInst_setSampleSelected(selectedLayerNum, sampleLibrarySize[layerLibrary[selectedLayerNum].instSelected] - 1);
+                (layerLibrary[selectedLayerNum].sampleSelected > 0) ? layerInst_setSampleSelected(selectedLayerNum, layerLibrary[selectedLayerNum].sampleSelected - 1) : layerInst_setSampleSelected(selectedLayerNum, sampleLibrarySize[layerLibrary[selectedLayerNum].instSelected] - 1);  preview_schedule(selectedLayerNum);
             break;
 
         case ENC_INST_0_LEVEL:
@@ -5257,6 +5260,159 @@ void Controller::page_close() {
 
 void Controller::page_toggle(PageView page_) {
     (page == page_) ? page_close() : page_open(page_);
+}
+
+void Controller::preview_schedule(uint8_t layerNum_) {
+    /// @brief Custom: asks for the selected sample to be auditioned once the knob stops moving.
+    if (!kSamplePreview) return;
+    previewPending = true;
+    previewLayer = layerNum_;
+    previewTick = HAL_GetTick();
+}
+
+void Controller::preview_update() {
+    /// @brief Main-loop hook: starts a pending preview after kPreviewDelayMs of knob silence.
+    if (previewPending && ((HAL_GetTick() - previewTick) >= kPreviewDelayMs)) {
+        previewPending = false;
+        preview_play(previewLayer);
+    }
+}
+
+void Controller::preview_stopVoices() {
+    /// @brief Silences any voice still reading the preview buffer (before it gets overwritten).
+    // Let a playing preview fade out first (about 1 ms) so the next one starts without a click.
+    bool fading = false;
+    uint32_t primaskFade = __get_PRIMASK();
+    __disable_irq();
+    for (uint8_t i = 0; i < kLayerLibrarySize; i++) {
+        BeatPlayData& a = layerPlayData[i].activeBeatPlayData;
+        if (a.active && (a.ramAddress == RAM_PREVIEW_ADDRESS) && !a.fadeAction) { a.fadeAction = true; a.counterFade = 0; fading = true; }
+    }
+    __set_PRIMASK(primaskFade);
+    if (fading) HAL_Delay(4);
+
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    for (uint8_t i = 0; i < kLayerLibrarySize; i++) {
+        BeatPlayData& a = layerPlayData[i].activeBeatPlayData;
+        BeatPlayData& t = layerPlayData[i].tempBeatPlayData;
+        if (a.ramAddress == RAM_PREVIEW_ADDRESS) { a.active = false; a.counter = 0; a.newBeatFlag = false; }
+        if (t.ramAddress == RAM_PREVIEW_ADDRESS) { memset(&t, 0x00, sizeof(BeatPlayData)); }
+    }
+    __set_PRIMASK(primask);
+}
+
+void Controller::preview_play(uint8_t layerNum_) {
+    /// @brief Custom: reads the first few seconds of the SELECTED (not yet loaded) sample into the
+    /// preview buffer and plays it once on that drum's voice. The drum's real sample is untouched
+    /// until you load as usual.
+    if (layerNum_ >= kLayerLibrarySize) return;
+    if (!((menu == LAYER_INST_0_MENU) || (menu == LAYER_INST_1_MENU) || (menu == LAYER_INST_2_MENU)) || (selectedLayerNum != layerNum_)) return;
+    Layer& layer = layerLibrary[layerNum_];
+    if ((layer.sampleSelected < 0) || layer.sampleSelectedReadError || layer.sampleSelectedTypeError || layer.sampleLoading) return;
+    if (layer.sampleSelectedData.sampleByteSize == 0) return;
+
+    const WavData& wav = layer.wavSelectedData;
+    const uint32_t sRate = wav.fmt_chunk.sampleRate;
+    const uint8_t coefSamplerate = (sRate >= 176400) ? 4 : (sRate >= 88200 ? 2 : 1);
+    const uint8_t coefChannel = (wav.fmt_chunk.nbrChannels == 2) ? 2 : 1;
+    const uint8_t coefBps = (uint8_t)(wav.fmt_chunk.bitPerSample / 8);
+    if ((coefBps < 1) || (coefBps > 4) || (sRate == 0)) return;
+    const uint32_t offsetSize = coefSamplerate * coefChannel * coefBps;
+    uint16_t writeCount = 1;
+    if (sRate < 44100) {
+        if (sRate == 8000) writeCount = 6;
+        else if (sRate == 11025) writeCount = 4;
+        else if (sRate == 16000) writeCount = 3;
+        else if ((sRate == 22050) || (sRate == 24000)) writeCount = 2;
+        else writeCount = (uint16_t)(44100 / sRate);
+        if (writeCount < 1) writeCount = 1;
+    }
+
+    preview_stopVoices();
+    keyboard_disable();
+    f_close(&sd.file);
+    if (HAL_SD_GetState(&hsd2) != HAL_SD_STATE_READY) HAL_SD_Abort(&hsd2);
+
+    // 12288 divides by every possible offsetSize (see the loader), so frames never split.
+    static uint8_t raw[12288];
+    volatile float* dst = (volatile float*)RAM_PREVIEW_ADDRESS;
+    uint32_t outCount = 0;
+    float peak = 0.0f;
+    bool ok = false;
+    if ((f_open(&sd.file, layer.sampleSelectedData.fileName, FA_READ) == FR_OK) &&
+        (f_lseek(&sd.file, wav.data_chunk.chunkStartByte + 8) == FR_OK)) {
+        const uint32_t total = layer.sampleSelectedData.sampleByteSize;
+        uint32_t done = 0;
+        ok = true;
+        while ((done < total) && (outCount < kPreviewMaxSamples)) {
+            uint32_t toRead = total - done;
+            if (toRead > sizeof(raw)) toRead = sizeof(raw);
+            if ((f_read(&sd.file, raw, toRead, &sd.bytesread) != FR_OK) || (sd.bytesread == 0)) break;
+            const uint32_t frames = sd.bytesread / offsetSize;
+            for (uint32_t j = 0; (j < frames) && (outCount < kPreviewMaxSamples); j++) {
+                const uint32_t idx = j * offsetSize;
+                float val = 0.0f;
+                if (coefBps == 1) {
+                    val = ((float)((uint8_t)raw[idx] - 128)) / 128.0f;
+                } else if (coefBps == 2) {
+                    int16_t s16 = (int16_t)(raw[idx] | (raw[idx + 1] << 8));
+                    val = (float)s16 / 32768.0f;
+                } else if (coefBps == 3) {
+                    int32_t s24 = (raw[idx] | (raw[idx + 1] << 8) | (raw[idx + 2] << 16));
+                    if (s24 & 0x800000) s24 |= 0xFF000000;
+                    val = (float)s24 / 8388607.0f;
+                } else {
+                    memcpy(&val, &raw[idx], 4);
+                    if (!(val > -8.0f && val < 8.0f)) val = 0.0f;   // guard NaN / junk
+                }
+                const float a = fabsf(val);
+                if (a > peak) peak = a;
+                for (uint16_t k = 0; (k < writeCount) && (outCount < kPreviewMaxSamples); k++) dst[outCount++] = val;
+            }
+            done += sd.bytesread;
+            lcd_drawPlay();
+        }
+        f_close(&sd.file);
+    }
+    keyboard_enable();
+    if (!ok || (outCount < 200)) return;
+
+    // Short fade at the end of the preview window so a cut-off loop doesn't click.
+    const float norm = ((mixer.normalize) && (layer.normalize) && (peak > 0.00001f)) ? (1.0f / peak) : 1.0f;
+    BeatPlayData b;
+    memset(&b, 0x00, sizeof(BeatPlayData));
+    b.active = true;
+    b.ramAddress = RAM_PREVIEW_ADDRESS;
+    b.volumeMultiplier = kLayerVolumeCoef * kNumberDataLibrary[layer.level].powMultiplier * norm * mixer.masterVolumeFloat;
+    b.resolutionCoef = kLayerResolutionDataLibrary[kMaxLayerResolution].data;
+    b.counter = 0;
+    b.counterMax = outCount;
+    b.counterStart = 0;
+    b.counterEnd = outCount;
+    b.fadeFlag = true;
+    b.fadeAction = false;
+    b.counterFadeStart = (outCount >= kPreviewMaxSamples) ? (outCount - 2000) : (outCount - 50);
+    b.counterFade = 0;
+    b.newBeatFlag = false;
+    b.increment = 1.0f;
+    b.directionMode = 0;
+    b.directionPhase = 0;
+    b.mixerInMode = layer.mixerInMode;
+
+    LayerPlayData& lD = layerPlayData[layerNum_];
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    lD.tempBeatTimingFlag = false;
+    if (lD.activeBeatPlayData.active) {
+        memcpy(&lD.tempBeatPlayData, &b, sizeof(BeatPlayData));
+        lD.activeBeatPlayData.fadeAction = true;
+        lD.activeBeatPlayData.counterFade = 0;
+        lD.activeBeatPlayData.newBeatFlag = true;
+    } else {
+        memcpy(&lD.activeBeatPlayData, &b, sizeof(BeatPlayData));
+    }
+    __set_PRIMASK(primask);
 }
 
 void Controller::lfo_stepTarget(int8_t step_) {
@@ -20217,13 +20373,13 @@ void Controller::layerInst_menuUp() {
     switch (menuTab) {
         case 0:
             if (instLibrarySize > 0) {
-                (layer.instSelected < (instLibrarySize - 1)) ? layerInst_setInstSelected(selectedLayerNum, layer.instSelected + 1) : layerInst_setInstSelected(selectedLayerNum, -1);
+                (layer.instSelected < (instLibrarySize - 1)) ? layerInst_setInstSelected(selectedLayerNum, layer.instSelected + 1) : layerInst_setInstSelected(selectedLayerNum, -1);  preview_schedule(selectedLayerNum);
             }
             break;
 
         case 1:
             if ((layer.instSelected != -1) && (sampleLibrarySize[layer.instSelected] > 0)) {
-                (layer.sampleSelected < (sampleLibrarySize[layer.instSelected] - 1)) ? layerInst_setSampleSelected(selectedLayerNum, layer.sampleSelected + 1) : layerInst_setSampleSelected(selectedLayerNum, 0);
+                (layer.sampleSelected < (sampleLibrarySize[layer.instSelected] - 1)) ? layerInst_setSampleSelected(selectedLayerNum, layer.sampleSelected + 1) : layerInst_setSampleSelected(selectedLayerNum, 0);  preview_schedule(selectedLayerNum);
             }
             break;
 
@@ -20328,13 +20484,13 @@ void Controller::layerInst_menuDown() {
     switch (menuTab) {
         case 0:
             if (instLibrarySize > 0) {
-                (layer.instSelected > -1) ? layerInst_setInstSelected(selectedLayerNum, layer.instSelected - 1) : layerInst_setInstSelected(selectedLayerNum, instLibrarySize - 1);
+                (layer.instSelected > -1) ? layerInst_setInstSelected(selectedLayerNum, layer.instSelected - 1) : layerInst_setInstSelected(selectedLayerNum, instLibrarySize - 1);  preview_schedule(selectedLayerNum);
             }
             break;
 
         case 1:
             if ((layer.instSelected != -1) && (sampleLibrarySize[layer.instSelected] > 0)) {
-                (layer.sampleSelected > 0) ? layerInst_setSampleSelected(selectedLayerNum, layer.sampleSelected - 1) : layerInst_setSampleSelected(selectedLayerNum, sampleLibrarySize[layer.instSelected] - 1);
+                (layer.sampleSelected > 0) ? layerInst_setSampleSelected(selectedLayerNum, layer.sampleSelected - 1) : layerInst_setSampleSelected(selectedLayerNum, sampleLibrarySize[layer.instSelected] - 1);  preview_schedule(selectedLayerNum);
             }
             break;
 
