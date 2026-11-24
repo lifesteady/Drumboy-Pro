@@ -2630,7 +2630,13 @@ void Controller::keyboard_action() {
                                 break;
 
                             case KEY_MIXER:
-                                if (!alertFlag) mixer_select();
+                                // Custom: Mixer key cycles MIX -> METRO -> SYNC -> MIX, so the Metronome
+                                // and I/O keys can be given new jobs.
+                                if (!alertFlag) {
+                                    if (menu == MIXER_MENU) metro_select();
+                                    else if (menu == METRO_MENU) io_select();
+                                    else mixer_select();
+                                }
                                 break;
 
                             case KEY_FILTER_0:
