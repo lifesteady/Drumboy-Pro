@@ -5184,6 +5184,10 @@ void Controller::page_open(PageView page_) {
     lcd.setBackColor(BLACK);
     lcd.clearRect(kImageMenuAX + kPageMfpImageX, kImageMenuAY + kPageMfpImageRow, kPageMfpWidth, kPageMfpHeight);
 
+    // Start marker for the playhead line, so it doesn't look like it floats once M F P is gone.
+    lcd.setForeColor(kThemeInk);
+    lcd.fillRect(kPlayX - 4, kPlayY - 5, 2, 11);
+
     lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
     page_draw();
 }
@@ -5200,6 +5204,10 @@ void Controller::page_close() {
                               (const uint8_t*)(RAM_IMAGE_MENU_A_DATA_ADDRESS) + (kPageMfpImageRow * kImageMenuAWidth),
                               64, kImageMenuAX + kPageMfpImageX, kImageMenuAY + kPageMfpImageRow,
                               kImageMenuAWidth, kPageMfpHeight, kPageMfpImageX, kPageMfpWidth);
+    // Remove the playhead start marker (restore those image pixels).
+    lcd.drawRGB16ImagePartial((const RGB16Color*)(RAM_IMAGE_MENU_A_PALETTE_ADDRESS),
+                              (const uint8_t*)(RAM_IMAGE_MENU_A_DATA_ADDRESS) + ((kPlayY - 5 - kImageMenuAY) * kImageMenuAWidth),
+                              64, kPlayX - 4, kPlayY - 5, kImageMenuAWidth, 11, kPlayX - 4 - kImageMenuAX, 2);
 
     const LcdFont font = lcd.getFont();
     const LcdAlign align = lcd.getAlignment();
