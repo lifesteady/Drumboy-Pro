@@ -477,6 +477,7 @@ class Controller {
     void page_drawEq();
     void page_drawEffect(uint8_t effectNum_);
     void page_drawLfo();
+    void layerInst_lfoGesture(uint8_t layerNum_, uint8_t lfo_);
     bool lfoKeyUsed = false;                                            // LFO key was combined with a pad
     void sd_getLibraries();
     SdResult sd_getFileLibrary();

@@ -3895,58 +3895,66 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
             break;
 
         case ENC_INST_0_LEVEL:
-            if (keyboard.shiftKeyPress) {
+            if (keyboard.shiftKeyPress || keyboard.lfoKeyPress) {  // custom: hold LFO + turn = assign LFO
                 (layerLibrary[selectedLayerNum].lfoLevel < kMaxLfo) ? layerInst_setLfoLevel(selectedLayerNum, layerLibrary[selectedLayerNum].lfoLevel + 1) : layerInst_setLfoLevel(selectedLayerNum, kMinLfo);
+                layerInst_lfoGesture(selectedLayerNum, layerLibrary[selectedLayerNum].lfoLevel);
             } else if (layerLibrary[selectedLayerNum].level < kMaxLayerLevel)
                 layerInst_setLevel(selectedLayerNum, layerLibrary[selectedLayerNum].level + 1);
             break;
 
         case ENC_INST_0_PITCH:
-            if (keyboard.shiftKeyPress) {
+            if (keyboard.shiftKeyPress || keyboard.lfoKeyPress) {  // custom: hold LFO + turn = assign LFO
                 (layerLibrary[selectedLayerNum].lfoPitch < kMaxLfo) ? layerInst_setLfoPitch(selectedLayerNum, layerLibrary[selectedLayerNum].lfoPitch + 1) : layerInst_setLfoPitch(selectedLayerNum, kMinLfo);
+                layerInst_lfoGesture(selectedLayerNum, layerLibrary[selectedLayerNum].lfoPitch);
             } else if (layerLibrary[selectedLayerNum].pitch < kMaxLayerPitch)
                 layerInst_setPitch(selectedLayerNum, layerLibrary[selectedLayerNum].pitch + 1);
             break;
 
         case ENC_INST_0_DIRECT:
-            if (keyboard.shiftKeyPress) {
+            if (keyboard.shiftKeyPress || keyboard.lfoKeyPress) {  // custom: hold LFO + turn = assign LFO
                 (layerLibrary[selectedLayerNum].lfoDirection < kMaxLfo) ? layerInst_setLfoDirection(selectedLayerNum, layerLibrary[selectedLayerNum].lfoDirection + 1) : layerInst_setLfoDirection(selectedLayerNum, kMinLfo);
+                layerInst_lfoGesture(selectedLayerNum, layerLibrary[selectedLayerNum].lfoDirection);
             } else {
                 (layerLibrary[selectedLayerNum].direction < kMaxLayerDirection) ? layerInst_setDirection(selectedLayerNum, layerLibrary[selectedLayerNum].direction + 1) : layerInst_setDirection(selectedLayerNum, kMinLayerDirection);
             }
             break;
 
         case ENC_INST_0_RESOL:
-            if (keyboard.shiftKeyPress) {
+            if (keyboard.shiftKeyPress || keyboard.lfoKeyPress) {  // custom: hold LFO + turn = assign LFO
                 (layerLibrary[selectedLayerNum].lfoResolution < kMaxLfo) ? layerInst_setLfoResolution(selectedLayerNum, layerLibrary[selectedLayerNum].lfoResolution + 1) : layerInst_setLfoResolution(selectedLayerNum, kMinLfo);
+                layerInst_lfoGesture(selectedLayerNum, layerLibrary[selectedLayerNum].lfoResolution);
             } else if (layerLibrary[selectedLayerNum].resolution < kMaxLayerResolution)
                 layerInst_setResolution(selectedLayerNum, layerLibrary[selectedLayerNum].resolution + 1);
             break;
 
         case ENC_INST_1_START:
-            if (keyboard.shiftKeyPress) {
+            if (keyboard.shiftKeyPress || keyboard.lfoKeyPress) {  // custom: hold LFO + turn = assign LFO
                 (layerLibrary[selectedLayerNum].lfoStart < kMaxLfo) ? layerInst_setLfoStart(selectedLayerNum, layerLibrary[selectedLayerNum].lfoStart + 1) : layerInst_setLfoStart(selectedLayerNum, kMinLfo);
+                layerInst_lfoGesture(selectedLayerNum, layerLibrary[selectedLayerNum].lfoStart);
             } else if (layerLibrary[selectedLayerNum].start < kMaxLayerPosition)
                 layerInst_setStart(selectedLayerNum, layerLibrary[selectedLayerNum].start + 1);
             break;
 
         case ENC_INST_1_END:
-            if (keyboard.shiftKeyPress) {
+            if (keyboard.shiftKeyPress || keyboard.lfoKeyPress) {  // custom: hold LFO + turn = assign LFO
                 (layerLibrary[selectedLayerNum].lfoEnd < kMaxLfo) ? layerInst_setLfoEnd(selectedLayerNum, layerLibrary[selectedLayerNum].lfoEnd + 1) : layerInst_setLfoEnd(selectedLayerNum, kMinLfo);
+                layerInst_lfoGesture(selectedLayerNum, layerLibrary[selectedLayerNum].lfoEnd);
             } else if (layerLibrary[selectedLayerNum].end < kMaxLayerPosition)
                 layerInst_setEnd(selectedLayerNum, layerLibrary[selectedLayerNum].end + 1);
             break;
 
         case ENC_INST_1_TIMING:
-            if (keyboard.shiftKeyPress) {
+            if (keyboard.shiftKeyPress || keyboard.lfoKeyPress) {  // custom: hold LFO + turn = assign LFO
                 (layerLibrary[selectedLayerNum].lfoTiming < kMaxLfo) ? layerInst_setLfoTiming(selectedLayerNum, layerLibrary[selectedLayerNum].lfoTiming + 1) : layerInst_setLfoTiming(selectedLayerNum, kMinLfo);
+                layerInst_lfoGesture(selectedLayerNum, layerLibrary[selectedLayerNum].lfoTiming);
             } else if (layerLibrary[selectedLayerNum].timing < kMaxLayerTiming)
                 layerInst_setTiming(selectedLayerNum, layerLibrary[selectedLayerNum].timing + 1);
             break;
 
         case ENC_INST_1_PROB:
-            if (keyboard.shiftKeyPress) {
+            if (keyboard.shiftKeyPress || keyboard.lfoKeyPress) {  // custom: hold LFO + turn = assign LFO
                 (layerLibrary[selectedLayerNum].lfoProbability < kMaxLfo) ? layerInst_setLfoProbability(selectedLayerNum, layerLibrary[selectedLayerNum].lfoProbability + 1) : layerInst_setLfoProbability(selectedLayerNum, kMinLfo);
+                layerInst_lfoGesture(selectedLayerNum, layerLibrary[selectedLayerNum].lfoProbability);
             } else if (layerLibrary[selectedLayerNum].probability < kMaxLayerProbability)
                 layerInst_setProbability(selectedLayerNum, layerLibrary[selectedLayerNum].probability + 1);
             break;
@@ -4446,58 +4454,66 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
             break;
 
         case ENC_INST_0_LEVEL:
-            if (keyboard.shiftKeyPress) {
+            if (keyboard.shiftKeyPress || keyboard.lfoKeyPress) {  // custom: hold LFO + turn = assign LFO
                 (layerLibrary[selectedLayerNum].lfoLevel > kMinLfo) ? layerInst_setLfoLevel(selectedLayerNum, layerLibrary[selectedLayerNum].lfoLevel - 1) : layerInst_setLfoLevel(selectedLayerNum, kMaxLfo);
+                layerInst_lfoGesture(selectedLayerNum, layerLibrary[selectedLayerNum].lfoLevel);
             } else if (layerLibrary[selectedLayerNum].level > kMinLayerLevel)
                 layerInst_setLevel(selectedLayerNum, layerLibrary[selectedLayerNum].level - 1);
             break;
 
         case ENC_INST_0_PITCH:
-            if (keyboard.shiftKeyPress) {
+            if (keyboard.shiftKeyPress || keyboard.lfoKeyPress) {  // custom: hold LFO + turn = assign LFO
                 (layerLibrary[selectedLayerNum].lfoPitch > kMinLfo) ? layerInst_setLfoPitch(selectedLayerNum, layerLibrary[selectedLayerNum].lfoPitch - 1) : layerInst_setLfoPitch(selectedLayerNum, kMaxLfo);
+                layerInst_lfoGesture(selectedLayerNum, layerLibrary[selectedLayerNum].lfoPitch);
             } else if (layerLibrary[selectedLayerNum].pitch > kMinLayerPitch)
                 layerInst_setPitch(selectedLayerNum, layerLibrary[selectedLayerNum].pitch - 1);
             break;
 
         case ENC_INST_0_DIRECT:
-            if (keyboard.shiftKeyPress) {
+            if (keyboard.shiftKeyPress || keyboard.lfoKeyPress) {  // custom: hold LFO + turn = assign LFO
                 (layerLibrary[selectedLayerNum].lfoDirection > kMinLfo) ? layerInst_setLfoDirection(selectedLayerNum, layerLibrary[selectedLayerNum].lfoDirection - 1) : layerInst_setLfoDirection(selectedLayerNum, kMaxLfo);
+                layerInst_lfoGesture(selectedLayerNum, layerLibrary[selectedLayerNum].lfoDirection);
             } else {
                 (layerLibrary[selectedLayerNum].direction > kMinLayerDirection) ? layerInst_setDirection(selectedLayerNum, layerLibrary[selectedLayerNum].direction - 1) : layerInst_setDirection(selectedLayerNum, kMaxLayerDirection);
             }
             break;
 
         case ENC_INST_0_RESOL:
-            if (keyboard.shiftKeyPress) {
+            if (keyboard.shiftKeyPress || keyboard.lfoKeyPress) {  // custom: hold LFO + turn = assign LFO
                 (layerLibrary[selectedLayerNum].lfoResolution > kMinLfo) ? layerInst_setLfoResolution(selectedLayerNum, layerLibrary[selectedLayerNum].lfoResolution - 1) : layerInst_setLfoResolution(selectedLayerNum, kMaxLfo);
+                layerInst_lfoGesture(selectedLayerNum, layerLibrary[selectedLayerNum].lfoResolution);
             } else if (layerLibrary[selectedLayerNum].resolution > kMinLayerResolution)
                 layerInst_setResolution(selectedLayerNum, layerLibrary[selectedLayerNum].resolution - 1);
             break;
 
         case ENC_INST_1_START:
-            if (keyboard.shiftKeyPress) {
+            if (keyboard.shiftKeyPress || keyboard.lfoKeyPress) {  // custom: hold LFO + turn = assign LFO
                 (layerLibrary[selectedLayerNum].lfoStart > kMinLfo) ? layerInst_setLfoStart(selectedLayerNum, layerLibrary[selectedLayerNum].lfoStart - 1) : layerInst_setLfoStart(selectedLayerNum, kMaxLfo);
+                layerInst_lfoGesture(selectedLayerNum, layerLibrary[selectedLayerNum].lfoStart);
             } else if (layerLibrary[selectedLayerNum].start > kMinLayerPosition)
                 layerInst_setStart(selectedLayerNum, layerLibrary[selectedLayerNum].start - 1);
             break;
 
         case ENC_INST_1_END:
-            if (keyboard.shiftKeyPress) {
+            if (keyboard.shiftKeyPress || keyboard.lfoKeyPress) {  // custom: hold LFO + turn = assign LFO
                 (layerLibrary[selectedLayerNum].lfoEnd > kMinLfo) ? layerInst_setLfoEnd(selectedLayerNum, layerLibrary[selectedLayerNum].lfoEnd - 1) : layerInst_setLfoEnd(selectedLayerNum, kMaxLfo);
+                layerInst_lfoGesture(selectedLayerNum, layerLibrary[selectedLayerNum].lfoEnd);
             } else if (layerLibrary[selectedLayerNum].end > kMinLayerPosition)
                 layerInst_setEnd(selectedLayerNum, layerLibrary[selectedLayerNum].end - 1);
             break;
 
         case ENC_INST_1_TIMING:
-            if (keyboard.shiftKeyPress) {
+            if (keyboard.shiftKeyPress || keyboard.lfoKeyPress) {  // custom: hold LFO + turn = assign LFO
                 (layerLibrary[selectedLayerNum].lfoTiming > kMinLfo) ? layerInst_setLfoTiming(selectedLayerNum, layerLibrary[selectedLayerNum].lfoTiming - 1) : layerInst_setLfoTiming(selectedLayerNum, kMaxLfo);
+                layerInst_lfoGesture(selectedLayerNum, layerLibrary[selectedLayerNum].lfoTiming);
             } else if (layerLibrary[selectedLayerNum].timing > kMinLayerTiming)
                 layerInst_setTiming(selectedLayerNum, layerLibrary[selectedLayerNum].timing - 1);
             break;
 
         case ENC_INST_1_PROB:
-            if (keyboard.shiftKeyPress) {
+            if (keyboard.shiftKeyPress || keyboard.lfoKeyPress) {  // custom: hold LFO + turn = assign LFO
                 (layerLibrary[selectedLayerNum].lfoProbability > kMinLfo) ? layerInst_setLfoProbability(selectedLayerNum, layerLibrary[selectedLayerNum].lfoProbability - 1) : layerInst_setLfoProbability(selectedLayerNum, kMaxLfo);
+                layerInst_lfoGesture(selectedLayerNum, layerLibrary[selectedLayerNum].lfoProbability);
             } else if (layerLibrary[selectedLayerNum].probability > kMinLayerProbability)
                 layerInst_setProbability(selectedLayerNum, layerLibrary[selectedLayerNum].probability - 1);
             break;
@@ -12736,7 +12752,7 @@ void Controller::lcd_drawLayerInst_LevelData(uint8_t layerNum_) {
 
     // 3. LFO LABEL DRAW
     // Draw assigned LFO short label.
-    lcd_setMenuSignState(CYAN);
+    lcd_setMenuSignState(layer.lfoLevel ? MAGENTA : CYAN);  // custom: assigned LFO shows in the accent color
     lcd.drawText(kLfoNameDataLibrary[layer.lfoLevel].nameShortR, kMenuSignTextSize, kMenuSignBoxX[4], kMenuSignBoxY[4]);
 }
 
@@ -12754,7 +12770,7 @@ void Controller::lcd_drawLayerInst_PitchData(uint8_t layerNum_) {
 
     // 3. LFO LABEL DRAW
     // Draw assigned LFO short label.
-    lcd_setMenuSignState(CYAN);
+    lcd_setMenuSignState(layer.lfoPitch ? MAGENTA : CYAN);  // custom: assigned LFO shows in the accent color
     lcd.drawText(kLfoNameDataLibrary[layer.lfoPitch].nameShortR, kMenuSignTextSize, kMenuSignBoxX[5], kMenuSignBoxY[5]);
 }
 
@@ -12772,7 +12788,7 @@ void Controller::lcd_drawLayerInst_DirectionData(uint8_t layerNum_) {
 
     // 3. LFO LABEL DRAW
     // Draw assigned LFO short label.
-    lcd_setMenuSignState(CYAN);
+    lcd_setMenuSignState(layer.lfoDirection ? MAGENTA : CYAN);  // custom: assigned LFO shows in the accent color
     lcd.drawText(kLfoNameDataLibrary[layer.lfoDirection].nameShortR, kMenuSignTextSize, kMenuSignBoxX[6], kMenuSignBoxY[6]);
 }
 
@@ -12790,7 +12806,7 @@ void Controller::lcd_drawLayerInst_ResolutionData(uint8_t layerNum_) {
 
     // 3. LFO LABEL DRAW
     // Draw assigned LFO short label.
-    lcd_setMenuSignState(CYAN);
+    lcd_setMenuSignState(layer.lfoResolution ? MAGENTA : CYAN);  // custom: assigned LFO shows in the accent color
     lcd.drawText(kLfoNameDataLibrary[layer.lfoResolution].nameShortR, kMenuSignTextSize, kMenuSignBoxX[7], kMenuSignBoxY[7]);
 }
 
@@ -12808,7 +12824,7 @@ void Controller::lcd_drawLayerInst_StartData(uint8_t layerNum_) {
 
     // 3. LFO LABEL DRAW
     // Draw assigned LFO short label.
-    lcd_setMenuSignState(CYAN);
+    lcd_setMenuSignState(layer.lfoStart ? MAGENTA : CYAN);  // custom: assigned LFO shows in the accent color
     lcd.drawText(kLfoNameDataLibrary[layer.lfoStart].nameShortR, kMenuSignTextSize, kMenuSignBoxX[4], kMenuSignBoxY[4]);
 }
 
@@ -12826,7 +12842,7 @@ void Controller::lcd_drawLayerInst_EndData(uint8_t layerNum_) {
 
     // 3. LFO LABEL DRAW
     // Draw assigned LFO short label.
-    lcd_setMenuSignState(CYAN);
+    lcd_setMenuSignState(layer.lfoEnd ? MAGENTA : CYAN);  // custom: assigned LFO shows in the accent color
     lcd.drawText(kLfoNameDataLibrary[layer.lfoEnd].nameShortR, kMenuSignTextSize, kMenuSignBoxX[5], kMenuSignBoxY[5]);
 }
 
@@ -12844,7 +12860,7 @@ void Controller::lcd_drawLayerInst_TimingData(uint8_t layerNum_) {
 
     // 3. LFO LABEL DRAW
     // Draw assigned LFO short label.
-    lcd_setMenuSignState(CYAN);
+    lcd_setMenuSignState(layer.lfoTiming ? MAGENTA : CYAN);  // custom: assigned LFO shows in the accent color
     lcd.drawText(kLfoNameDataLibrary[layer.lfoTiming].nameShortR, kMenuSignTextSize, kMenuSignBoxX[6], kMenuSignBoxY[6]);
 }
 
@@ -12862,7 +12878,7 @@ void Controller::lcd_drawLayerInst_ProbabilityData(uint8_t layerNum_) {
 
     // 3. LFO LABEL DRAW
     // Draw assigned LFO short label.
-    lcd_setMenuSignState(CYAN);
+    lcd_setMenuSignState(layer.lfoProbability ? MAGENTA : CYAN);  // custom: assigned LFO shows in the accent color
     lcd.drawText(kLfoNameDataLibrary[layer.lfoProbability].nameShortR, kMenuSignTextSize, kMenuSignBoxX[7], kMenuSignBoxY[7]);
 }
 
@@ -21171,6 +21187,16 @@ void Controller::layerInst_setProbability(uint8_t layerNum_, uint8_t probability
         // Refresh probability label when page-1 is visible.
         if ((menu == LAYER_INST_1_MENU) && (selectedLayerNum == layer.number)) lcd_drawLayerInst_ProbabilityData(layerNum_);
     }
+}
+
+void Controller::layerInst_lfoGesture(uint8_t layerNum_, uint8_t lfo_) {
+    /// @brief Custom: after an LFO is assigned with a knob, make it audible straight away:
+    /// switch that LFO on and turn on the layer's P (style) switch, which the engine requires
+    /// for any LFO modulation. Also stops the LFO key from toggling the page on release.
+    lfoKeyUsed = true;
+    if ((lfo_ < 1) || (lfo_ > kLfoLibrarySize)) return;
+    if (!lfoLibrary[lfo_ - 1].active) lfo_setActive(lfo_ - 1, true);
+    if (!layerLibrary[layerNum_].style) layerInst_setStyle(layerNum_, true);
 }
 
 void Controller::layerInst_setLfoLevel(uint8_t layerNum_, uint8_t lfo_) {
