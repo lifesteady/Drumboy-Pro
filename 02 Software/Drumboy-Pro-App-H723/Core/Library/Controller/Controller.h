@@ -476,6 +476,8 @@ class Controller {
     void page_drawFilter(uint8_t filterNum_);
     void page_drawEq();
     void page_drawEffect(uint8_t effectNum_);
+    void page_drawLfo();
+    bool lfoKeyUsed = false;                                            // LFO key was combined with a pad
     void sd_getLibraries();
     SdResult sd_getFileLibrary();
     SdResult sd_getDrumkitLibrary();

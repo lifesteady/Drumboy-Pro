@@ -1610,6 +1610,7 @@ void Controller::keyboard_action() {
                         } else if (keyboard.styleKeyPress) {
                             layerInst_setStyle(layerNum, !layerLibrary[layerNum].style);
                         } else if ((keyboard.lfoKeyPress) && (!alertFlag)) {
+                            lfoKeyUsed = true;
                             lfo_select(layerNum);
                         } else if ((keyboard.layerInstKeyPress) && (!alertFlag)) {
                             layerInst_select(layerNum);
@@ -2609,6 +2610,7 @@ void Controller::keyboard_action() {
 
                             case KEY_LFO:
                                 keyboard.lfoKeyPress = true;
+                                lfoKeyUsed = false;
                                 break;
 
                             case KEY_LAYER_INST:
@@ -2632,6 +2634,8 @@ void Controller::keyboard_action() {
                         switch (i) {
                             case KEY_LFO:
                                 keyboard.lfoKeyPress = false;
+                                // Custom: tapping LFO on its own (no pad) while in the LFO menu toggles the LFO page.
+                                if ((!lfoKeyUsed) && (menu == LFO_MENU) && (!alertFlag)) page_toggle(PAGE_LFO);
                                 break;
 
                             case KEY_LAYER_INST:
@@ -5255,6 +5259,9 @@ void Controller::page_draw() {
         case PAGE_EFFECT_1:
             page_drawEffect(1);
             break;
+        case PAGE_LFO:
+            page_drawLfo();
+            break;
         default:
             break;
     }
@@ -5758,7 +5765,7 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
                 }
             }
             snprintf(title, sizeof(title), "DELAY %u", effectNum_ + 1);
-            snprintf(info, sizeof(info), "TIME %s = %u MS   FEEDBACK %u   LEVEL %u   DAMPING %u", trim(kDelayTimeDataLibrary[d.aTime].nameLongR),
+            snprintf(info, sizeof(info), "TIME %s: %u MS   FEEDBACK %u   LEVEL %u   DAMPING %u", trim(kDelayTimeDataLibrary[d.aTime].nameLongR),
                      (unsigned)(sec * 1000.0f + 0.5f), d.cFeedback, d.bLevel, d.dDamping);
             for (uint8_t q = 0; q < 5; q++) { snprintf(xbuf[q], 8, "%ums", (unsigned)(win * 250.0f * q + 0.5f)); xl[q] = xbuf[q]; }
             yl[0] = "100%"; yl[1] = " 50%"; yl[2] = "   0";
@@ -5995,6 +6002,129 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
             prevY = -1;
         }
     }
+}
+
+void Controller::page_drawLfo() {
+    /// @brief LFO page: one bar of the selected LFO's waveform with beat lines, at its real rate,
+    /// phase, invert and depth (the same table the audio code reads). Below it: which layers and
+    /// which of their settings this LFO is modulating.
+
+    if ((selectedLfoNum < 0) || (selectedLfoNum >= kLfoLibrarySize)) return;
+    Lfo& lfo = lfoLibrary[selectedLfoNum];
+    const bool on = lfo.active;
+    const RGB16Color ink = on ? kThemeInk : kThemeMid;
+    const RGB16Color accent = on ? kThemeAccent : kThemeLine;
+    const RGB16Color label = kThemeHeader;
+    const uint16_t gx = 80, gw = 790, gTop = 190, gBot = 372;
+    const int16_t mid = (gTop + gBot) / 2;
+    const float half = (gBot - gTop) / 2.0f;
+    const float depth = kNumberDataLibrary[lfo.depth].stdMultiplier;   // 0..1, as the audio code uses
+    const float cyclesPerBar = kLfoRateDataLibrary[lfo.rate].rate;
+    uint8_t beats = (uint8_t)(barInterval / kMeasureInterval);
+    if ((beats < 1) || (beats > 16)) beats = 4;
+
+    if (pageFullRedraw) {
+        lcd.setBackColor(BLACK);
+        lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
+        lcd.setForeColor(kThemeLine);
+        lcd.drawHLine(30, 177, 900);
+        lcd.setFont(FONT_07x09);
+        lcd.setAlignment(LEFT);
+        const char hint[] = "TAP LFO ALONE: BACK TO SONG";
+        lcd.drawText(hint, strlen(hint), 30, 436);
+        lcd.setAlignment(RIGHT);
+        const char hint2[] = "KNOBS: BOXES ABOVE / BELOW";
+        lcd.drawText(hint2, strlen(hint2), 930, 436);
+        lcd.setForeColor(label);
+        lcd.drawText("+", 1, gx - 8, gTop);
+        lcd.drawText("0", 1, gx - 8, mid - 4);
+        lcd.drawText("-", 1, gx - 8, gBot - 9);
+        pageFullRedraw = false;
+    }
+
+    // ---- header + summary
+    char text[80];
+    lcd.setFont(FONT_14x18);
+    lcd.setAlignment(LEFT);
+    lcd.setBackColor(BLACK);
+    lcd.setForeColor(on ? kThemeAccent : kThemeMid);
+    snprintf(text, sizeof(text), on ? "LFO %02u     " : "LFO %02u OFF ", selectedLfoNum + 1);
+    lcd.drawText(text, 11, 30, 136);
+    auto trim = [](const char* t) -> const char* { while (*t == ' ') t++; return t; };
+    snprintf(text, sizeof(text), "%s   RATE %s BAR   PHASE %s   INVERT %s   DEPTH %u", trim(kLfoTypeDataLibrary[lfo.type].nameLongR),
+             trim(kLfoRateDataLibrary[lfo.rate].nameLongR), trim(kLfoPhaseDataLibrary[lfo.phase].nameLongR), lfo.invert ? "ON" : "OFF", lfo.depth);
+    page_drawSummary(text);
+
+    // ---- beat labels under the graph (fixed slots, redrawn each time in case the bar length changed)
+    lcd.setFont(FONT_07x09);
+    lcd.setAlignment(CENTER);
+    lcd.setForeColor(label);
+    lcd.setBackColor(BLACK);
+    lcd.clearRect(gx - 10, gBot + 4, gw + 20, 10);
+    for (uint8_t b = 0; b < beats; b++) {
+        char num[4];
+        snprintf(num, sizeof(num), "%u", b + 1);
+        lcd.drawText(num, strlen(num), gx + (gw * b) / beats + gw / (2 * beats), gBot + 5);
+    }
+
+    // ---- waveform columns: faint full-depth shape behind, real-depth curve on top
+    int16_t prevY = -1;
+    for (uint16_t i = 0; i < gw; i++) {
+        const uint16_t x = gx + i;
+        float pos = lfo.sampleStart + (kLfoSampleSize * cyclesPerBar * i) / gw;
+        pos = fmodf(pos, kLfoSampleSize);
+        float v = kLfoDataLibrary[lfo.type][(uint16_t)pos];
+        if (lfo.invert) v = 1.0f - v;
+        const int16_t yFull = (int16_t)(mid - (v - 0.5f) * 2.0f * half + 0.5f);
+        const int16_t y = (int16_t)(mid - (v - 0.5f) * 2.0f * half * depth + 0.5f);
+
+        lcd.setForeColor(BLACK);
+        lcd.drawVLine(x, gTop, gBot - gTop + 1);
+        lcd.setForeColor(page_mix(BLACK, accent, 0.28f));       // fill between centre and curve
+        if (y < mid) lcd.drawVLine(x, y, mid - y);
+        else if (y > mid) lcd.drawVLine(x, mid + 1, y - mid);
+        if ((i % (gw / beats)) == 0) { lcd.setForeColor(kThemeLine); for (int16_t yy = gTop; yy <= gBot; yy += 4) lcd.drawPixel(x, yy); }
+        if ((x % 2) == 0) { lcd.setForeColor(ink); lcd.drawPixel(x, mid); }
+        if ((x % 3) == 0) { lcd.setForeColor(page_mix(BLACK, ink, 0.40f)); lcd.drawPixel(x, yFull); }
+        lcd.setForeColor(accent);
+        if (prevY >= 0) {
+            const int16_t lo = (y < prevY) ? y : prevY, hi = (y < prevY) ? prevY : y;
+            if (hi - lo > 1) lcd.drawVLine(x, lo, hi - lo);
+        }
+        lcd.drawPixel(x, y);
+        lcd.drawPixel(x, y + 1);
+        prevY = y;
+    }
+
+    // ---- which layers this LFO modulates
+    const char* paramNames[8] = {"LEVEL", "PITCH", "DIRECTION", "RESOLUTION", "START", "END", "TIMING", "PROBABILITY"};
+    char used[kPageSummaryChars + 1];
+    uint8_t len = 0;
+    uint8_t count = 0;
+    used[0] = 0;
+    len = snprintf(used, sizeof(used), "USED BY:");
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
+        const Layer& ly = layerLibrary[l];
+        const uint8_t targets[8] = {ly.lfoLevel, ly.lfoPitch, ly.lfoDirection, ly.lfoResolution, ly.lfoStart, ly.lfoEnd, ly.lfoTiming, ly.lfoProbability};
+        for (uint8_t t = 0; t < 8; t++) {
+            if (targets[t] == (uint8_t)(selectedLfoNum + 1)) {
+                char item[24];
+                snprintf(item, sizeof(item), " %02u %s,", l + 1, paramNames[t]);
+                if (len + strlen(item) < kPageSummaryChars - 4) { strcat(used, item); len += strlen(item); }
+                else if (len < kPageSummaryChars - 4) { strcat(used, " ..."); len += 4; }
+                count++;
+            }
+        }
+    }
+    if (count == 0) strcat(used, " NOT ASSIGNED TO ANY LAYER YET");
+    else if (used[strlen(used) - 1] == ',') used[strlen(used) - 1] = 0;
+    char row[kPageSummaryChars + 1];
+    snprintf(row, sizeof(row), "%-*s", (int)kPageSummaryChars, used);
+    lcd.setFont(FONT_10x14);
+    lcd.setAlignment(LEFT);
+    lcd.setBackColor(BLACK);
+    lcd.setForeColor(count ? kThemeAmber : kThemeLine);
+    lcd.drawText(row, kPageSummaryChars, 30, 414);
 }
 
 bool Controller::sd_showPreviews() {
@@ -19471,7 +19601,7 @@ void Controller::lfo_setActive(uint8_t lfoNum_, uint8_t active_) {
     // Refresh LFO tab data only when edited slot is currently selected.
     if ((menu == LFO_MENU) && (lfoNum_ == selectedLfoNum)) {
         lcd_drawLfo_ActiveData(lfoNum_);
-        lcd_drawLfo_GraphData(lfoNum_);
+        lcd_drawLfo_GraphData(lfoNum_); page_markDirty(PAGE_LFO);
     }
 }
 
@@ -19486,7 +19616,7 @@ void Controller::lfo_setType(uint8_t lfoNum_, uint8_t type_) {
     // Refresh LFO tab data only when edited slot is currently selected.
     if ((menu == LFO_MENU) && (lfoNum_ == selectedLfoNum)) {
         lcd_drawLfo_TypeData(lfoNum_);
-        lcd_drawLfo_GraphData(lfoNum_);
+        lcd_drawLfo_GraphData(lfoNum_); page_markDirty(PAGE_LFO);
     }
 }
 
@@ -19505,7 +19635,7 @@ void Controller::lfo_setRate(uint8_t lfoNum_, uint8_t rate_) {
     // Refresh LFO tab data only when edited slot is currently selected.
     if ((menu == LFO_MENU) && (lfoNum_ == selectedLfoNum)) {
         lcd_drawLfo_RateData(lfoNum_);
-        lcd_drawLfo_GraphData(lfoNum_);
+        lcd_drawLfo_GraphData(lfoNum_); page_markDirty(PAGE_LFO);
     }
 }
 
@@ -19531,7 +19661,7 @@ void Controller::lfo_setPhase(uint8_t lfoNum_, uint8_t phase_) {
     // Refresh LFO tab data only when edited slot is currently selected.
     if ((menu == LFO_MENU) && (lfoNum_ == selectedLfoNum)) {
         lcd_drawLfo_PhaseData(lfoNum_);
-        lcd_drawLfo_GraphData(lfoNum_);
+        lcd_drawLfo_GraphData(lfoNum_); page_markDirty(PAGE_LFO);
     }
 }
 
@@ -19546,7 +19676,7 @@ void Controller::lfo_setInvert(uint8_t lfoNum_, bool invert_) {
     // Refresh LFO tab data only when edited slot is currently selected.
     if ((menu == LFO_MENU) && (lfoNum_ == selectedLfoNum)) {
         lcd_drawLfo_InvertData(lfoNum_);
-        lcd_drawLfo_GraphData(lfoNum_);
+        lcd_drawLfo_GraphData(lfoNum_); page_markDirty(PAGE_LFO);
     }
 }
 
@@ -19561,7 +19691,7 @@ void Controller::lfo_setDepth(uint8_t lfoNum_, uint8_t depth_) {
     // Refresh LFO tab data only when edited slot is currently selected.
     if ((menu == LFO_MENU) && (lfoNum_ == selectedLfoNum)) {
         lcd_drawLfo_DepthData(lfoNum_);
-        lcd_drawLfo_GraphData(lfoNum_);
+        lcd_drawLfo_GraphData(lfoNum_); page_markDirty(PAGE_LFO);
     }
 }
 
@@ -19630,7 +19760,7 @@ void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
             if (layer.style) {
                 if ((layer.lfoProbability) && (lfoLibrary[layer.lfoProbability - 1].active)) {
                     Lfo& lfo = lfoLibrary[layer.lfoProbability - 1];
-                    float lfoData = kLfoDataLibrary[lfo.type][(uint16_t)floor(lfo.sampleCounter)];
+                    float lfoData = lfo.value();
                     float lfoDepth = kNumberDataLibrary[lfo.depth].stdMultiplier;
                     nProbability = layer.probability + round(100 * (lfoData - 0.5) * lfoDepth);
                     nProbability = clamp(nProbability, (int16_t)kMinLayerProbability, (int16_t)kMaxLayerProbability);
@@ -19652,7 +19782,7 @@ void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
                     // calculate level with lfo
                     if ((layer.lfoLevel) && (lfoLibrary[(layer.lfoLevel - 1)].active)) {
                         Lfo& lfo = lfoLibrary[layer.lfoLevel - 1];
-                        float lfoData = kLfoDataLibrary[lfo.type][(uint16_t)floor(lfo.sampleCounter)];
+                        float lfoData = lfo.value();
                         float lfoDepth = kNumberDataLibrary[lfo.depth].stdMultiplier;
                         nLevel = layer.level + round(50 * (lfoData - 0.5) * lfoDepth);
                         nLevel = clamp(nLevel, (int16_t)kMinLayerLevel, (int16_t)kMaxLayerLevel);
@@ -19664,7 +19794,7 @@ void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
                     // calculate pitch with lfo
                     if ((layer.lfoPitch) && (lfoLibrary[(layer.lfoPitch - 1)].active)) {
                         Lfo& lfo = lfoLibrary[(layer.lfoPitch - 1)];
-                        float lfoData = kLfoDataLibrary[lfo.type][(uint16_t)floor(lfo.sampleCounter)];
+                        float lfoData = lfo.value();
                         float lfoDepth = kNumberDataLibrary[lfo.depth].stdMultiplier;
                         nPitch = layer.pitch + round(100 * (lfoData - 0.5) * lfoDepth);
                         nPitch = clamp(nPitch, (int16_t)kMinLayerPitch, (int16_t)kMaxLayerPitch);
@@ -19676,7 +19806,7 @@ void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
                     // calculate resolution with lfo
                     if ((layer.lfoResolution) && (lfoLibrary[(layer.lfoResolution - 1)].active)) {
                         Lfo& lfo = lfoLibrary[(layer.lfoResolution - 1)];
-                        float lfoData = kLfoDataLibrary[lfo.type][(uint16_t)floor(lfo.sampleCounter)];
+                        float lfoData = lfo.value();
                         float lfoDepth = kNumberDataLibrary[lfo.depth].stdMultiplier;
                         nResolution = layer.resolution + round(24 * (lfoData - 0.5) * lfoDepth);
                         nResolution = clamp(nResolution, (int8_t)kMinLayerResolution, (int8_t)kMaxLayerResolution);
@@ -19688,7 +19818,7 @@ void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
                     // calculate start point with lfo
                     if ((layer.lfoStart) && (lfoLibrary[(layer.lfoStart - 1)].active)) {
                         Lfo& lfo = lfoLibrary[(layer.lfoStart - 1)];
-                        float lfoData = kLfoDataLibrary[lfo.type][(uint16_t)floor(lfo.sampleCounter)];
+                        float lfoData = lfo.value();
                         float lfoDepth = kNumberDataLibrary[lfo.depth].stdMultiplier;
                         nStart = layer.start + round(100 * (lfoData - 0.5) * lfoDepth);
                         nStart = clamp(nStart, (int16_t)0, (int16_t)100);
@@ -19699,7 +19829,7 @@ void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
                     // calculate end point with lfo
                     if ((layer.lfoEnd) && (lfoLibrary[(layer.lfoEnd - 1)].active)) {
                         Lfo& lfo = lfoLibrary[(layer.lfoEnd - 1)];
-                        float lfoData = kLfoDataLibrary[lfo.type][(uint16_t)floor(lfo.sampleCounter)];
+                        float lfoData = lfo.value();
                         float lfoDepth = kNumberDataLibrary[lfo.depth].stdMultiplier;
                         nEnd = layer.end + round(100 * (lfoData - 0.5) * lfoDepth);
                         nEnd = clamp(nEnd, (int16_t)0, (int16_t)100);
@@ -19718,7 +19848,7 @@ void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
                     // calculate direction with lfo
                     if ((layer.lfoDirection) && (lfoLibrary[(layer.lfoDirection - 1)].active)) {
                         Lfo& lfo = lfoLibrary[(layer.lfoDirection - 1)];
-                        float lfoData = kLfoDataLibrary[lfo.type][(uint16_t)floor(lfo.sampleCounter)];
+                        float lfoData = lfo.value();
                         float lfoDepth = kNumberDataLibrary[lfo.depth].stdMultiplier;
                         uint8_t data = round(4 * (lfoData - 0.5) * lfoDepth) + 2;
                         nDirection = kLayerDirectionProbability[layer.direction][data];
@@ -19732,7 +19862,7 @@ void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
                     // calculate timing delay with lfo
                     if ((layer.lfoTiming) && (lfoLibrary[(layer.lfoTiming - 1)].active)) {
                         Lfo& lfo = lfoLibrary[(layer.lfoTiming - 1)];
-                        float lfoData = kLfoDataLibrary[lfo.type][(uint16_t)floor(lfo.sampleCounter)];
+                        float lfoData = lfo.value();
                         float lfoDepth = kNumberDataLibrary[lfo.depth].stdMultiplier;
                         nTiming = layer.timing + round(100 * (lfoData - 0.5) * lfoDepth);
                         nTiming = clamp(nTiming, (int16_t)kMinLayerTiming, (int16_t)kMaxLayerTiming);

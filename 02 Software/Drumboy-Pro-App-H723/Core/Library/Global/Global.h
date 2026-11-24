@@ -2159,7 +2159,8 @@ typedef enum {
     PAGE_FILTER_1                                   = 0x03,
     PAGE_EQ                                         = 0x04,
     PAGE_EFFECT_0                                   = 0x05,
-    PAGE_EFFECT_1                                   = 0x06
+    PAGE_EFFECT_1                                   = 0x06,
+    PAGE_LFO                                        = 0x07
 } PageView;
 
 const uint16_t kPageX                               = 20;
@@ -2177,7 +2178,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.18 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.19 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -6217,6 +6218,12 @@ struct Lfo {
     float sampleInc                                 = (kSampleSize * kLfoRateDataLibrary[kInitialLfoRate].rate) / (kMeasureInterval * kInitialMeasure);
 
     float data;
+
+    // Custom: current LFO value 0..1 with INVERT applied (stock firmware only inverted the menu graph).
+    float value() const {
+        float v = kLfoDataLibrary[type][(uint16_t)floor(sampleCounter)];
+        return invert ? (1.0f - v) : v;
+    }
 
     Lfo(uint8_t number_) : number(number_) {}
     ~Lfo() {}
