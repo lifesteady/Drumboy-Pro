@@ -1649,6 +1649,13 @@ void Controller::keyboard_action() {
                             ledLayerPlayMode = false;
                             ledLayerSelectFlag = true;
                             ledLayerSelectData = 0x03 << (selectedSongBank * 2);
+                        } else if ((page == PAGE_PITCH) && (menu == IO_MENU) && (!alertFlag)) {
+                            if (keyboard.shiftKeyPress) {   // custom: ADD + pad = put the root on this pad
+                                pitchRootPad = layerNum;
+                                page_markDirty(PAGE_PITCH);
+                            } else {
+                                pitch_pad(layerNum);   // custom: pads play one drum in a scale
+                            }
                         } else if ((page == PAGE_GROOVE) && (menu == RHYTHM_MENU) && (!alertFlag)) {
                             // Custom: Groove page. Pad = pick drum (and hear it); ADD + pad = Timing Correct.
                             if (keyboard.shiftKeyPress) {
@@ -2643,7 +2650,14 @@ void Controller::keyboard_action() {
                                 break;
 
                             case KEY_IO:
-                                if (!alertFlag) io_select();
+                                // Custom: Sync key = Pitch mode (Sync settings: Mixer key, three presses).
+                                if (!alertFlag) {
+                                    if (page == PAGE_PITCH) page_close();
+                                    else {
+                                        if (menu != IO_MENU) io_select();
+                                        page_open(PAGE_PITCH);
+                                    }
+                                }
                                 break;
 
                             case KEY_RHYTHM:
@@ -4001,6 +4015,11 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
             sample_setEnv(0, (int16_t)layerLibrary[selectedLayerNum].envAttack + 1);
             break;
 
+        case ENC_PITCH_DRUM: pitch_knob(0, 1); break;
+        case ENC_PITCH_ROOT: pitch_knob(1, 1); break;
+        case ENC_PITCH_SCALE: pitch_knob(2, 1); break;
+        case ENC_PITCH_OCTAVE: pitch_knob(3, 1); break;
+
         case ENC_SMP_HOLD:
             sample_setEnv(1, (int16_t)layerLibrary[selectedLayerNum].envHold + 1);
             break;
@@ -4587,6 +4606,11 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
         case ENC_SMP_ATTACK:
             sample_setEnv(0, (int16_t)layerLibrary[selectedLayerNum].envAttack - 1);
             break;
+
+        case ENC_PITCH_DRUM: pitch_knob(0, -1); break;
+        case ENC_PITCH_ROOT: pitch_knob(1, -1); break;
+        case ENC_PITCH_SCALE: pitch_knob(2, -1); break;
+        case ENC_PITCH_OCTAVE: pitch_knob(3, -1); break;
 
         case ENC_SMP_HOLD:
             sample_setEnv(1, (int16_t)layerLibrary[selectedLayerNum].envHold - 1);
@@ -5852,6 +5876,7 @@ uint32_t Controller::project_hash() {
                 const Beat& beat = bank.beatLibrary[j];
                 mix(beat.data);
                 mix(((uint32_t)beat.startInterval << 16) | beat.endInterval);
+                mix((uint8_t)beat.note);
             }
         }
     }
@@ -6132,6 +6157,7 @@ static int16_t stripPlay = -1;
 static inline RGB16Color rgb565(uint8_t r, uint8_t g, uint8_t b) { return (RGB16Color)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)); }
 // Selected (expanded) drum lane background: a slight green tint so the current drum stands out.
 static const RGB16Color kMainSelectBg = (RGB16Color)(((20 >> 3) << 11) | ((40 >> 2) << 5) | (16 >> 3));
+static const RGB16Color kMainSelectBgPitch = kMainSelectBg;
 static inline RGB16Color mix565(RGB16Color a, RGB16Color b, float t) {
     const int ar = (a >> 11) & 0x1F, ag = (a >> 5) & 0x3F, ab = a & 0x1F;
     const int br = (b >> 11) & 0x1F, bg = (b >> 5) & 0x3F, bb = b & 0x1F;
@@ -6596,6 +6622,208 @@ void Controller::noteRepeat_stopped() {
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////
+/* Custom: Pitch mode (Sync key) ---------------------------------------------*/
+////////////////////////////////////////////////////////////////////////////////
+// The 10 pads play ONE drum at 10 notes of a scale. Each recorded hit keeps its note
+// (Beat::note, semitones), so a bass line lives in that drum's own lane.
+
+static_assert(sizeof(Beat) == 8, "Beat::note must fit in the padding byte (undo / RAM budget)");
+
+int8_t Controller::pitch_padNote(uint8_t pad_) {
+    /// @brief Note of a pad: the ROOT sits on pitchRootPad, pads to the right climb the scale,
+    /// pads to the left go down it.
+    const uint8_t sc = (pitchScale < kPitchScaleCount) ? pitchScale : 0;
+    const int16_t len = kPitchScaleLen[sc];
+    const int16_t d = (int16_t)pad_ - (int16_t)pitchRootPad;
+    const int16_t octs = (d >= 0) ? (d / len) : -((-d + len - 1) / len);   // floor division
+    const int16_t idx = d - octs * len;                                       // 0 .. len-1
+    int16_t n = (int16_t)pitchRoot + 12 * pitchOctave + 12 * octs + kPitchScaleSteps[sc][idx];
+    if (n < -36) n = -36;
+    if (n > 36) n = 36;
+    return (int8_t)n;
+}
+
+void Controller::pitch_knob(uint8_t which_, int8_t step_) {
+    if (page != PAGE_PITCH) { page_open(PAGE_PITCH); return; }   // first turn shows the page
+    switch (which_) {
+        case 0: pitchLayer = (uint8_t)((pitchLayer + kLayerLibrarySize + step_) % kLayerLibrarySize); break;
+        case 1: pitchRoot = (uint8_t)((pitchRoot + 12 + step_) % 12); break;
+        case 2: pitchScale = (uint8_t)((pitchScale + kPitchScaleCount + step_) % kPitchScaleCount); break;
+        default: {
+            int8_t o = pitchOctave + step_;
+            if (o < -2) o = -2;
+            if (o > 2) o = 2;
+            pitchOctave = o;
+        } break;
+    }
+    page_markDirty(PAGE_PITCH);
+    lcd_drawIo_PitchData();
+}
+
+void Controller::pitch_pad(uint8_t pad_) {
+    /// @brief A pad in Pitch mode: play the chosen drum at that pad's note, record it into that drum's lane.
+    if (pad_ >= kLayerLibrarySize) return;
+    const int8_t note = pitch_padNote(pad_);
+    Layer& layer = layerLibrary[pitchLayer];
+    pendingNote[pitchLayer] = note;
+    if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(pitchLayer, 1.0f);
+    pendingNote[pitchLayer] = 0;
+    if (recordActive && !metronome.precountState) {
+        undo_checkpoint(UNDO_RECORD);
+        recordNote = note;
+        layerSong_setBeat(pitchLayer, activeSongBank, groove_unswing(pitchLayer, playInterval), 0, 0, 0, 0, true);
+        recordNote = 0;
+    }
+    pitchLastPad = (int8_t)pad_;
+    page_markDirty(PAGE_PITCH);
+}
+
+void Controller::lcd_drawIo_PitchData() {
+    /// @brief Sync menu, bottom row: the Pitch mode knobs.
+    if (menu != IO_MENU) return;
+    char text[16];
+    lcd_setMenuHeaderState(CYAN);
+    lcd.drawText("PITCH-DRUM", kMenuHeaderTextSize, kMenuHeaderX[4], kMenuHeaderY[4]);
+    lcd.drawText("ROOT      ", kMenuHeaderTextSize, kMenuHeaderX[5], kMenuHeaderY[5]);
+    lcd.drawText("SCALE     ", kMenuHeaderTextSize, kMenuHeaderX[6], kMenuHeaderY[6]);
+    lcd.drawText("OCTAVE    ", kMenuHeaderTextSize, kMenuHeaderX[7], kMenuHeaderY[7]);
+    lcd_setMenuDataState(WHITE);
+    snprintf(text, sizeof(text), "%10u", pitchLayer + 1);
+    lcd.drawText(text, kMenuDataTextSize, kMenuDataX[4], kMenuDataY[4]);
+    snprintf(text, sizeof(text), "%10s", kPitchNoteName[pitchRoot % 12]);
+    lcd.drawText(text, kMenuDataTextSize, kMenuDataX[5], kMenuDataY[5]);
+    snprintf(text, sizeof(text), "%10.10s", kPitchScaleName[pitchScale % kPitchScaleCount]);
+    lcd.drawText(text, kMenuDataTextSize, kMenuDataX[6], kMenuDataY[6]);
+    snprintf(text, sizeof(text), "%+10d", pitchOctave);
+    lcd.drawText(text, kMenuDataTextSize, kMenuDataX[7], kMenuDataY[7]);
+}
+
+void Controller::page_drawPitch() {
+    /// @brief Pitch page: which drum, root, scale, and the note each pad plays.
+    char text[96];
+    if (pageFullRedraw) {
+        lcd.setBackColor(BLACK);
+        lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
+        lcd.setForeColor(kThemeLine);
+        lcd.drawHLine(30, 177, 900);
+        lcd.setFont(FONT_07x09);
+        lcd.setAlignment(LEFT);
+        lcd.setForeColor(kThemeHeader);
+        const char h1[] = "PADS PLAY THE DRUM AT THESE NOTES    REC ON: HITS GO INTO THAT DRUM LANE WITH THEIR NOTE";
+        lcd.drawText(h1, strlen(h1), 30, 420);
+        const char h2[] = "BOTTOM KNOBS: DRUM / ROOT / SCALE / OCTAVE    HOLD ADD + TAP PAD: ROOT ON THAT PAD";
+        lcd.drawText(h2, strlen(h2), 30, 438);
+        lcd.setAlignment(RIGHT);
+        const char h3[] = "SYNC: BACK";
+        lcd.drawText(h3, strlen(h3), 930, 438);
+        pageFullRedraw = false;
+    }
+    const Layer& L = layerLibrary[pitchLayer];
+    char name[13];
+    memcpy(name, L.instLoadedData.nameShortL, 12); name[12] = 0;
+    for (int8_t k = 11; (k >= 0) && (name[k] == ' '); k--) name[k] = 0;
+    const char* nm = name; while (*nm == ' ') nm++;
+    lcd.setFont(FONT_14x18);
+    lcd.setAlignment(LEFT);
+    lcd.setBackColor(BLACK);
+    lcd.setForeColor(kThemeAccent);
+    snprintf(text, sizeof(text), "PITCH  DRUM %02u %-12.12s", pitchLayer + 1, (*nm) ? nm : "-");
+    lcd.drawText(text, strlen(text), 30, 136);
+    snprintf(text, sizeof(text), "ROOT %-2s ON PAD %-2u   SCALE %-11s   OCTAVE %+d", kPitchNoteName[pitchRoot % 12], pitchRootPad + 1, kPitchScaleName[pitchScale % kPitchScaleCount], pitchOctave);
+    page_drawSummary(text);
+
+    // one box per pad: note name big, semitones small
+    const uint16_t colW = 90, x0 = 30, boxTop = 200, boxH = 150, boxW = 76;
+    for (uint8_t p = 0; p < kLayerLibrarySize; p++) {
+        const uint16_t bx = x0 + p * colW + (colW - boxW) / 2;
+        const bool hit = ((int8_t)p == pitchLastPad);
+        const int8_t n = pitch_padNote(p);
+        const int16_t abs = 48 + n;                         // C3 = 48 (sample's own pitch)
+        const uint8_t pc = (uint8_t)(abs % 12);
+        const int16_t oct = abs / 12 - 1;
+        const bool isRoot = (pc == (pitchRoot % 12));
+        const RGB16Color fill = hit ? page_mix(BLACK, kThemeAccent, 0.35f) : (isRoot ? kMainSelectBgPitch : BLACK);
+        lcd.setForeColor(fill);
+        lcd.fillRect(bx, boxTop, boxW, boxH);
+        lcd.setForeColor(hit ? kThemeAccent : (isRoot ? kThemeHeader : kThemeLine));
+        lcd.drawRect(bx - 1, boxTop - 1, boxW + 2, boxH + 2);
+        lcd.setBackColor(fill);
+        lcd.setAlignment(CENTER);
+        lcd.setFont(FONT_07x09);
+        lcd.setForeColor(kThemeHeader);
+        snprintf(text, sizeof(text), "PAD %u", p + 1);
+        lcd.drawText(text, strlen(text), bx + boxW / 2, boxTop + 10);
+        lcd.setFont(FONT_14x18);
+        lcd.setForeColor(hit ? kThemeAccent : kThemeInk);
+        snprintf(text, sizeof(text), "%s%d", kPitchNoteName[pc], oct);
+        lcd.drawText(text, strlen(text), bx + boxW / 2, boxTop + 62);
+        lcd.setFont(FONT_07x09);
+        lcd.setForeColor(isRoot ? kThemeAmber : kThemeMid);
+        snprintf(text, sizeof(text), "%+d", n);
+        lcd.drawText(text, strlen(text), bx + boxW / 2, boxTop + 120);
+        lcd.setBackColor(BLACK);
+    }
+}
+
+void Controller::pitch_saveNotes(uint8_t fileNum_) {
+    /// @brief Writes every hit that has a note to File_XXX.rwn (stock firmware ignores this file).
+    char fileName[50];
+    snprintf(fileName, sizeof(fileName), "%s%03d%s", kFileStart, fileNum_ + 1, kPitchFileEnd);
+    static uint8_t buf[5 * kLayerLibrarySize * kBankLibrarySize * kBeatLibrarySize + 8];
+    uint16_t n = 0;
+    uint32_t pos = 6;
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++)
+        for (uint8_t b = 0; b < kBankLibrarySize; b++) {
+            const Bank& bank = layerLibrary[l].bankLibrary[b];
+            for (int16_t j = 0; j <= bank.lastActiveBeatNum; j++) {
+                const Beat& beat = bank.beatLibrary[j];
+                if (!beat.getActive() || (beat.note == 0)) continue;
+                buf[pos++] = l; buf[pos++] = b;
+                buf[pos++] = (uint8_t)(beat.startInterval >> 8); buf[pos++] = (uint8_t)(beat.startInterval & 0xFF);
+                buf[pos++] = (uint8_t)beat.note;
+                n++;
+            }
+        }
+    f_close(&sd.file);
+    if (n == 0) { f_unlink(fileName); return; }
+    buf[0] = 'R'; buf[1] = 'W'; buf[2] = 'N'; buf[3] = '1'; buf[4] = (uint8_t)(n >> 8); buf[5] = (uint8_t)(n & 0xFF);
+    if (f_open(&sd.file, fileName, FA_WRITE | FA_CREATE_ALWAYS) == FR_OK) {
+        f_write(&sd.file, buf, pos, &sd.byteswritten);
+        f_close(&sd.file);
+    }
+}
+
+void Controller::pitch_loadNotes(uint8_t fileNum_) {
+    /// @brief After a project loads: put the notes back on the matching hits (by drum, bank, position).
+    char fileName[50];
+    snprintf(fileName, sizeof(fileName), "%s%03d%s", kFileStart, fileNum_ + 1, kPitchFileEnd);
+    f_close(&sd.file);
+    if (f_open(&sd.file, fileName, FA_READ) != FR_OK) return;
+    uint8_t head[6];
+    UINT got = 0;
+    if ((f_read(&sd.file, head, 6, &got) == FR_OK) && (got == 6) && (head[0] == 'R') && (head[1] == 'W') && (head[2] == 'N') && (head[3] == '1')) {
+        uint16_t n = ((uint16_t)head[4] << 8) | head[5];
+        uint8_t e[5];
+        while (n--) {
+            if ((f_read(&sd.file, e, 5, &got) != FR_OK) || (got != 5)) break;
+            if ((e[0] >= kLayerLibrarySize) || (e[1] >= kBankLibrarySize)) continue;
+            Bank& bank = layerLibrary[e[0]].bankLibrary[e[1]];
+            const uint16_t st = ((uint16_t)e[2] << 8) | e[3];
+            for (int16_t j = 0; j <= bank.lastActiveBeatNum; j++)
+                if (bank.beatLibrary[j].getActive() && (bank.beatLibrary[j].startInterval == st)) { bank.beatLibrary[j].note = (int8_t)e[4]; break; }
+        }
+    }
+    f_close(&sd.file);
+}
+
+void Controller::pitch_deleteNotes(uint8_t fileNum_) {
+    char fileName[50];
+    snprintf(fileName, sizeof(fileName), "%s%03d%s", kFileStart, fileNum_ + 1, kPitchFileEnd);
+    f_close(&sd.file);
+    f_unlink(fileName);
+}
+
 void Controller::preview_schedule(uint8_t layerNum_) {
     /// @brief Custom: asks for the selected sample to be auditioned once the knob stops moving.
     if (!kSamplePreview) return;
@@ -6830,6 +7058,9 @@ void Controller::page_draw() {
             break;
         case PAGE_MAIN:
             page_drawMain();
+            break;
+        case PAGE_PITCH:
+            page_drawPitch();
             break;
         default:
             break;
@@ -12885,6 +13116,7 @@ void Controller::lcd_drawIoMenu() {
     lcd_drawIo_SyncOutData();
     lcd_drawIo_MidiInData();
     lcd_drawIo_MidiOutData();
+    lcd_drawIo_PitchData();   // custom
 }
 
 void Controller::lcd_drawIo_SyncInData() {
@@ -15894,7 +16126,7 @@ void Controller::file_loadAction() {
     // 4. TRANSACTION FLAG RESTORE
     // Release load-in-progress flag after SD transaction completes.
     loadAction = false;
-    if (alertType != ALERT_LOADERROR) currentFileNum = fileMenuCounter;   // custom
+    if (alertType != ALERT_LOADERROR) { currentFileNum = fileMenuCounter; pitch_loadNotes(fileMenuCounter); }   // custom
     project_markSaved();
 
     // 5. RESULT ALERT PRESENTATION
@@ -15937,7 +16169,7 @@ void Controller::file_saveAction() {
     // 3. SD SAVE EXECUTION & RESULT MAPPING
     // Execute SD save and map operation result to alert type.
     (sd_saveFile(fileMenuCounter) == SD_OK) ? alertType = ALERT_SAVESUCCESS : alertType = ALERT_SAVEERROR;
-    if (alertType == ALERT_SAVESUCCESS) { currentFileNum = fileMenuCounter; project_markSaved(); }   // custom: saved as this file
+    if (alertType == ALERT_SAVESUCCESS) { currentFileNum = fileMenuCounter; pitch_saveNotes(fileMenuCounter); project_markSaved(); }   // custom: saved as this file
     lcd_drawProjectName();
 
     // 4. TRANSACTION FLAG RESTORE
@@ -15989,6 +16221,7 @@ void Controller::file_clearAction() {
     // 2. SD CLEAR EXECUTION & RESULT MAPPING
     // Execute slot clear on SD and map result to alert type.
     (sd_clearFile(fileMenuCounter) == SD_OK) ? alertType = ALERT_CLEARSUCCESS : alertType = ALERT_CLEARERROR;
+    if (alertType == ALERT_CLEARSUCCESS) pitch_deleteNotes(fileMenuCounter);   // custom
     if ((alertType == ALERT_CLEARSUCCESS) && (currentFileNum == fileMenuCounter)) { currentFileNum = -1; lcd_drawProjectName(); }   // custom
 
     // 3. STATUS & LIBRARY REFRESH
@@ -21559,6 +21792,9 @@ void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
                     tBD.counterEnd = tBD.counterMax;
                 }
 
+                // Custom: Pitch mode note for this hit (semitones on top of the drum's PITCH).
+                if (pendingNote[layerNum_] != 0) tBD.increment *= exp2f((float)pendingNote[layerNum_] / 12.0f);
+
                 // Custom: per-drum envelope (attack / hold / decay), counted in output samples.
                 {
                     auto envSamples = [](uint8_t v, float maxMs) -> uint32_t {
@@ -23622,6 +23858,7 @@ void Controller::layerSong_setBeat(uint8_t layerNum_, uint8_t bankTab_, uint16_t
         // Commit beat, recalculate active/play indices, and refresh draw state.
         if (!duplicate) {
             bank.setBeat(beatNum, startInterval, endInterval);
+            bank.beatLibrary[beatNum].note = recordNote;   // custom: Pitch mode note (0 = normal hit)
             bank.setBeatFill(beatNum, fillType_, fillPattern_, fillTime_, fillLevel_);
             layerSong_calculateLastActiveBeatNum(layerNum_, bankTab_);
             layerSong_calculatePlayBeatNum(layerNum_, bankTab_, playInterval);
@@ -26410,8 +26647,10 @@ void Controller::interruptPlay() {
                                 }
                             }
                             swingDelayTicks[i] = groove_swingDelay(i, playInterval);   // custom per-drum swing
+                            pendingNote[i] = beat.note;                                  // custom Pitch mode note
                             if (fillVolMultiplier > 0.0f) layer_playBeat(layer.number, fillVolMultiplier);
                             swingDelayTicks[i] = 0;
+                            pendingNote[i] = 0;
 
                             // Advance to the next beat index
                             (playBeatNum < bank.lastActiveBeatNum) ? bank.playBeatNum += 1 : bank.playBeatNum = 0;
@@ -26427,7 +26666,9 @@ void Controller::interruptPlay() {
                         if (beatMicro.getInterval() == playInterval) {
                             if ((!layer.mute) && (layer.samplePlay) && ((playBeatMicroNum == 0) || ((playBeatMicroNum != 0) && (layer.fill)))) {
                                 fillVolMultiplier = kNumberDataLibrary[beatMicro.getLevel()].powMultiplier;
+                                pendingNote[i] = beat.note;   // custom: rolls keep their note
                                 if (fillVolMultiplier > 0.0f) layer_playBeat(layer.number, fillVolMultiplier);
+                                pendingNote[i] = 0;
                             }
 
                             // Advance micro-step index within the fill

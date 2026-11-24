@@ -1293,7 +1293,11 @@ typedef enum {
     ENC_GROOVE_CORRECT                              = 0x67,  // custom: Rhythm menu knob 8
     ENC_SMP_ATTACK                                  = 0x68,  // custom: sample page knobs
     ENC_SMP_HOLD                                    = 0x69,
-    ENC_SMP_DECAY                                   = 0x6A
+    ENC_SMP_DECAY                                   = 0x6A,
+    ENC_PITCH_DRUM                                  = 0x6B,  // custom: Pitch mode knobs (Sync menu, bottom row)
+    ENC_PITCH_ROOT                                  = 0x6C,
+    ENC_PITCH_SCALE                                 = 0x6D,
+    ENC_PITCH_OCTAVE                                = 0x6E
 } EncoderFunc;
 
 const EncoderFunc encoderLocalFunction[][8] = {
@@ -1312,7 +1316,7 @@ const EncoderFunc encoderLocalFunction[][8] = {
     // METRO_MENU = 0x06
     {ENC_METRO_ACTIVE, ENC_METRO_PRECOUNT, ENC_METRO_SAMPLE, ENC_METRO_VOLUME, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE},
     // IO_MENU = 0x07
-    {ENC_IO_SYNCIN, ENC_IO_SYNCOUT, ENC_IO_MIDIIN, ENC_IO_MIDIOUT, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE},
+    {ENC_IO_SYNCIN, ENC_IO_SYNCOUT, ENC_IO_MIDIIN, ENC_IO_MIDIOUT, ENC_PITCH_DRUM, ENC_PITCH_ROOT, ENC_PITCH_SCALE, ENC_PITCH_OCTAVE},
     // FILTER_0_MENU = 0x08
     {ENC_FILTER_0_ACTIVE, ENC_FILTER_0_TYPE, ENC_FILTER_0_SLOPE, ENC_FILTER_0_FREQ, ENC_FILTER_0_RESON, ENC_FILTER_0_DRIVE, ENC_FILTER_0_DRY, ENC_FILTER_0_WET},
     // FILTER_1_MENU = 0x09
@@ -1473,7 +1477,11 @@ const EncoderFuncData kEncoderFuncDataLibrary[] = {
     {ENC_GROOVE_CORRECT,      ENC_RES_S, "CORRECT   ", "RHY   ", "  %", false},
     {ENC_SMP_ATTACK,          ENC_RES_F, "ATTACK    ", "LAYER ", " MS", false},
     {ENC_SMP_HOLD,            ENC_RES_F, "HOLD      ", "LAYER ", " MS", false},
-    {ENC_SMP_DECAY,           ENC_RES_F, "DECAY     ", "LAYER ", " MS", false}
+    {ENC_SMP_DECAY,           ENC_RES_F, "DECAY     ", "LAYER ", " MS", false},
+    {ENC_PITCH_DRUM,          ENC_RES_S, "DRUM      ", "PITCH ", "   ", false},
+    {ENC_PITCH_ROOT,          ENC_RES_S, "ROOT      ", "PITCH ", "   ", false},
+    {ENC_PITCH_SCALE,         ENC_RES_S, "SCALE     ", "PITCH ", "   ", false},
+    {ENC_PITCH_OCTAVE,        ENC_RES_S, "OCTAVE    ", "PITCH ", "   ", false}
 };
 
 // Knob layout while the Sample page is open (any of the three Layer Inst menus).
@@ -1481,7 +1489,7 @@ const EncoderFunc kSamplePageFunctions[8] = {ENC_INST_0_INST, ENC_INST_0_SAMPLE,
                                              ENC_INST_1_START, ENC_INST_1_END, ENC_SMP_DECAY, ENC_FNC_NONE};
 
 // The table above is indexed by EncoderFunc value, so every entry must sit at its own enum number.
-static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_SMP_DECAY + 1,
+static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_PITCH_OCTAVE + 1,
               "kEncoderFuncDataLibrary must have one entry per EncoderFunc value");
 
 typedef enum {
@@ -2206,8 +2214,19 @@ typedef enum {
     PAGE_LFO                                        = 0x07,
     PAGE_GROOVE                                     = 0x08,  // Rhythm key twice: per-drum swing + timing correct
     PAGE_SAMPLE                                     = 0x09,  // Layer Inst tapped alone: waveform, trim, envelope
-    PAGE_MAIN                                       = 0x0A   // custom main screen: zoomed lanes, decay hits, focus lane
+    PAGE_MAIN                                       = 0x0A,  // custom main screen: zoomed lanes, decay hits, focus lane
+    PAGE_PITCH                                      = 0x0B   // Sync key: one drum played across the 10 pads in a scale
 } PageView;
+
+// Custom Pitch mode: scales (semitone steps from the root). Pads 1-10 climb the scale from the root.
+const uint8_t kPitchScaleCount                      = 6;
+const char kPitchScaleName[kPitchScaleCount][14]    = {"MAJOR", "MINOR", "MINOR PENTA", "DORIAN", "BLUES", "CHROMATIC"};
+const uint8_t kPitchScaleLen[kPitchScaleCount]      = {7, 7, 5, 7, 6, 12};
+const uint8_t kPitchScaleSteps[kPitchScaleCount][12] = {
+    {0, 2, 4, 5, 7, 9, 11}, {0, 2, 3, 5, 7, 8, 10}, {0, 3, 5, 7, 10}, {0, 2, 3, 5, 7, 9, 10}, {0, 3, 5, 6, 7, 10},
+    {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}};
+const char kPitchNoteName[12][3]                    = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+const char kPitchFileEnd[]                          = ".rwn";   // notes sidecar next to each project file
 
 // Custom main screen (replaces the stock 10 lanes whenever no other page is open).
 const bool kMainView                                = true;
@@ -2254,7 +2273,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.45 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.50 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -7129,6 +7148,7 @@ struct Beat {
 
     uint16_t data                                   = 0x0000;
     uint8_t fillTarget                              = NULL_FILL_TARGET;
+    int8_t note                                     = 0;   // custom: semitones for Pitch mode (uses a padding byte)
     uint16_t startInterval                          = 0;
     uint16_t endInterval                            = 0;
 
@@ -7152,6 +7172,7 @@ struct Beat {
         startInterval = 0;
         endInterval = 0;
         fillTarget = NULL_FILL_TARGET;
+        note = 0;
     }
 
     // Active bit logic

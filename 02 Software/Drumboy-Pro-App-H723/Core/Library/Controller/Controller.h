@@ -471,6 +471,14 @@ class Controller {
     void lfo_toggleTarget(uint8_t layerNum_);
     void preview_schedule(uint8_t layerNum_);
     void lcd_drawProjectName();
+    int8_t pitch_padNote(uint8_t pad_);
+    void pitch_knob(uint8_t which_, int8_t step_);
+    void pitch_pad(uint8_t pad_);
+    void lcd_drawIo_PitchData();
+    void page_drawPitch();
+    void pitch_saveNotes(uint8_t fileNum_);
+    void pitch_loadNotes(uint8_t fileNum_);
+    void pitch_deleteNotes(uint8_t fileNum_);
     float noteRepeat_step();
     void noteRepeat_tick();
     void noteRepeat_stopped();
@@ -542,6 +550,14 @@ class Controller {
     uint16_t mainLaneY[kLayerLibrarySize] = {0};
     uint16_t mainLaneH[kLayerLibrarySize] = {0};
     char mainCounter[24] = "";
+    uint8_t pitchLayer = 0;                                             // Pitch mode: which drum the pads play
+    uint8_t pitchRootPad = 0;                                           // which pad (0-9) plays the root
+    uint8_t pitchRoot = 0;                                              // 0 = C .. 11 = B
+    uint8_t pitchScale = 2;                                             // minor pentatonic
+    int8_t pitchOctave = 0;                                             // -2 .. +2
+    int8_t pitchLastPad = -1;                                           // last pad played (highlighted)
+    int8_t recordNote = 0;                                              // note stamped on hits written by layerSong_setBeat
+    volatile int8_t pendingNote[kLayerLibrarySize] = {0};               // note for the hit being triggered
     volatile bool noteRepeatHeld = false;                               // Metronome key held = Note Repeat
     volatile uint16_t noteRepeatPads = 0;                               // pads currently held (bit per drum)
     volatile int32_t noteRepeatLast[kLayerLibrarySize] = {0};           // last tick each drum repeated on
