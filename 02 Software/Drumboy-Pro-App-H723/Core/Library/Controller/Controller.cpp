@@ -5753,17 +5753,23 @@ void Controller::page_drawGroove() {
         const uint16_t bx = cx - barW / 2;
         const uint16_t hMaster = (uint16_t)(((master - kMinSwing) / span) * (barBot - barTop) + 0.5f);
         const uint16_t hTotal = (uint16_t)(((total - kMinSwing) / span) * (barBot - barTop) + 0.5f);
-        lcd.setBackColor(BLACK);
-        lcd.clearRect(bx - 3, barTop - 3, barW + 6, (barBot - barTop) + 6);
+        // Paint every part of the bar exactly once (no clear first), so redraws don't flash.
         lcd.setForeColor(sel ? page_mix(BLACK, kThemeAccent, 0.6f) : kThemeLine);
         lcd.drawRect(bx - 2, barTop - 2, barW + 4, (barBot - barTop) + 4);
-        if (hMaster > 0) {
-            lcd.setForeColor(page_mix(BLACK, kThemeInk, 0.35f));
-            lcd.fillRect(bx, barBot - hMaster, barW, hMaster);
+        lcd.setForeColor(BLACK);
+        lcd.drawRect(bx - 1, barTop - 1, barW + 2, (barBot - barTop) + 2);
+        const uint16_t barH = barBot - barTop;
+        if (hTotal < barH) {
+            lcd.setForeColor(BLACK);
+            lcd.fillRect(bx, barTop, barW, barH - hTotal);
         }
         if (hTotal > hMaster) {
             lcd.setForeColor(kThemeAccent);
             lcd.fillRect(bx, barBot - hTotal, barW, hTotal - hMaster);
+        }
+        if (hMaster > 0) {
+            lcd.setForeColor(page_mix(BLACK, kThemeInk, 0.35f));
+            lcd.fillRect(bx, barBot - hMaster, barW, hMaster);
         }
         lcd.setFont(FONT_10x14);
         lcd.setForeColor(sel ? kThemeAccent : kThemeInk);
@@ -6390,9 +6396,14 @@ void Controller::main_drawStripColumn(uint16_t c) {
     for (uint8_t l = 0; l < kLayerLibrarySize; l++) if (stripBits[c] & (1u << l)) col[4 + l] = dot;
     const uint32_t t0 = (uint32_t)(((uint64_t)song * c) / kMainGridW), t1 = (uint32_t)(((uint64_t)song * (c + 1)) / kMainGridW);
     if (barInterval && ((t0 % barInterval) == 0 || (t0 / barInterval) != ((t1 ? t1 - 1 : 0) / barInterval))) { col[15] = kThemeLine; col[16] = kThemeLine; }
-    if (((int32_t)c == wx0) || ((int32_t)c == wx1 - 1)) for (uint8_t r = 0; r < 18; r++) col[r] = kThemeAccent;
-    else if (((int32_t)c > wx0) && ((int32_t)c < wx1 - 1)) { col[0] = kThemeAccent; col[17] = kThemeAccent; }
-    if ((int16_t)c == stripPlay) for (uint8_t r = 2; r < 16; r++) col[r] = kThemeAccent;
+    const bool wholeSong = (mainViewStart == 0) && (mainViewLen >= song);
+    if (!wholeSong && ((int32_t)c >= wx0) && ((int32_t)c < wx1)) {
+        // visible part of the song: faint background band, orange line underneath
+        const RGB16Color band = mix565(0x0000, kThemeLine, 0.25f);
+        for (uint8_t r = 0; r < 17; r++) if (col[r] == 0x0000) col[r] = band;
+        col[17] = kThemeAccent;
+    }
+    if ((int16_t)c == stripPlay) for (uint8_t r = 0; r < 17; r++) col[r] = kThemeInk;
     lcd.drawColumn(kMainGridX + c, 102, 18, col);
 }
 
