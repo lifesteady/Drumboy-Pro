@@ -394,6 +394,9 @@ void Controller::update() {
         // Custom: main screen.
         main_update();
 
+        // Custom: Note Repeat while the sequencer is stopped (free-running at the grid rate).
+        noteRepeat_stopped();
+
         // 4. FILESYSTEM MAINTENANCE
         // Recover SD subsystem if media access is lost.
         if (!sd.ready) {
@@ -1617,6 +1620,13 @@ void Controller::keyboard_action() {
         // 2. LAYER KEYPAD DISPATCH
         if (keyboard.keyLayer.read) {
             for (uint8_t layerNum = 0; layerNum < kLayerLibrarySize; layerNum++) {
+                // Custom: remember which pads are held (Note Repeat).
+                if (keyboard.keyLayer.changeState[layerNum] == KEYSTATE_PRESS) {
+                    noteRepeatPads |= (uint16_t)(1u << layerNum);
+                    noteRepeatStopTick[layerNum] = HAL_GetTick();
+                } else if (keyboard.keyLayer.changeState[layerNum] == KEYSTATE_RELEASE) {
+                    noteRepeatPads &= (uint16_t)~(1u << layerNum);
+                }
                 switch (keyboard.keyLayer.changeState[layerNum]) {
                     case KEYSTATE_PRESS:
                         if (keyboard.muteKeyPress) {
@@ -1664,6 +1674,22 @@ void Controller::keyboard_action() {
                             ledLayerPlayMode = false;
                             ledLayerSelectFlag = true;
                             ledLayerSelectData = 0x03 << (selectedEncoderBank * 2);
+                        } else if (noteRepeatHeld && playActive && !metronome.precountState && !alertFlag) {
+                            // Custom Note Repeat: sound now, record on the nearest grid line, then the
+                            // sequencer repeats it on every following grid line while the pad is held.
+                            Layer& layer = layerLibrary[layerNum];
+                            if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(layerNum, 1.0f);
+                            const float step = noteRepeat_step();
+                            int32_t idx = (int32_t)((float)playInterval / step + 0.5f);
+                            int32_t at = (int32_t)((float)idx * step + 0.5f);
+                            if (at >= (int32_t)songInterval) at = 0;
+                            noteRepeatLast[layerNum] = at;
+                            if (recordActive) {
+                                undo_checkpoint(UNDO_RECORD);
+                                HAL_NVIC_DisableIRQ(TIM15_IRQn);
+                                layerSong_setBeat(layerNum, activeSongBank, (uint16_t)at, 0, 0, 0, 0, true);
+                                HAL_NVIC_EnableIRQ(TIM15_IRQn);
+                            }
                         } else {
                             Layer& layer = layerLibrary[layerNum];
                             if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(layerNum, 1.0f);
@@ -2626,7 +2652,11 @@ void Controller::keyboard_action() {
                                 break;
 
                             case KEY_METRONOME:
-                                if (!alertFlag) metro_select();
+                                // Custom: this key is now NOTE REPEAT (hold it, then hold pads).
+                                // The metronome menu moved to the Mixer key (press Mixer twice).
+                                noteRepeatHeld = true;
+                                for (uint8_t l = 0; l < kLayerLibrarySize; l++) { noteRepeatLast[l] = -1; noteRepeatStopTick[l] = HAL_GetTick(); }
+                                if (!alertFlag) undo_showText("REPT ");
                                 break;
 
                             case KEY_MIXER:
@@ -2695,6 +2725,11 @@ void Controller::keyboard_action() {
 
                     case KEYSTATE_RELEASE:
                         switch (i) {
+                            case KEY_METRONOME:
+                                noteRepeatHeld = false;
+                                textClearFlag = true;
+                                break;
+
                             case KEY_LFO:
                                 keyboard.lfoKeyPress = false;
                                 // Custom: tapping LFO on its own (no pad) while in the LFO menu toggles the LFO page.
@@ -6516,6 +6551,49 @@ void Controller::main_update() {
     if ((HAL_GetTick() - mainLastTick) < kMainFrameMs) return;
     mainLastTick = HAL_GetTick();
     page_draw();
+}
+
+////////////////////////////////////////////////////////////////////////////////
+/* Custom: Note Repeat (Metronome key) ---------------------------------------*/
+////////////////////////////////////////////////////////////////////////////////
+
+float Controller::noteRepeat_step() {
+    /// @brief Repeat rate = the QUANTIZE grid (straight or triplet); 1:16 when QUANTIZE is OFF.
+    if ((rhythm.quantize == kQuantizeOff) || (rhythm.quantize > kMaxQuantize)) return kQuantizeInterval[2];
+    return kQuantizeInterval[rhythm.quantize];
+}
+
+void Controller::noteRepeat_tick() {
+    /// @brief Sequencer interrupt: on every grid line, re-trigger (and record) each held pad.
+    if (!noteRepeatHeld || (noteRepeatPads == 0) || metronome.precountState) return;
+    const float step = noteRepeat_step();
+    const int32_t idx = (int32_t)((float)playInterval / step + 0.5f);
+    const int32_t grid = (int32_t)((float)idx * step + 0.5f);
+    if (grid != (int32_t)playInterval) return;
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
+        if (!(noteRepeatPads & (1u << l))) continue;
+        if (noteRepeatLast[l] == (int32_t)playInterval) continue;   // already hit on this line (pad press)
+        noteRepeatLast[l] = (int32_t)playInterval;
+        Layer& layer = layerLibrary[l];
+        if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(l, 1.0f);
+        if (recordActive) layerSong_setBeat(l, activeSongBank, playInterval, 0, 0, 0, 0, true);
+    }
+}
+
+void Controller::noteRepeat_stopped() {
+    /// @brief Main loop: while stopped, held pads repeat at the grid rate of the current tempo.
+    if (!noteRepeatHeld || (noteRepeatPads == 0) || playActive) return;
+    const float msPerTick = 60000.0f / ((float)(rhythm.tempo ? rhythm.tempo : 90) * (float)kMeasureInterval);
+    const uint32_t period = (uint32_t)(noteRepeat_step() * msPerTick + 0.5f);
+    const uint32_t now = HAL_GetTick();
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
+        if (!(noteRepeatPads & (1u << l))) continue;
+        if ((int32_t)(now - noteRepeatStopTick[l]) < (int32_t)period) continue;
+        noteRepeatStopTick[l] += period;
+        if ((int32_t)(now - noteRepeatStopTick[l]) > (int32_t)period) noteRepeatStopTick[l] = now;   // don't burst after a stall
+        Layer& layer = layerLibrary[l];
+        if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(l, 1.0f);
+    }
 }
 
 void Controller::preview_schedule(uint8_t layerNum_) {
@@ -26367,6 +26445,7 @@ void Controller::interruptPlay() {
 
             // 4. SONG NAVIGATION & LOOP MANAGEMENT
             // Advance timeline, evaluate stop/reset triggers, and handle loop wrap.
+            noteRepeat_tick();   // custom: Note Repeat on this tick
             playInterval += 1;
             if (playInterval < songInterval) {
                 // Handle pending Stop/Reset requests with visual feedback

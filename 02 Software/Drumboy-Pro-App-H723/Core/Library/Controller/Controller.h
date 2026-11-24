@@ -471,6 +471,9 @@ class Controller {
     void lfo_toggleTarget(uint8_t layerNum_);
     void preview_schedule(uint8_t layerNum_);
     void lcd_drawProjectName();
+    float noteRepeat_step();
+    void noteRepeat_tick();
+    void noteRepeat_stopped();
     void sd_encodeProject(uint8_t* data);
     uint32_t project_hash();
     void project_markSaved();
@@ -539,6 +542,10 @@ class Controller {
     uint16_t mainLaneY[kLayerLibrarySize] = {0};
     uint16_t mainLaneH[kLayerLibrarySize] = {0};
     char mainCounter[24] = "";
+    volatile bool noteRepeatHeld = false;                               // Metronome key held = Note Repeat
+    volatile uint16_t noteRepeatPads = 0;                               // pads currently held (bit per drum)
+    volatile int32_t noteRepeatLast[kLayerLibrarySize] = {0};           // last tick each drum repeated on
+    uint32_t noteRepeatStopTick[kLayerLibrarySize] = {0};               // (stopped transport) next repeat time
     uint32_t savedHash = 0;                                             // unsaved-changes marker: project hash at last load/save/new
     bool savedHashValid = false;
     bool projectDirty = false;
