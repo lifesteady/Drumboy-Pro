@@ -385,6 +385,9 @@ void Controller::update() {
         // Custom: audition the sample chosen in the INST menu once the knob has settled.
         preview_update();
 
+        // Custom: a new recording take starts a new undo step.
+        if (!recordActive) undoTakeSaved = false;
+
         // 4. FILESYSTEM MAINTENANCE
         // Recover SD subsystem if media access is lost.
         if (!sd.ready) {
@@ -494,10 +497,12 @@ void Controller::update() {
         }
         if ((layerSongPasteActionFlag) && (layerSongCopy.copyActive != -1)) {
             layerSongPasteActionFlag = false;
+            undo_checkpoint(UNDO_SINGLE);
             layerSong_paste();
         }
         if ((layerSongResetActionFlag) && (selectedLayerNum != -1)) {
             layerSongResetActionFlag = false;
+            undo_checkpoint(UNDO_SINGLE);
             layerSong_resetAllBeats(selectedLayerNum, activeSongBank);
         }
 
@@ -541,6 +546,7 @@ void Controller::update() {
 
                 // Write note to the current sequencer step if Recording is enabled
                 if (recordActive) {
+                    undo_checkpoint(UNDO_RECORD);   // custom: one undo step per take
                     if (!metronome.precountState) {
                         layerSong_setBeat(layerNum, activeSongBank, playInterval, 0, 0, 0, 0, true);
                     } else {
@@ -1328,6 +1334,7 @@ uint16_t Controller::calculateTriggerInterval() {
 }
 
 void Controller::adjustMeasureBarTiming() {
+    undo_reset();   // custom: undo can't reach back across a bar/measure change
     /// @brief Synchronizes the sequencer grid with new timing settings and prunes invalid data.
     /// Recalculates all internal timing intervals and removes any beats that fall outside
     /// the newly defined song boundaries.
@@ -1641,6 +1648,7 @@ void Controller::keyboard_action() {
                             Layer& layer = layerLibrary[layerNum];
                             if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(layerNum, 1.0f);
                             if (recordActive) {
+                                undo_checkpoint(UNDO_RECORD);   // custom: one undo step per take
                                 if (!metronome.precountState) {
                                     layerSong_setBeat(layerNum, activeSongBank, playInterval, 0, 0, 0, 0, true);
                                 } else {
@@ -1951,7 +1959,7 @@ void Controller::keyboard_action() {
                                             break;
 
                                         case LAYER_SONG_MENU:
-                                            (keyboard.shiftKeyPress) ? layerSong_shiftSelectedBeat(false) : layerSong_beatLeft();
+                                            if (keyboard.shiftKeyPress) { undo_checkpoint(UNDO_NUDGE); layerSong_shiftSelectedBeat(false); } else layerSong_beatLeft();
                                             break;
                                     }
                                 }
@@ -2017,7 +2025,7 @@ void Controller::keyboard_action() {
                                             break;
 
                                         case LAYER_SONG_MENU:
-                                            (keyboard.shiftKeyPress) ? layerSong_shiftSelectedBeat(true) : layerSong_beatRight();
+                                            if (keyboard.shiftKeyPress) { undo_checkpoint(UNDO_NUDGE); layerSong_shiftSelectedBeat(true); } else layerSong_beatRight();
                                             break;
                                     }
                                 }
@@ -2213,6 +2221,7 @@ void Controller::keyboard_action() {
 
                                         case LAYER_SONG_MENU:
                                             if (layerLibrary[selectedLayerNum].bankLibrary[activeSongBank].lastActiveBeatNum == -1) {
+                                                undo_checkpoint(UNDO_SINGLE);   // custom: hold-ADD beat generator
                                                 layerBeatKeyFlag = true;
                                                 layerBeatKeyStage = 0;
                                                 startLongKeyTimer();
@@ -2229,6 +2238,10 @@ void Controller::keyboard_action() {
                                 if (alertFlag) {
                                     lcd_clearAlert();
                                     alertFlag = false;
+                                } else if (keyboard.shiftKeyPress) {
+                                    // Custom: hold ADD + tap CLEAR = UNDO
+                                    undo_cancelShiftActions();
+                                    undo_undo();
                                 } else if (keyboard.muteKeyPress) {
                                     for (uint8_t i = 0; i < kLayerLibrarySize; i++) {
                                         if (layerLibrary[i].mute) layerInst_setMute(i, false);
@@ -2336,6 +2349,12 @@ void Controller::keyboard_action() {
                                 break;
 
                             case KEY_PASTE:
+                                if (keyboard.shiftKeyPress && !alertFlag) {
+                                    // Custom: hold ADD + tap PASTE = REDO
+                                    undo_cancelShiftActions();
+                                    undo_redo();
+                                    break;
+                                }
                                 switch (menu) {
                                     case LAYER_INST_0_MENU:
 
@@ -2439,6 +2458,7 @@ void Controller::keyboard_action() {
                                 if (layerSongResetKeyFlag) {
                                     keyboard.longKeyCounter = 0;
                                     layerSongResetKeyFlag = false;
+                                    undo_checkpoint(UNDO_SINGLE);
                                     layerSong_resetSelectedBeat();
                                 }
                                 if (rhythmUnlockKeyFlag) {
@@ -2489,6 +2509,7 @@ void Controller::keyboard_action() {
                                     keyboard.longKeyCounter = 0;
                                     if (layerSongPasteKeyFlag) {
                                         if ((fillCopy.active) && (layerLibrary[selectedLayerNum].bankLibrary[activeSongBank].lastActiveBeatNum != -1) && (selectedBeatNum != -1)) {
+                                            undo_checkpoint(UNDO_SINGLE);
                                             layerSong_setSelectedBeatFill(fillCopy.type, fillCopy.pattern, fillCopy.time, fillCopy.level);
                                         }
                                         layerFillPasteKeyFlag = false;
@@ -5270,6 +5291,146 @@ void Controller::page_toggle(PageView page_) {
     (page == page_) ? page_close() : page_open(page_);
 }
 
+////////////////////////////////////////////////////////////////////////////////
+/* Custom: Undo / Redo --------------------------------------------------------*/
+////////////////////////////////////////////////////////////////////////////////
+// The whole song (every drum, every bank) is copied to SDRAM before each edit.
+// Timeline: positions 0..undoMax, the live song is position undoPos. Every other
+// position has a saved copy. Hold ADD + tap CLEAR = undo, hold ADD + tap PASTE = redo.
+
+static const uint32_t kUndoLayerBytes = sizeof(Bank) * kBankLibrarySize;
+static const uint32_t kUndoSnapshotBytes = kUndoLayerBytes * kLayerLibrarySize;
+static_assert((uint32_t)kUndoSlots * kUndoSnapshotBytes <= kUndoRegionBytes, "undo history does not fit its SDRAM region");
+
+uint32_t Controller::undo_slotAddress(uint8_t pos_) {
+    return RAM_UNDO_ADDRESS + (((undoBase + pos_) % kUndoSlots) * kUndoSnapshotBytes);
+}
+
+void Controller::undo_save(uint8_t pos_) {
+    uint8_t* dst = (uint8_t*)undo_slotAddress(pos_);
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) memcpy(dst + (l * kUndoLayerBytes), layerLibrary[l].bankLibrary, kUndoLayerBytes);
+}
+
+bool Controller::undo_slotEqualsLive(uint8_t pos_) {
+    // Compares beats only (the play position fields change by themselves while playing).
+    const uint8_t* src = (const uint8_t*)undo_slotAddress(pos_);
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
+        const Bank* saved = (const Bank*)(src + (l * kUndoLayerBytes));
+        for (uint8_t b = 0; b < kBankLibrarySize; b++) {
+            const Bank& live = layerLibrary[l].bankLibrary[b];
+            if (saved[b].lastActiveBeatNum != live.lastActiveBeatNum) return false;
+            if (memcmp(saved[b].beatLibrary, live.beatLibrary, sizeof(live.beatLibrary)) != 0) return false;
+            if (memcmp(saved[b].beatFillLibrary, live.beatFillLibrary, sizeof(live.beatFillLibrary)) != 0) return false;
+        }
+    }
+    return true;
+}
+
+void Controller::undo_load(uint8_t pos_) {
+    const uint8_t* src = (const uint8_t*)undo_slotAddress(pos_);
+    // Pause the sequencer interrupt (not audio) while the song is swapped, then re-find
+    // each drum's next hit from the current play position.
+    HAL_NVIC_DisableIRQ(TIM15_IRQn);
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
+        memcpy(layerLibrary[l].bankLibrary, src + (l * kUndoLayerBytes), kUndoLayerBytes);
+        for (uint8_t b = 0; b < kBankLibrarySize; b++) {
+            layerLibrary[l].bankLibrary[b].playBeatNum = -1;
+            layerLibrary[l].bankLibrary[b].playBeatMicroNum = -1;
+        }
+        layerSong_calculatePlayBeatNum(l, activeSongBank, playInterval);
+    }
+    HAL_NVIC_EnableIRQ(TIM15_IRQn);
+
+    // Redraw the lanes (an open page keeps them hidden until it closes).
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) lcd_drawSong(l, activeSongBank);
+    if ((menu == LAYER_SONG_MENU) && (selectedLayerNum >= 0) && (selectedLayerNum < kLayerLibrarySize)) {
+        const int8_t last = layerLibrary[selectedLayerNum].bankLibrary[activeSongBank].lastActiveBeatNum;
+        if (last < 0) selectedBeatNum = -1;
+        else if ((selectedBeatNum < 0) || (selectedBeatNum > last)) selectedBeatNum = 0;
+        if (selectedBeatNum >= 0) lcd_drawBeat(selectedLayerNum, activeSongBank, selectedBeatNum, true);
+        lcd_drawLayerSong_BeatFillTypeData(selectedLayerNum);
+        lcd_drawLayerSong_BeatFillPatternData(selectedLayerNum);
+        lcd_drawLayerSong_BeatFillTimeData(selectedLayerNum);
+        lcd_drawLayerSong_BeatFillLevelData(selectedLayerNum);
+        lcd_drawLayerSong_BeatFillGraphData(selectedLayerNum);
+    }
+}
+
+void Controller::undo_reset() {
+    // Used when the song is replaced (new / load) or the bar length changes.
+    undoBase = 0;
+    undoPos = 0;
+    undoMax = 0;
+    undoLastKind = UNDO_NONE;
+    undoTakeSaved = false;
+}
+
+void Controller::undo_checkpoint(UndoKind kind_) {
+    // Call BEFORE an edit. Quick repeats of the same kind of edit become one step.
+    const uint32_t now = HAL_GetTick();
+    if (kind_ == UNDO_RECORD) {
+        if (undoTakeSaved) return;       // already saved at the first hit of this take
+        undoTakeSaved = true;
+    } else if ((kind_ == undoLastKind) && (kind_ != UNDO_SINGLE)) {
+        const uint32_t window = (kind_ == UNDO_FILL) ? kUndoMergeFillMs : kUndoMergeNudgeMs;
+        if ((now - undoLastTick) < window) { undoLastTick = now; return; }
+    }
+    undoLastKind = kind_;
+    undoLastTick = now;
+
+    undo_save(undoPos);
+    undoPos++;
+    undoMax = undoPos;                   // a new edit drops any redo steps
+    if (undoMax >= kUndoSlots) {         // full: forget the oldest step
+        undoBase = (uint8_t)((undoBase + 1) % kUndoSlots);
+        undoPos--;
+        undoMax--;
+    }
+}
+
+void Controller::undo_undo() {
+    undoLastKind = UNDO_NONE;
+    if (undoPos == 0) { undo_showText("NONE "); return; }
+    undo_save(undoPos);                  // keep the current song so REDO can return to it
+    int16_t target = (int16_t)undoPos - 1;
+    while ((target > 0) && undo_slotEqualsLive((uint8_t)target)) target--;   // skip steps that changed nothing
+    if (undo_slotEqualsLive((uint8_t)target)) { undo_showText("NONE "); return; }
+    undoPos = (uint8_t)target;
+    undo_load(undoPos);
+    undo_showText("UNDO ");
+}
+
+void Controller::undo_redo() {
+    undoLastKind = UNDO_NONE;
+    if (undoPos >= undoMax) { undo_showText("NONE "); return; }
+    undo_save(undoPos);
+    int16_t target = (int16_t)undoPos + 1;
+    while ((target < undoMax) && undo_slotEqualsLive((uint8_t)target)) target++;
+    if (undo_slotEqualsLive((uint8_t)target)) { undo_showText("NONE "); return; }
+    undoPos = (uint8_t)target;
+    undo_load(undoPos);
+    undo_showText("REDO ");
+}
+
+void Controller::undo_cancelShiftActions() {
+    // ADD was pressed first (as the shift key); cancel anything its own press armed.
+    stopLongKeyTimer();
+    keyboard.longKeyCounter = 0;
+    layerBeatKeyFlag = false;
+    layerBeatKeyStage = 0;
+    rhythmLockKeyFlag = false;
+    masterUnmuteKeyFlag = false;
+    hpUnmuteKeyFlag = false;
+    loUnmuteKeyFlag = false;
+    liUnmuteKeyFlag = false;
+}
+
+void Controller::undo_showText(const char* text_) {
+    strncpy(undoText, text_, 5);
+    undoText[5] = 0;
+    textUndoFlag = true;
+}
+
 void Controller::preview_schedule(uint8_t layerNum_) {
     /// @brief Custom: asks for the selected sample to be auditioned once the knob stops moving.
     if (!kSamplePreview) return;
@@ -6662,6 +6823,7 @@ void Controller::sd_getInstLibrary() {
 }
 
 void Controller::sd_getSampleLibrary() {
+    undo_reset();   // custom: the library scan uses sample RAM as scratch space
     /// @brief Indexes WAV samples per instrument and builds per-instrument metadata cache files (.ins).
     /// Consumes the instrument master index and writes sorted sample entries using DMA-safe buffering.
 
@@ -13779,6 +13941,12 @@ void Controller::lcd_drawCopyPaste() {
 
         // 4. PASTE NOTIFICATION
         // Draw PASTE text and start auto-clear timer.
+    } else if (textUndoFlag) {
+        textUndoFlag = false;
+        textShow = true;
+        startTextTimer();
+        lcd.setForeColor(kThemeAccent);
+        lcd.drawText(undoText, 5, 170, 112);
     } else if (textPasteFlag) {
         textPasteFlag = false;
         textShow = true;
@@ -14406,6 +14574,7 @@ void Controller::file_newSelect() {
 }
 
 void Controller::file_newAction() {
+    undo_reset();   // custom
     /// @brief Executes New File flow by resetting layer/song/modulation/system runtime state.
 
     // 1. ALERT CLEANUP
@@ -14465,6 +14634,7 @@ void Controller::file_loadSelect() {
 }
 
 void Controller::file_loadAction() {
+    undo_reset();   // custom
     /// @brief Loads selected file from SD and maps result to user-visible alert state.
 
     // 1. PRE-LOAD CLEANUP
@@ -21940,6 +22110,7 @@ void Controller::layerSong_menuLeft() {
 
 void Controller::layerSong_menuUp(uint8_t tab_) {
     /// @brief Increments Layer Song fill parameters based on active tab mapping.
+    undo_checkpoint(UNDO_FILL);   // custom
 
     Layer& layer = layerLibrary[selectedLayerNum];
 
@@ -21986,6 +22157,7 @@ void Controller::layerSong_menuUp(uint8_t tab_) {
 
 void Controller::layerSong_menuDown(uint8_t tab_) {
     /// @brief Decrements Layer Song fill parameters based on active tab mapping.
+    undo_checkpoint(UNDO_FILL);   // custom
 
     Layer& layer = layerLibrary[selectedLayerNum];
 

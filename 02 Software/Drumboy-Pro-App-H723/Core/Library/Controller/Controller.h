@@ -470,6 +470,16 @@ class Controller {
     void page_toggle(PageView page_);
     void lfo_toggleTarget(uint8_t layerNum_);
     void preview_schedule(uint8_t layerNum_);
+    uint32_t undo_slotAddress(uint8_t pos_);
+    void undo_save(uint8_t pos_);
+    bool undo_slotEqualsLive(uint8_t pos_);
+    void undo_load(uint8_t pos_);
+    void undo_reset();
+    void undo_checkpoint(UndoKind kind_);
+    void undo_undo();
+    void undo_redo();
+    void undo_cancelShiftActions();
+    void undo_showText(const char* text_);
     void preview_update();
     void preview_stopVoices();
     void preview_play(uint8_t layerNum_);
@@ -484,6 +494,12 @@ class Controller {
     void page_drawEffect(uint8_t effectNum_);
     void page_drawLfo();
     void layerInst_lfoGesture(uint8_t layerNum_, uint8_t lfo_);
+    uint8_t undoBase = 0, undoPos = 0, undoMax = 0;                     // undo timeline (see undo_checkpoint)
+    UndoKind undoLastKind = UNDO_NONE;
+    uint32_t undoLastTick = 0;
+    bool undoTakeSaved = false;                                         // one undo step per recording take
+    bool textUndoFlag = false;
+    char undoText[6] = "UNDO ";
     bool previewPending = false;                                        // sample preview waiting for the knob to settle
     uint8_t previewLayer = 0;
     uint32_t previewTick = 0;

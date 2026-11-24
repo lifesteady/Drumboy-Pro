@@ -337,7 +337,15 @@ static inline float atanFast(float phaseNorm) {
 const uint32_t kSampleSize                          = 240000;                   // 5.44 seconds
 const uint32_t kSampleByteSize                      = kSampleSize * 4;
 
-const uint8_t kSampleSectorLibrarySize              = 15;
+// Custom: was 15. Ten drums need at most 11 sectors (one extra while a new sample loads),
+// so the last 3 sectors (2.88 MB) now hold the undo history.
+const uint8_t kSampleSectorLibrarySize              = 12;
+#define RAM_UNDO_ADDRESS                            (RAM_SAMPLE_ADDRESS + (12 * kSampleByteSize))
+const uint32_t kUndoRegionBytes                     = 3 * kSampleByteSize;     // ends at RAM_DELAY_ADDRESS
+const uint8_t kUndoSlots                            = 16;                      // 15 undo steps
+const uint32_t kUndoMergeFillMs                     = 1200;                    // knob turns closer than this = one undo step
+const uint32_t kUndoMergeNudgeMs                    = 700;                     // quick nudge taps = one undo step
+enum UndoKind : uint8_t { UNDO_NONE = 0, UNDO_SINGLE, UNDO_RECORD, UNDO_FILL, UNDO_NUDGE };
 
 struct SampleSector {
     bool active = false;
@@ -2196,7 +2204,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.25 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.26 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
