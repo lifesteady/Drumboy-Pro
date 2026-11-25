@@ -7462,8 +7462,9 @@ void Controller::page_drawChop() {
     else snprintf(where, sizeof(where), "NOT ON A PAD");
     char slice[12];
     snprintf(slice, sizeof(slice), "SLICE %u", chopSel + 1);
-    snprintf(text, sizeof(text), "%s  AT %u.%03u S  LONG %u.%03u S  %s%s", slice, sMs / 1000, sMs % 1000, lMs / 1000, lMs % 1000, where,
-             ((e - s) > kSampleSize - 64) ? "  CUT TO 5.4 S" : "");
+    char cutTxt[24] = "";
+    if ((e - s) > kSampleSize - 64) { const unsigned padMs = (unsigned)(((uint64_t)(kSampleSize - 64) * 1000) / 44100); snprintf(cutTxt, sizeof(cutTxt), "  CUT TO %u.%u S", padMs / 1000, (padMs % 1000) / 100); }
+    snprintf(text, sizeof(text), "%s  AT %u.%03u S  LONG %u.%03u S  %s%s", slice, sMs / 1000, sMs % 1000, lMs / 1000, lMs % 1000, where, cutTxt);
     page_drawSummary(text, (uint8_t)strlen(slice));
 
     // ---- waveform: every column built in memory and sent once (no flashing), then the tags
@@ -7941,15 +7942,16 @@ void Controller::page_drawSample() {
     const uint32_t addr = hasSample ? (RAM_SAMPLE_ADDRESS + (layer.playSampleSector * kSampleByteSize)) : 0;
 
     if (hasSample && ((cacheSector != layer.playSampleSector) || (cacheSize != size) || (cacheAddr != addr))) {
-        const volatile float* data = (const volatile float*)addr;
+        const volatile int16_t* data16 = (const volatile int16_t*)addr;   // custom: 16-bit pad sectors
+        auto data = [&](uint32_t k) -> float { return (float)data16[k] * (1.0f / 32768.0f); };
         float peak = 0.00001f;
-        for (uint32_t k = 0; k < size; k++) { const float a = fabsf(data[k]); if (a > peak) peak = a; }
+        for (uint32_t k = 0; k < size; k++) { const float a = fabsf(data(k)); if (a > peak) peak = a; }
         for (uint16_t c = 0; c < gw; c++) {
             const uint32_t a0 = ((uint64_t)size * c) / gw;
             uint32_t a1 = ((uint64_t)size * (c + 1)) / gw;
             if (a1 <= a0) a1 = a0 + 1;
             float mx = -1.0f, mn = 1.0f;
-            for (uint32_t k = a0; (k < a1) && (k < size); k++) { const float v = data[k] / peak; if (v > mx) mx = v; if (v < mn) mn = v; }
+            for (uint32_t k = a0; (k < a1) && (k < size); k++) { const float v = data(k) / peak; if (v > mx) mx = v; if (v < mn) mn = v; }
             if (mx < mn) { mx = 0; mn = 0; }
             peakMax[c] = (int8_t)(mx * 100.0f);
             peakMin[c] = (int8_t)(mn * 100.0f);
@@ -25189,6 +25191,7 @@ void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
                 // initialize temp beat data
                 tBD.active = true;
                 tBD.ramAddress = RAM_SAMPLE_ADDRESS + (targetSector * kSampleByteSize);
+                tBD.pcm16 = true;   // custom: pad sectors hold 16-bit samples
                 tBD.counterMax = sampleSectorLibrary[targetSector].size;
                 tBD.mixerInMode = layer.mixerInMode;
                 lD.beatStartFlag = true;
@@ -26360,7 +26363,12 @@ void Controller::layerInst_setSampleLoaded(uint8_t layerNum_) {
                                 for (int k = 0; k < writeCount; k++) {
                                     if (sdramDataCounter >= kSampleSize)
                                         break;
-                                    *(volatile float*)(sdramBase + (sdramDataCounter * 4)) = val;
+                                    {   // custom: stored as 16-bit
+                                        float cv = val;
+                                        if (!(cv > -1.0f)) cv = -1.0f;
+                                        if (cv > 0.99997f) cv = 0.99997f;
+                                        *(volatile int16_t*)(sdramBase + (sdramDataCounter * 2)) = (int16_t)(cv * 32768.0f);
+                                    }
                                     sdramDataCounter++;
                                 }
                             }
@@ -28833,11 +28841,17 @@ void Controller::processAudioLayer() {
             // --- Optimized Fast Path Processing ---
             uint32_t remainder = (uint32_t)(aBD.counterEnd - aBD.counter);
             uint16_t copySize = (remainder > I2S_BLOCK_SIZE) ? I2S_BLOCK_SIZE : (uint16_t)remainder;
-            float* sourceAddress = (float*)(aBD.ramAddress + ((uint32_t)aBD.counter * 4));
-
-            // Cache RAM data into local stack buffer for processing
+            // Cache RAM data into local stack buffer for processing (custom: 16-bit pad sectors or float audition buffer)
             float localCache[I2S_BLOCK_SIZE];
-            if (copySize > 0) memcpy(localCache, sourceAddress, copySize * sizeof(float));
+            if (copySize > 0) {
+                if (aBD.pcm16) {
+                    int16_t raw16[I2S_BLOCK_SIZE];
+                    memcpy(raw16, (const void*)(aBD.ramAddress + ((uint32_t)aBD.counter * 2)), copySize * sizeof(int16_t));
+                    for (uint16_t q = 0; q < copySize; q++) localCache[q] = (float)raw16[q] * (1.0f / 32768.0f);
+                } else {
+                    memcpy(localCache, (const void*)(aBD.ramAddress + ((uint32_t)aBD.counter * 4)), copySize * sizeof(float));
+                }
+            }
 
             if (aBD.counter == aBD.counterStart) io.midi.txTriggerNoteOn[i] = true;
 
@@ -28895,11 +28909,12 @@ void Controller::processAudioLayer() {
                 float counterFloat = aBD.counter;
                 uint32_t counterInt = (uint32_t)counterFloat;
                 float counterDiff = counterFloat - (float)counterInt;
-                uint32_t ramAddress = aBD.ramAddress + (counterInt * 4);
+                const uint32_t stride = aBD.pcm16 ? 2 : 4;   // custom: 16-bit pad sectors
+                uint32_t ramAddress = aBD.ramAddress + (counterInt * stride);
 
                 // Helper lambda for reading RAM with integrated bitcrushing
                 auto getSample = [&](uint32_t addr) -> float {
-                    float val = *(volatile float*)addr;
+                    float val = aBD.pcm16 ? ((float)*(volatile int16_t*)addr * (1.0f / 32768.0f)) : *(volatile float*)addr;
                     if (aBD.resolutionCoef != 0x00FFFFFF) {
                         float valShifted = (val + 1.0f) * 0.5f;
                         uint32_t tempUnsigned = (uint32_t)(valShifted * kScale24);
@@ -28917,7 +28932,7 @@ void Controller::processAudioLayer() {
                     currentSample = getSample(ramAddress);
                 } else {
                     // Linear interpolation between two samples
-                    currentSample = getSample(ramAddress) + ((getSample(ramAddress + 4) - getSample(ramAddress)) * counterDiff);
+                    currentSample = getSample(ramAddress) + ((getSample(ramAddress + stride) - getSample(ramAddress)) * counterDiff);
                 }
                 if (!(currentSample > -4.0f && currentSample < 4.0f)) currentSample = 0.0f;   // custom: NaN / garbage guard
 

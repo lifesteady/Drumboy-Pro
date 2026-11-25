@@ -340,8 +340,9 @@ static inline float atanFast(float phaseNorm) {
 #define RAM_INST_ADDRESS                            0xC0000000
 #define RAM_SAMPLE_ADDRESS                          0xC0000000
 
-const uint32_t kSampleSize                          = 240000;                   // 5.44 seconds
-const uint32_t kSampleByteSize                      = kSampleSize * 4;
+// Custom: pad samples are stored as 16-bit (stock: 32-bit float) - same memory, twice the time.
+const uint32_t kSampleSize                          = 480000;                   // 10.88 seconds
+const uint32_t kSampleByteSize                      = kSampleSize * 2;
 
 // Custom: was 15. Ten drums need at most 11 sectors (one extra while a new sample loads),
 // so the last 3 sectors (2.88 MB) now hold the undo history.
@@ -2410,7 +2411,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.26 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.27 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -7908,6 +7909,7 @@ struct BeatPlayData {
     uint32_t counterEnd;
 
     bool fadeFlag;
+    bool pcm16;          // custom: the sound is 16-bit (pad sample sectors); false = 32-bit float (audition buffer)
     bool fadeAction;
     uint32_t counterFadeStart;
     uint32_t counterFade;
