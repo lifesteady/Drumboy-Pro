@@ -2782,6 +2782,8 @@ void Controller::keyboard_action() {
                                 break;
 
                             case KEY_RHYTHM:
+                                // Custom: hold ADD and tap RHYTHM in time = tap tempo.
+                                if (keyboard.shiftKeyPress) { tap_tempo(); break; }
                                 // Custom: pressing Rhythm again opens / closes the Groove page.
                                 if (!alertFlag) (menu == RHYTHM_MENU) ? page_toggle(PAGE_GROOVE) : rhythm_select();
                                 break;
@@ -6218,6 +6220,29 @@ void Controller::undo_cancelShiftActions() {
     hpUnmuteKeyFlag = false;
     loUnmuteKeyFlag = false;
     liUnmuteKeyFlag = false;
+}
+
+void Controller::tap_tempo() {
+    /// @brief Custom: tap tempo. Hold ADD and tap RHYTHM on the beat. From the second tap the
+    /// tempo follows the average of the last (up to) 4 gaps; a pause over 2 s starts over.
+    if (io.sync.slaveMode) { undo_showText("SYNC "); return; }
+    const uint32_t now = HAL_GetTick();
+    if ((tapCount > 0) && ((now - tapTick[tapCount - 1]) > 2000)) tapCount = 0;
+    if (tapCount == 5) {   // keep the last 5 taps (4 gaps)
+        for (uint8_t i = 0; i < 4; i++) tapTick[i] = tapTick[i + 1];
+        tapCount = 4;
+    }
+    tapTick[tapCount++] = now;
+    if (tapCount < 2) { undo_showText("TAP  "); return; }
+    const uint32_t span = tapTick[tapCount - 1] - tapTick[0];
+    if (span == 0) return;
+    uint32_t bpm = (60000UL * (tapCount - 1) + span / 2) / span;
+    if (bpm < kMinTempo) bpm = kMinTempo;
+    if (bpm > kMaxTempo) bpm = kMaxTempo;
+    if (bpm != rhythm.tempo) rhythm_setTempo((uint8_t)bpm);
+    char t[8];
+    snprintf(t, sizeof(t), "%3u  ", (unsigned)bpm);
+    undo_showText(t);
 }
 
 void Controller::undo_showText(const char* text_) {

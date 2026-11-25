@@ -574,6 +574,9 @@ class Controller {
     void undo_redo();
     void undo_cancelShiftActions();
     void undo_showText(const char* text_);
+    void tap_tempo();                                                   // custom: ADD + RHYTHM taps the tempo
+    uint32_t tapTick[5] = {0};                                          // custom: last tap times (ms)
+    uint8_t tapCount = 0;
     void preview_update();
     void preview_stopVoices();
     void preview_play(uint8_t layerNum_);
