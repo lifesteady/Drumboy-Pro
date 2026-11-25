@@ -6275,6 +6275,7 @@ void Controller::sampling_key() {
     if ((selectedLayerNum < 0) || (selectedLayerNum >= kLayerLibrarySize)) return;
     switch (sampState) {
         case 0:   // arm
+            if (mixer.liMute) mixer_setLiMute(false);   // you want to hear and record Line In now
             undo_reset();
             memset((void*)sampBuf(), 0, kSampPreRoll * sizeof(float));
             sampLayer = (uint8_t)selectedLayerNum;
