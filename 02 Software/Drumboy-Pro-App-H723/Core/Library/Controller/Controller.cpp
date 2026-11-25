@@ -7766,7 +7766,7 @@ void Controller::song_drawCounter(bool force_) {
 
 void Controller::lcd_drawSongKnobs() {
     const bool onStep = (songCursor < songCount);
-    const char* hdr[8] = {"STEP      ", "BANK      ", "REPEATS   ", "SONG MODE ", "ADD / DEL ", "AT END    ", "          ", "          "};
+    const char* hdr[8] = {"STEP      ", "SEQUENCE  ", "REPEATS   ", "SONG MODE ", "ADD / DEL ", "AT END    ", "          ", "          "};
     char t[16];
     lcd_setMenuHeaderState(CYAN);
     for (uint8_t k = 0; k < 8; k++) lcd.drawText(hdr[k], kMenuHeaderTextSize, kMenuHeaderX[k], kMenuHeaderY[k]);
@@ -7806,7 +7806,7 @@ void Controller::page_drawSong() {
         lcd.setFont(FONT_07x09);
         lcd.setAlignment(LEFT);
         lcd.setForeColor(kThemeHeader);
-        const char h1[] = "PADS: BANK FOR THIS STEP (PADS 1-2 = BANK 1 ... 9-10 = BANK 5), THEN ON TO THE NEXT STEP";
+        const char h1[] = "PADS: SEQUENCE FOR THIS STEP (PADS 1-2 = 1, 3-4 = 2 ... 9-10 = 5), THEN ON TO THE NEXT STEP";
         lcd.drawText(h1, strlen(h1), 30, 420);
         const char h2[] = "SONG MODE ON: PLAY FROM THE TOP PLAYS THE STEPS IN ORDER";
         lcd.drawText(h2, strlen(h2), 30, 438);
@@ -7831,7 +7831,7 @@ void Controller::page_drawSong() {
     const uint32_t totalMs = (uint32_t)(((uint64_t)loops * songInterval * 60000ULL) / ((uint64_t)bpm * kMeasureInterval));
     if (songCount == 0) snprintf(text, sizeof(text), "NO STEPS YET: PRESS PADS TO ADD THEM");
     else if (songMode && playActive)
-        snprintf(text, sizeof(text), "STEP %u OF %u: BANK %u, %u MORE TIME%s   %lu BARS, %lu:%02lu LONG", songPlayStep + 1, songCount,
+        snprintf(text, sizeof(text), "STEP %u OF %u: SEQUENCE %u, %u MORE TIME%s   %lu BARS, %lu:%02lu LONG", songPlayStep + 1, songCount,
                  (songSteps[songPlayStep] & 0x0F) + 1, songRepLeft, (songRepLeft == 1) ? " " : "S", (unsigned long)bars,
                  (unsigned long)(totalMs / 60000UL), (unsigned long)((totalMs / 1000UL) % 60UL));
     else snprintf(text, sizeof(text), "%u STEPS   %lu BARS   %lu:%02lu LONG AT %lu BPM   AT THE END IT %s", songCount, (unsigned long)bars,
@@ -12587,7 +12587,7 @@ void Controller::lcd_drawSongBankTab(uint8_t bank_, bool mode_) {
     // 2. LABEL DRAW
     // Draw static SONG footer label.
     lcd.setForeColor(MAGENTA);
-    lcd.drawText("SONG", 4, 886, 463);
+    lcd.drawText("SEQUENCE", 8, 886, 463);   // custom: was SONG (a song is the whole arrangement)
 
     // 3. HIGHLIGHT STATE APPLY
     // Select highlighted color when requested.
@@ -12668,7 +12668,7 @@ void Controller::lcd_drawMenuLabel(Menu menu_, int16_t num_) {
         case LAYER_INST_0_MENU:
         case LAYER_INST_1_MENU:
         case LAYER_INST_2_MENU: word = "INST"; num = selectedLayerNum + 1; break;
-        case LAYER_SONG_MENU:   word = "SEQ"; num = selectedLayerNum + 1; break;
+        case LAYER_SONG_MENU:   word = "HITS"; num = selectedLayerNum + 1; break;   // custom: was SEQ (sequences are 1-5)
         default:                word = ""; break;
     }
     if (num_ >= 0) num = num_;
