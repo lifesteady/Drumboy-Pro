@@ -9032,6 +9032,10 @@ void Controller::page_drawLfo() {
     lcd.setForeColor(on ? kThemeAccent : kThemeMid);
     snprintf(text, sizeof(text), on ? "LFO %02u OF %02u    " : "LFO %02u OF %02u OFF", selectedLfoNum + 1, kLfoLibrarySize);
     lcd.drawText(text, 16, 30, 136);
+    // custom: which knob changes the LFO, right next to its number
+    lcd.setFont(FONT_07x09);
+    lcd.setForeColor(kThemeAmber);
+    lcd.drawText("< TOP KNOB 4: OTHER LFO >", 25, 330, 141);
     auto trim = [](const char* t) -> const char* { while (*t == ' ') t++; return t; };
     snprintf(text, sizeof(text), "%s   RATE %s BAR   PHASE %s   INVERT %s   DEPTH %u", trim(kLfoTypeDataLibrary[lfo.type].nameLongR),
              trim(kLfoRateDataLibrary[lfo.rate].nameLongR), trim(kLfoPhaseDataLibrary[lfo.phase].nameLongR), lfo.invert ? "ON" : "OFF", lfo.depth);
