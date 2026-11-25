@@ -617,6 +617,8 @@ class Controller {
     char chopTakePath[64] = "";
     uint8_t chopTakeLayer = 0;
     void choke(uint8_t layerNum_);                                      // custom: mute groups
+    uint32_t sectorAddr(uint8_t s_) const { return RAM_SAMPLE_ADDRESS + (uint32_t)sampleSectorLibrary[s_].startBlock * kSampleBlockBytes; }   // custom: sample pool
+    int8_t sample_allocSlot(uint32_t samples_);                         // custom: a free slot + enough free blocks, or -1
     // custom: slicer drums (a sample with cue markers: each hit plays one slice)
     bool slicerOn(uint8_t l_) const { return (layerLibrary[l_].sliceCount > 0) && !layerLibrary[l_].sliceOff; }
     uint8_t wav_readCues(const char* path_, const WavData& wav_, uint32_t* out_, uint8_t max_, uint32_t limit_);

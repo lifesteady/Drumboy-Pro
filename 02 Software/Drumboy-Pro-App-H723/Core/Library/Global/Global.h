@@ -346,7 +346,14 @@ const uint32_t kSampleByteSize                      = kSampleSize * 2;
 
 // Custom: was 15. Ten drums need at most 11 sectors (one extra while a new sample loads),
 // so the last 3 sectors (2.88 MB) now hold the undo history.
-const uint8_t kSampleSectorLibrarySize              = 12;
+// Custom: the sample memory (12 x 960 KB) is a pool of 48 blocks of 2.72 s. A sound takes as
+// many neighbouring blocks as it needs (1 to 4); a slot describes one loaded sound.
+const uint32_t kSampleBlockSamples                  = 120000;                   // 2.72 s of 16-bit
+const uint32_t kSampleBlockBytes                    = kSampleBlockSamples * 2;
+const uint8_t kSampleBlockCount                     = 48;
+static_assert(kSampleBlockCount * kSampleBlockBytes == 12 * kSampleByteSize, "sample pool must fill the old 12 sectors exactly");
+static_assert(kSampleSize % kSampleBlockSamples == 0, "a full-length sound is a whole number of blocks");
+const uint8_t kSampleSectorLibrarySize              = 48;                       // slots (loaded sounds), not memory
 // Custom: sampling from Line In. Recorded into the undo region (undo history is cleared), with a
 // short pre-roll ring in front so the attack before the threshold isn't lost.
 const uint16_t kSampPreRoll                         = 1024;                     // must be a power of 2 (23 ms)
@@ -363,6 +370,8 @@ enum UndoKind : uint8_t { UNDO_NONE = 0, UNDO_SINGLE, UNDO_RECORD, UNDO_FILL, UN
 struct SampleSector {
     bool active = false;
     uint8_t layer = 0;
+    uint8_t startBlock = 0;   // custom: where in the pool (blocks of kSampleBlockSamples)
+    uint8_t blockCount = 0;
     uint32_t size = 0;
     bool playMode = false;
     bool writeMode = false;
@@ -2411,7 +2420,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.27 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.28 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
