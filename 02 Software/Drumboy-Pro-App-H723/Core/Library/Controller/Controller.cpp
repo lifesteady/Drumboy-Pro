@@ -547,7 +547,7 @@ void Controller::update() {
         for (uint8_t i = 0; i < kLayerLibrarySize; i++) {
             // Send Note On (0x90)
             if ((io.midi.txNotes) && (io.midi.txTriggerNoteOn[i])) {
-                uint8_t msg[3] = {(uint8_t)(0x90 + io.midi.txChannel), io.midi.txData[i], 0x64};
+                uint8_t msg[3] = {(uint8_t)(0x90 + io.midi.txChannel), io.midi.txData[i], midiTxVel[i]};   // custom: real velocity
                 if (enqueueMidiTx(msg, 3)) io.midi.txTriggerNoteOn[i] = false;
             }
 
@@ -565,18 +565,25 @@ void Controller::update() {
             if (layerNum < kLayerLibrarySize) {
                 Layer& layer = layerLibrary[layerNum];
 
+                // Custom: MIDI velocity 1-127 -> level 1-16 (velocity 0 is a note-off: ignored)
+                const uint8_t mv = io.midi.rxNoteOnVelocity & 0x7F;
+                const uint8_t v = (uint8_t)(1 + (mv * 15 + 63) / 127);
+
                 // Trigger audio if layer is active and unmuted
-                if ((!layer.mute) && (layer.samplePlay))
-                    layer_playBeat(layerNum, 1.0f);
+                if ((mv > 0) && (!layer.mute) && (layer.samplePlay))
+                    layer_playBeat(layerNum, vel_gain(v));
 
                 // Write note to the current sequencer step if Recording is enabled
-                if (recordActive) {
+                if (recordActive && (mv > 0)) {
                     undo_checkpoint(UNDO_RECORD);   // custom: one undo step per take
                     if (!metronome.precountState) {
+                        recordVel = v;
                         layerSong_setBeat(layerNum, activeSongBank, groove_unswing(layerNum, playInterval), 0, 0, 0, 0, true);
+                        recordVel = 16;
                     } else {
                         // Note landed during precount; commit it to position 0 once playback starts.
                         precountPendingBeat[layerNum] = true;
+                        precountPendingVel[layerNum] = v;   // custom
                     }
                 }
             }
@@ -2463,6 +2470,11 @@ void Controller::keyboard_action() {
                                 break;
 
                             case KEY_COPY:
+                                if (keyboard.bankKeyPress && !alertFlag) {   // custom: Song key + COPY = copy this sequence
+                                    songKeyUsed = true;
+                                    seq_copy();
+                                    break;
+                                }
                                 switch (menu) {
                                     case LAYER_INST_0_MENU:
 
@@ -2487,6 +2499,11 @@ void Controller::keyboard_action() {
                                 break;
 
                             case KEY_PASTE:
+                                if (keyboard.bankKeyPress && !alertFlag) {   // custom: Song key + PASTE = paste into this sequence
+                                    songKeyUsed = true;
+                                    seq_paste();
+                                    break;
+                                }
                                 if (keyboard.shiftKeyPress && !alertFlag) {
                                     // Custom: hold ADD + tap PASTE = REDO
                                     undo_cancelShiftActions();
@@ -7308,7 +7325,8 @@ void Controller::noteRepeat_stopped() {
 // The 10 pads play ONE drum at 10 notes of a scale. Each recorded hit keeps its note
 // (Beat::note, semitones), so a bass line lives in that drum's own lane.
 
-static_assert(RAM_VERB_ADDRESS + rvp::slowFloats() * 4 <= 0xC0FB9640, "reverb RAM overlaps image RAM");
+static_assert(RAM_VERB_ADDRESS + rvp::slowFloats() * 4 <= RAM_SEQ_CLIP_ADDRESS, "reverb RAM overlaps the sequence clipboard");
+static_assert(RAM_SEQ_CLIP_ADDRESS + kLayerLibrarySize * sizeof(Bank) <= 0xC0FB9640, "sequence clipboard overlaps image RAM");
 static_assert(RAM_VERB_FAST_ADDRESS + rvp::fastFloats() * 4 <= 0x20020000, "reverb tank does not fit DTCM");
 static_assert(RAM_VERB_ENGINE_ADDRESS + sizeof(rvp::Engine) <= RAM_VERB_FAST_ADDRESS, "reverb engine object overlaps its tank");
 static_assert(Reverb::kSharedFloats <= rvp::fastFloats(), "STANDARD reverb buffers must fit inside the shared DTCM block");
@@ -7655,6 +7673,39 @@ void Controller::pitch_update() {
 ////////////////////////////////////////////////////////////////////////////////
 // A song = up to 32 steps, each one of the 5 song banks played 1-16 times. With SONG MODE on,
 // PLAY from the top runs the steps in order; at the end it loops or stops.
+
+void Controller::seq_copy() {
+    /// @brief Custom: copy the whole current sequence (all 10 drums' hits) to a clipboard in SDRAM.
+    Bank* clip = (Bank*)(RAM_SEQ_CLIP_ADDRESS);
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) memcpy(&clip[l], &layerLibrary[l].bankLibrary[activeSongBank], sizeof(Bank));
+    seqClipValid = true;
+    seqClipFrom = activeSongBank;
+    char t[8];
+    snprintf(t, sizeof(t), "CPY%u ", activeSongBank + 1);
+    undo_showText(t);
+}
+
+void Controller::seq_paste() {
+    /// @brief Custom: replace the current sequence with the copied one (one undo step).
+    if (!seqClipValid) { undo_showText("EMPTY"); return; }
+    undo_checkpoint(UNDO_SINGLE);
+    const Bank* clip = (const Bank*)(RAM_SEQ_CLIP_ADDRESS);
+    HAL_NVIC_DisableIRQ(TIM15_IRQn);
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
+        memcpy(&layerLibrary[l].bankLibrary[activeSongBank], &clip[l], sizeof(Bank));
+        layerSong_calculatePlayBeatNum(l, activeSongBank, playInterval);
+    }
+    HAL_NVIC_EnableIRQ(TIM15_IRQn);
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) { lcd_clearSong(l, activeSongBank); lcd_drawSong(l, activeSongBank); }
+    if (menu == LAYER_SONG_MENU) {
+        Bank& bank = layerLibrary[selectedLayerNum].bankLibrary[activeSongBank];
+        selectedBeatNum = (bank.lastActiveBeatNum != -1) ? 0 : -1;
+    }
+    stripDirty = true;
+    char t[8];
+    snprintf(t, sizeof(t), "%u>%u  ", seqClipFrom + 1, activeSongBank + 1);
+    undo_showText(t);
+}
 
 void Controller::song_toggle() {
     if (page == PAGE_SONG) { page_close(); return; }
@@ -10074,6 +10125,13 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
                         songCursor = 0;
                         songPlayStep = 0;
                     }
+                    if (data[500 + 400 + 87] == 0xB5) {   // custom: velocity settings
+                        padVelocity = (data[988] >= 1 && data[988] <= 16) ? data[988] : 16;
+                        humanize = (data[989] <= 6) ? data[989] : 0;
+                        levelsSoftest = (data[990] >= 1 && data[990] <= 15) ? data[990] : 4;
+                    } else {
+                        padVelocity = 16; humanize = 0; levelsSoftest = 4;
+                    }
                     if ((data[500 + kMetroRouteFileOffset] & 0xF0) == kMetroRouteFileMark) {
                         const uint8_t mr = data[500 + kMetroRouteFileOffset] & 0x0F;
                         metronome.mixerInMode = (MixerInMode)((mr <= MIXER_IN_SEND) ? mr : MIXER_IN_REVERB);
@@ -10469,6 +10527,11 @@ void Controller::sd_encodeProject(uint8_t* data) {
         data[at(1)] = (uint8_t)((songCount & 0x3F) | (songLoop ? 0x40 : 0) | (songMode ? 0x80 : 0));
         for (uint8_t k = 0; k < kSongMaxSteps; k++) data[at(2 + k)] = songSteps[k];
     }
+    // custom: PAD VELOCITY, HUMANIZE, SOFTEST (unused bytes 87-90 of drum 5's asset block)
+    data[500 + 400 + 87] = 0xB5;
+    data[500 + 400 + 88] = padVelocity;
+    data[500 + 400 + 89] = humanize;
+    data[500 + 400 + 90] = levelsSoftest;
     data[500 + kMetroRouteFileOffset] = kMetroRouteFileMark | ((uint8_t)metronome.mixerInMode & 0x0F);   // custom: where the metronome goes
     data[168] = reverb.size;
     data[169] = reverb.decay;
@@ -18388,6 +18451,7 @@ void Controller::mixer_select() {
 void Controller::mixer_reset() {
     route_setMode(ROUTE_CHAIN);   // custom
     songCount = 0; songMode = false; songLoop = true; songCursor = 0; songPlayStep = 0;   // custom: Song mode
+    padVelocity = 16; humanize = 0; levelsSoftest = 4;   // custom: velocity settings
     memset(songSteps, 0, sizeof(songSteps));
     routeLaneRev = 0;
     /// @brief Restores mixer mute, level, routing, and dynamics parameters to default values.
@@ -23459,6 +23523,14 @@ void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
                 if (random > threshold) probability = false;
             }
             if (probability) {
+                // Custom: MIDI out velocity from this hit's gain (16 = 127, -2 dB per level = -8)
+                {
+                    const float g = fillVolMultiplier_;
+                    int16_t mv = (g > 0.0001f) ? (int16_t)(127.0f + 4.0f * 20.0f * log10f(g) + 0.5f) : 1;
+                    if (mv < 1) mv = 1;
+                    if (mv > 127) mv = 127;
+                    midiTxVel[layerNum_] = (uint8_t)mv;
+                }
                 // initialize temp beat data
                 tBD.active = true;
                 tBD.ramAddress = RAM_SAMPLE_ADDRESS + (targetSector * kSampleByteSize);

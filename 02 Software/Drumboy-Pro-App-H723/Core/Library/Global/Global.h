@@ -392,6 +392,7 @@ static_assert(RAM_MAIN_ADDRESS + 0x8000 <= 0xC0FB9640, "main-screen RAM overlaps
 // (moved from +0x8000: the SPACE effect page uses spare SDRAM up to +0x8100, the Notes strip up to +0x8908)
 #define RAM_VERB_ADDRESS                            (RAM_MAIN_ADDRESS + 0x9000)
 #define RAM_PITCH_STRIP_ADDRESS                     (RAM_MAIN_ADDRESS + 0x8200)   // Notes / Levels strip: 900 notes + 900 levels
+#define RAM_SEQ_CLIP_ADDRESS                        (RAM_MAIN_ADDRESS + 0xE000)   // Song key + COPY: one whole sequence (10 drums)
 
 #define RAM_IMAGE_LOGO_ADDRESS                      0xC0FB9640                  // 170px * 170px
 #define RAM_IMAGE_LOGO_PALETTE_ADDRESS              0xC0FB9640                  // 128 bytes
@@ -2372,7 +2373,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.99 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.00 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;

@@ -493,6 +493,8 @@ class Controller {
     float noteRepeat_step();
     void noteRepeat_tick();
     void noteRepeat_stopped();
+    void seq_copy();
+    void seq_paste();
     void song_knob(uint8_t which_, int8_t step_);
     void song_pad(uint8_t layerNum_);
     void song_toggle();
@@ -639,6 +641,9 @@ class Controller {
     uint32_t pitchStripTick = 0;
     char pitchCounter[24] = "";
     int8_t pitchStripLo = 0, pitchStripHi = 0;                          // note range shown in the strip
+    bool seqClipValid = false;                                          // a sequence was copied
+    uint8_t seqClipFrom = 0;
+    uint8_t midiTxVel[kLayerLibrarySize] = {100, 100, 100, 100, 100, 100, 100, 100, 100, 100};   // MIDI out velocity per drum
     uint8_t padVelocity = 16;                                           // velocity of pad hits (1..16)
     uint8_t humanize = 0;                                               // random +- levels on pad hits
     uint8_t levelsSoftest = 4;                                          // LEVELS mode: velocity of pad 1
