@@ -25493,6 +25493,12 @@ void Controller::layerInst_reset(uint8_t layerNum_) {
     layerLibrary[layerNum_].envAttack = kInitialEnvAttack;
     layerLibrary[layerNum_].envHold = kInitialEnvHold;
     layerLibrary[layerNum_].envDecay = kInitialEnvDecay;
+    layerLibrary[layerNum_].revSend = 0;        // custom: reverb send, mute group, slicer
+    layerLibrary[layerNum_].muteGroup = 0;
+    layerLibrary[layerNum_].sliceCount = 0;
+    layerLibrary[layerNum_].sliceOff = false;
+    layerLibrary[layerNum_].sliceSync = false;
+    layerLibrary[layerNum_].sliceBeats = 0;
 }
 
 void Controller::layerInst_menuRight() {
