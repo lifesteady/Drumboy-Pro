@@ -1747,6 +1747,7 @@ void Controller::keyboard_action() {
                                 } else {
                                     // Hit landed during precount; commit it to position 0 once playback starts.
                                     precountPendingBeat[layerNum] = true;
+                                    precountPendingVel[layerNum] = v;   // custom: keep its velocity
                                 }
                             }
                         }
@@ -7352,6 +7353,11 @@ void Controller::pitch_pad(uint8_t pad_) {
         page_markDirty(PAGE_PITCH);
         recordVel = 16;
         return;
+    }
+    if (recordActive && metronome.precountState) {   // custom: count-in: commit on the first beat (like the normal pads)
+        pitchPendingPad = (int8_t)pad_;
+        pitchPendingNote = note;
+        pitchPendingVel = vel;
     }
     if (recordActive && !metronome.precountState) {
         undo_checkpoint(UNDO_RECORD);
@@ -25937,6 +25943,7 @@ void Controller::record() {
 
             // Clear any stale pending hits from a previous precount take.
             for (uint8_t i = 0; i < kLayerLibrarySize; i++) precountPendingBeat[i] = false;
+            pitchPendingPad = -1;   // custom
         }
 
         // Reset LFO counters to start modulation cycles from known phase.
@@ -28076,8 +28083,23 @@ void Controller::interruptPlay() {
                 for (uint8_t i = 0; i < kLayerLibrarySize; i++) {
                     if (precountPendingBeat[i]) {
                         precountPendingBeat[i] = false;
+                        recordVel = precountPendingVel[i];   // custom: velocity
                         layerSong_setBeat(i, activeSongBank, playInterval, 0, 0, 0, 0, true);
+                        recordVel = 16;
                     }
+                }
+                // custom: a Notes / LEVELS pad played during the count-in lands on the first beat too
+                if (pitchPendingPad >= 0) {
+                    recordNote = pitchPendingNote;
+                    recordVel = pitchPendingVel;
+                    layerSong_setBeat(pitchLayer, activeSongBank, playInterval, 0, 0, 0, 0, true);
+                    recordNote = 0;
+                    recordVel = 16;
+                    if (pitchHeldPad == pitchPendingPad) {   // still held: PAD HELD gate measures from here
+                        pitchRecStart = (int32_t)playInterval;
+                        pitchRecTick = (int32_t)playInterval;
+                    }
+                    pitchPendingPad = -1;
                 }
             }
         }

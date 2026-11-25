@@ -179,6 +179,10 @@ class Controller {
     TriggerMode triggerMode;                                            // Quantization setting
     bool playActive;                                                    // Transport status: Playing
     bool recordActive;                                                  // Transport status: Recording
+    uint8_t precountPendingVel[kLayerLibrarySize] = {16, 16, 16, 16, 16, 16, 16, 16, 16, 16};   // custom: their velocity
+    int8_t pitchPendingPad = -1;                                        // custom: Notes / LEVELS pad played during precount
+    int8_t pitchPendingNote = 0;
+    uint8_t pitchPendingVel = 16;
     bool precountPendingBeat[kLayerLibrarySize];                        // Layer hits during precount, committed to interval 0 when playback starts
     bool playArmed;                                                     // Slave mode: waiting for master START to play
     bool recordArmed;                                                   // Slave mode: waiting for master START to record
