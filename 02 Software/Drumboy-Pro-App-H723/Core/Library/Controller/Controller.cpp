@@ -22966,6 +22966,13 @@ void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
     BeatPlayData& tBD = lD.tempBeatPlayData;
     BeatPlayData& aBD = lD.activeBeatPlayData;
 
+    // Custom: the whole trigger runs with interrupts off. It is called from the main loop (pads) AND
+    // from the sequencer interrupt, and the audio interrupt copies tempBeatPlayData when a fade
+    // ends. Fast repeated pads (a glissando) could be interrupted half way through filling
+    // tempBeatPlayData, leaving a torn voice that reads outside its sample. Takes a few microseconds.
+    const uint32_t primaskTrigger = __get_PRIMASK();
+    __disable_irq();
+
     // 2. PLAYBACK GATE
     // Continue only when a playable sample sector is selected and active.
     if ((layer.samplePlay) && (!layer.sampleLoading) && (layer.playSampleSector != -1)) {
@@ -23205,6 +23212,7 @@ void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
             }
         }
     }
+    __set_PRIMASK(primaskTrigger);   // custom
 }
 
 ////////////////////////////////////////////////////////////////////////////////
