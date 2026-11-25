@@ -6869,7 +6869,12 @@ void Controller::chop_pad(uint8_t pad_) {
         return;
     }
     if (keyboard.shiftKeyPress) {
-        if (chop_putSlice(chopSel, pad_)) undo_showText("DONE ");
+        // the selected slice goes on this pad, then the next slice is selected, so ADD + pad,
+        // ADD + pad, ADD + pad ... deals the slices out in order
+        if (chop_putSlice(chopSel, pad_)) {
+            undo_showText("DONE ");
+            if (chopSel + 1 < chopN) chopSel++;
+        }
         page_markDirty(PAGE_CHOP);
         return;
     }
