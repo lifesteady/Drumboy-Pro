@@ -673,7 +673,7 @@ class Controller {
     uint8_t songSteps[kSongMaxSteps] = {0};                             // Song mode: [3:0] bank 0-4, [7:4] repeats - 1
     uint8_t songCount = 0;                                              // steps in the song
     bool songMode = false;                                              // play the song instead of one bank
-    bool songLoop = true;                                               // at the end: loop (true) or stop
+    bool songLoop = false;                                              // at the end: loop (true) or stop (default: stop)
     uint8_t songCursor = 0;                                             // Song page: step being edited
     volatile uint8_t songPlayStep = 0;                                  // step playing now
     volatile uint8_t songRepLeft = 0;                                   // repeats left of that step (incl. this one)

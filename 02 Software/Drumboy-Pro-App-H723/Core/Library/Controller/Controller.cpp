@@ -7927,7 +7927,12 @@ void Controller::page_drawSong() {
                 lcd.setFont(FONT_14x18);
                 lcd.setAlignment(CENTER);
                 lcd.setForeColor(cur ? kThemeAccent : kThemeLine);
-                lcd.drawText("+", 1, x + bw / 2, y + 22);
+                lcd.drawText("+", 1, x + bw / 2, y + 12);
+                if (songCount > 0) {   // custom: what happens after the last step
+                    lcd.setFont(FONT_07x09);
+                    lcd.setForeColor(songLoop ? kThemeAmber : kThemeAccent);
+                    lcd.drawText(songLoop ? "LOOP" : "END", songLoop ? 4 : 3, x + bw / 2, y + 44);
+                }
             }
             continue;
         }
@@ -10139,7 +10144,7 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
                             songMode = (data[at(1)] & 0x80) != 0;
                             for (uint8_t q = 0; q < kSongMaxSteps; q++) songSteps[q] = data[at(2 + q)];
                         } else {
-                            songCount = 0; songMode = false; songLoop = true;
+                            songCount = 0; songMode = false; songLoop = false;
                             memset(songSteps, 0, sizeof(songSteps));
                         }
                         songCursor = 0;
@@ -18470,7 +18475,7 @@ void Controller::mixer_select() {
 
 void Controller::mixer_reset() {
     route_setMode(ROUTE_CHAIN);   // custom
-    songCount = 0; songMode = false; songLoop = true; songCursor = 0; songPlayStep = 0;   // custom: Song mode
+    songCount = 0; songMode = false; songLoop = false; songCursor = 0; songPlayStep = 0;   // custom: Song mode
     padVelocity = 16; humanize = 0; levelsSoftest = 4;   // custom: velocity settings
     memset(songSteps, 0, sizeof(songSteps));
     routeLaneRev = 0;
