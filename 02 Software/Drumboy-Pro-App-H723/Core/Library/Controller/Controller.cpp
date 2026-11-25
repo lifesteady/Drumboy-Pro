@@ -3644,7 +3644,11 @@ void Controller::encoder_selectBank(uint8_t bankNum_) {
         encoder_update();
 
         // 4. UI SYNCHRONIZATION
-        lcd_drawEncoderBankTab();
+        {   // custom: the corner shows the pad bank; the knob bank shows in the message spot
+            char kb[6];
+            snprintf(kb, sizeof(kb), "KNOB%u", (unsigned)(bankNum_ + 1) % 10);
+            undo_showText(kb);
+        }
         for (uint8_t i = 0; i < kEncoderSize; i++) {
             lcd_drawGlobalMenuFunction(i);
             lcd_drawGlobalMenuData(i);
@@ -14160,17 +14164,17 @@ void Controller::lcd_drawEncoderBankTab() {
     lcd.setAlignment(CENTER);
     lcd.setFont(FONT_07x09);
 
-    // 2. LABEL DRAW
-    // Draw static KNOB footer label.
-    lcd.setForeColor(MAGENTA);
-    lcd.drawText("KNOB", 4, 76, 463);
-
-    // 3. BANK VALUE DRAW
-    // Draw two-digit active encoder bank index.
-    lcd.setForeColor(WHITE);
-    char textData[3];
-    sprintf(textData, "%02d", activeEncoderBank + 1);
-    lcd.drawText(textData, 2, 76, 489);
+    // Custom: this corner shows the PAD BANK now (the KNOB key is the BANK key): BANK and a big
+    // letter in the bank's colour - A orange, B yellow, C cyan, D purple.
+    static const RGB16Color colours[kPadBankCount] = {kThemeAccent, kThemeAmber, CYAN, RGB16Color(0xB45F)};
+    const RGB16Color k = colours[liveBank % kPadBankCount];
+    lcd.setBackColor(BLACK);
+    lcd.setForeColor(k);
+    lcd.drawText("BANK", 4, 76, 463);
+    lcd.setFont(FONT_14x18);
+    char textData[2] = {(char)('A' + (liveBank % kPadBankCount)), 0};
+    lcd.drawText(textData, 1, 76, 481);
+    lcd.setFont(FONT_07x09);
 }
 
 void Controller::lcd_drawSongBankTab(uint8_t bank_, bool mode_) {
@@ -18733,7 +18737,6 @@ void Controller::lcd_drawIcon() {
         lcd.drawRGB16Image(indexPtr, dataPtr, 64, kIconRecordX, kIconPlayY, kIconPlayWidth, kIconPlayHeight);
         recordIcon.flag = false;
     }
-    lcd_drawBank();   // custom: pad bank badge
 
 }
 
@@ -25328,23 +25331,12 @@ void Controller::layer_playBank(uint8_t l_, float gain_, uint8_t b_) {
 }
 
 void Controller::lcd_drawBank() {
-    /// @brief The bank badge on the transport row, always in view: A orange, B yellow, C cyan, D purple.
-    static const RGB16Color colours[kPadBankCount] = {kThemeAccent, kThemeAmber, CYAN, RGB16Color(0xB45F)};
+    /// @brief The pad bank in the lower-left corner (where KNOB 01 was), big and in its colour.
     const bool prot = lcd.getProtect();
     const LcdFont f = lcd.getFont();
     const LcdAlign al = lcd.getAlignment();
     lcd.setProtect(false);
-    const RGB16Color k = colours[liveBank % kPadBankCount];
-    lcd.setForeColor(k);
-    lcd.fillRect(224, 108, 60, 15);
-    lcd.setFont(FONT_07x09);
-    lcd.setAlignment(CENTER);
-    lcd.setBackColor(k);
-    lcd.setForeColor(BLACK);
-    char t[8];
-    snprintf(t, sizeof(t), "BANK %c", 'A' + liveBank);
-    lcd.drawText(t, strlen(t), 254, 111);
-    lcd.setBackColor(BLACK);
+    lcd_drawEncoderBankTab();
     lcd.setFont(f);
     lcd.setAlignment(al);
     if (prot) lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
