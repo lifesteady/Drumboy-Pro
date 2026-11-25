@@ -5817,7 +5817,10 @@ void Controller::lcd_drawRoute_Data(uint8_t slot_) {
         case 5: lcd_drawMixer_LiVolumeData(); return;
         case 6: {   // custom: REVERB SEND
             const uint8_t v = layerLibrary[routeLayer].revSend;
-            if (v) snprintf(t, sizeof(t), "%9u%%", v * 10); else snprintf(t, sizeof(t), "%10s", "OFF");
+            // (no % sign here: in this pixel font that glyph is the lock icon)
+            if (v >= 10) snprintf(t, sizeof(t), "%10s", "FULL");
+            else if (v) snprintf(t, sizeof(t), "%2u PERCENT", v * 10);
+            else snprintf(t, sizeof(t), "%10s", "OFF");
         } break;
         case 7: {
             static const char* const rv[4] = {"A + B", "A ONLY", "B ONLY", "OFF"};
