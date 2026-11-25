@@ -7600,7 +7600,7 @@ void Controller::pitch_buildStrip() {
     if (lo > hi) { lo = 0; hi = 0; }
     pitchStripLo = lo;
     pitchStripHi = hi;
-    pitchStripKey = main_laneKey(pitchLayer) ^ (levelsMode ? 0x55u : 0u);
+    pitchStripKey = main_laneKey(pitchLayer) ^ (levelsMode ? 0x55u : 0u) ^ ((uint32_t)pitchLayer << 24);
 }
 
 void Controller::pitch_drawStripColumn(uint16_t c_) {
@@ -7671,7 +7671,7 @@ void Controller::pitch_update() {
     const LcdFont font = lcd.getFont();
     const LcdAlign align = lcd.getAlignment();
     lcd.setProtect(false);
-    if ((main_laneKey(pitchLayer) ^ (levelsMode ? 0x55u : 0u)) != pitchStripKey) {
+    if ((main_laneKey(pitchLayer) ^ (levelsMode ? 0x55u : 0u) ^ ((uint32_t)pitchLayer << 24)) != pitchStripKey) {
         pitch_drawStrip();
     } else {
         const int16_t pc = songInterval ? (int16_t)(((uint64_t)playInterval * kStripW) / songInterval) : -1;
@@ -7975,6 +7975,7 @@ void Controller::page_drawSong() {
 void Controller::page_drawLevels() {
     /// @brief Custom LEVELS page (Sync key twice): one drum on all 10 pads, softest to full.
     char text[96];
+    const bool fullStrip = pageFullRedraw;   // custom: strip only on a full redraw
     if (pageFullRedraw) {
         lcd.setBackColor(BLACK);
         lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
@@ -8030,7 +8031,7 @@ void Controller::page_drawLevels() {
         snprintf(text, sizeof(text), " %2u ", v);
         lcd.drawText(text, strlen(text), cx, top + h + 22);
     }
-    pitch_drawStrip();   // custom: song strip + playhead
+    if (fullStrip) pitch_drawStrip();   // custom: song strip + playhead
     pitchCounter[0] = 0;
     pitch_drawCounter();
 }
@@ -8039,6 +8040,7 @@ void Controller::page_drawPitch() {
     /// @brief Pitch page: which drum, root, scale, and the note each pad plays.
     if (levelsMode) { page_drawLevels(); return; }   // custom
     char text[96];
+    const bool fullStrip = pageFullRedraw;   // custom: strip only on a full redraw (pitch_update handles changes)
     if (pageFullRedraw) {
         lcd.setBackColor(BLACK);
         lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
@@ -8103,7 +8105,7 @@ void Controller::page_drawPitch() {
         lcd.drawText(text, strlen(text), bx + boxW / 2, boxTop + 104);
         lcd.setBackColor(BLACK);
     }
-    pitch_drawStrip();   // custom: song strip + playhead
+    if (fullStrip) pitch_drawStrip();   // custom: song strip + playhead
     pitchCounter[0] = 0;
     pitch_drawCounter();
 }
