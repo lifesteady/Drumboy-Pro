@@ -8264,10 +8264,10 @@ void Controller::main_renderColumn(uint16_t col_, uint16_t row0_, uint16_t rows_
         const bool sel = ((int8_t)l == mainExpanded);
         const Layer& L = layerLibrary[l];
         const RGB16Color base = sel ? cAcc : (L.mute ? cMid : cInk);
-        // custom: hits from pad banks B-D are tinted in their bank colour (A keeps the lane colour)
-        static const RGB16Color kBankTint[kPadBankCount] = {0, kThemeAmber, CYAN, RGB16Color(0xB45F)};
+        // custom: every hit is drawn in the colour of its pad bank (A orange, B yellow, C green, D purple)
         const uint8_t bkv = mainBk[l][col_];
-        auto bankBase = [&](uint8_t b_) -> RGB16Color { return b_ ? (L.mute ? mix565(cMid, kBankTint[b_], 0.4f) : kBankTint[b_]) : base; };
+        auto bankBase = [&](uint8_t b_) -> RGB16Color { return L.mute ? mix565(cMid, kBankColor[b_ & 3], 0.35f) : kBankColor[b_ & 3]; };
+        (void)base;
         const RGB16Color bg = pastEnd ? cBlack : (sel ? cSelBg : (shadeBar ? cShade : cBlack));
         for (uint16_t r = 0; r < h; r++) {
             RGB16Color c = bg;
@@ -8291,7 +8291,7 @@ void Controller::main_renderColumn(uint16_t col_, uint16_t row0_, uint16_t rows_
         if (av) {
             const uint16_t ah = (uint16_t)((uint32_t)room * av / 255);
             RGB16Color ac = mix565(cBlack, bankBase((bkv >> 4) & 0x03), 0.6f + 0.4f * (av / 255.0f));
-            if (sel && (mainSelCol >= 0) && ((col_ == (uint16_t)mainSelCol) || (col_ == (uint16_t)mainSelCol + 1))) ac = kThemeSelect;
+            if (sel && (mainSelCol >= 0) && ((col_ == (uint16_t)mainSelCol) || (col_ == (uint16_t)mainSelCol + 1))) ac = kBankText;   // custom: selected hit in white (violet was too close to bank D)
             for (uint16_t r = 0; r <= ah; r++) buf[floor - r] = ac;
         }
         buf[y0 + h - 1] = cSep;   // lane separator
@@ -14176,17 +14176,19 @@ void Controller::lcd_drawEncoderBankTab() {
     lcd.setAlignment(CENTER);
     lcd.setFont(FONT_07x09);
 
-    // Custom: this corner shows the PAD BANK now (the KNOB key is the BANK key): BANK and a big
-    // letter in the bank's colour - A orange, B yellow, C cyan, D purple.
-    static const RGB16Color colours[kPadBankCount] = {kThemeAccent, kThemeAmber, CYAN, RGB16Color(0xB45F)};
-    const RGB16Color k = colours[liveBank % kPadBankCount];
-    lcd.setBackColor(BLACK);
+    // Custom: this corner shows the PAD BANK now (the KNOB key is the BANK key): a square in the
+    // bank's colour (A orange, B yellow, C green, D purple) with BANK and the letter in white.
+    const RGB16Color k = kBankColor[liveBank % kPadBankCount];
     lcd.setForeColor(k);
+    lcd.fillRect(30, 454, 92, 54);
+    lcd.setBackColor(k);
+    lcd.setForeColor(kBankText);
     lcd.setFont(FONT_10x14);
     lcd.drawText("BANK", 4, 76, 459);
     lcd.setFont(FONT_14x18);
     char textData[2] = {(char)('A' + (liveBank % kPadBankCount)), 0};
     lcd.drawText(textData, 1, 76, 480);
+    lcd.setBackColor(BLACK);
     lcd.setFont(FONT_07x09);
 }
 
@@ -28007,13 +28009,12 @@ void Controller::lcd_drawLayerSong_NoteGateData(uint8_t layerNum_) {
         else snprintf(t, sizeof(t), "%7u/32", (unsigned)((g + 50) / 100));
         lcd.drawText(t, kMenuDataTextSize, kMenuDataX[7], kMenuDataY[7]);
         // custom: the hit's pad bank, in the bank's colour; EMPTY when that bank has no sound on this pad
-        static const RGB16Color kBankCol[kPadBankCount] = {kThemeAccent, kThemeAmber, CYAN, RGB16Color(0xB45F)};
         const uint8_t bk = b.getBank();
         const bool has = bank_samplePlay(layerNum_, bk);
         char bt[10];
         snprintf(bt, sizeof(bt), has ? "%c" : "%c EMPTY", (char)('A' + bk));
         snprintf(t, sizeof(t), "%10s", bt);
-        lcd_setMenuDataState(has ? kBankCol[bk] : kThemeMid);
+        lcd_setMenuDataState(has ? kBankColor[bk] : kThemeMid);
         lcd.drawText(t, kMenuDataTextSize, kMenuDataX[2], kMenuDataY[2]);
         lcd_setMenuDataState(WHITE);
     } else {

@@ -2423,7 +2423,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.35 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.36 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -7859,6 +7859,10 @@ struct Sound {
     int8_t playSampleSector = -1, writeSampleSector = -1;
     bool samplePlay = false;
 };
+
+// custom: pad bank colours - A orange, B yellow, C green, D purple (the corner square and the hits in the lanes)
+const RGB16Color kBankColor[4] = {0xFBC5, 0xFF08, 0x570A, 0xA29F};
+const RGB16Color kBankText = 0xFFDF;   // near white (pure WHITE would be themed to the cream ink)
 
 #define RAM_BANKSOUND_ADDRESS                       (RAM_MAIN_ADDRESS + 0x40000)   // custom: 10 pads x 4 banks of Sound
 
