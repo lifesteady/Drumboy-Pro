@@ -410,7 +410,7 @@ void Controller::update() {
             const LcdFont f = lcd.getFont();
             const LcdAlign a = lcd.getAlignment();
             lcd.setProtect(false);
-            page_drawCpu(930, 136);
+            page_drawCpu(930, 133);
             lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
             lcd.setFont(f);
             lcd.setAlignment(a);
@@ -5601,7 +5601,7 @@ void Controller::page_drawSummary(const char* text_, uint8_t accentChars_, RGB16
     lcd.setBackColor(BLACK);
     lcd.setForeColor(kThemeHeader);
     if (accentChars_) lcd.setAccentPrefix(accentChars_, accent_);   // custom: leading word highlighted
-    lcd.drawText(row, kPageSummaryChars, 30, 158);
+    lcd.drawText(row, kPageSummaryChars, 30, 159);   // custom: 1 px lower, room for the title's tails
 }
 
 void Controller::page_open(PageView page_) {
@@ -6033,10 +6033,10 @@ void Controller::page_drawRoute() {
     lcd.setAlignment(LEFT);
     lcd.setBackColor(BLACK);
     lcd.setForeColor(kThemeAccent);
-    lcd.drawText("ROUTING", 7, 30, 136);
+    lcd.drawText("ROUTING", 7, 30, 133);
     lcd.setForeColor(kThemeAmber);
-    lcd.drawText(lanes ? "2 LANES" : "CHAIN  ", 7, 186, 136);
-    page_drawCpu(930, 136);
+    lcd.drawText(lanes ? "2 LANES" : "CHAIN  ", 7, 186, 133);
+    page_drawCpu(930, 133);
     {
         const uint8_t code = (uint8_t)layerLibrary[routeLayer].mixerInMode;
         const uint8_t c = colOf(code);
@@ -6386,7 +6386,7 @@ void Controller::sampling_drawPanel(bool full_) {
         lcd.setAlignment(LEFT);
         lcd.setForeColor(kThemeAccent);
         snprintf(text, sizeof(text), "DRUM %02u  SAMPLING FROM LINE IN", sampLayer + 1);
-        lcd.drawText(text, strlen(text), 30, 136);
+        lcd.drawText(text, strlen(text), 30, 133);
         const char* st = (sampState == 1) ? "ARMED: STARTS WHEN THE SOUND COMES IN"
                        : (sampState == 2) ? "RECORDING"
                                           : "SAVING TO THE SD CARD";
@@ -6841,6 +6841,7 @@ bool Controller::chop_key(uint8_t key_) {
                 chopSel = 0;
                 chopZoom = 0;
             }
+            chopPlayStop = chopEnd;
             chopPlayPos = chopMark[0];
             chopPlay = true;
             break;
@@ -6878,9 +6879,20 @@ void Controller::chop_pad(uint8_t pad_) {
         page_markDirty(PAGE_CHOP);
         return;
     }
-    if (pad_ >= chopN) return;
+    if (pad_ >= chopN) {   // no slice of that number: the pad plays its drum (hear what you placed)
+        const Layer& pl = layerLibrary[pad_];
+        if ((!pl.mute) && (pl.samplePlay)) layer_playBeat(pad_, 1.0f);
+        return;
+    }
     chopSel = pad_;
     page_markDirty(PAGE_CHOP);
+    {   // the whole slice, however long, straight from the take
+        chopTap = false;
+        chopPlayStop = chop_sliceEnd(pad_);
+        chopPlayPos = chopMark[pad_];
+        chopPlay = true;
+        return;
+    }
     const uint32_t s = chopMark[pad_], e = chop_sliceEnd(pad_);
     uint32_t n = (e > s) ? (e - s) : 0;
     if (n > kPreviewMaxSamples) n = kPreviewMaxSamples;
@@ -7336,13 +7348,13 @@ void Controller::page_drawChop() {
         lcd.setFont(FONT_07x09);
         lcd.setAlignment(LEFT);
         lcd.setForeColor(kThemeHeader);
-        const char h1[] = "PADS: HEAR   ADD + PAD: PUT THE SLICE THERE   REC: PLAY AND TAP PADS TO CHOP   LEFT / RIGHT: SLICE";
+        const char h1[] = "PADS: HEAR   ADD + PAD: PUT THE SLICE THERE   REC: PLAY + TAP PADS TO CHOP   UP / DOWN: ZOOM";
         lcd.drawText(h1, strlen(h1), 30, 420);
-        const char h2[] = "CENTER: SPLIT  CLEAR: REMOVE  ADD + CLEAR: TRUNCATE  ADD + CENTER: FIT TEMPO  PASTE: PADS  ADD + PASTE: LOOP";
+        const char h2[] = "LEFT / RIGHT: SLICE  CENTER: SPLIT  CLEAR: REMOVE  ADD + CLEAR: TRUNCATE  ADD + CENTER: FIT TEMPO";
         lcd.drawText(h2, strlen(h2), 30, 438);
         lcd.setAlignment(RIGHT);
-        const char h3[] = "UP / DOWN: ZOOM   LAYER INST: BACK";
-        lcd.drawText(h3, strlen(h3), 930, 140);
+        const char h3[] = "LAYER INST: BACK";
+        lcd.drawText(h3, strlen(h3), 930, 137);
         pageFullRedraw = false;
     }
     lcd_drawChopKnobs();
@@ -7353,7 +7365,7 @@ void Controller::page_drawChop() {
     lcd.setBackColor(BLACK);
     lcd.setForeColor(kThemeAccent);
     snprintf(text, sizeof(text), "CHOP  %-30s", chopBase);
-    lcd.drawText(text, 36, 30, 136);
+    lcd.drawText(text, 36, 30, 133);
     const uint32_t s = chopMark[chopSel], e = chop_sliceEnd(chopSel);
     const unsigned sMs = (unsigned)(((uint64_t)s * 1000) / 44100), lMs = (unsigned)(((uint64_t)(e - s) * 1000) / 44100);
     char where[24];
@@ -7431,14 +7443,21 @@ void Controller::page_drawChop() {
     const unsigned totMs = (unsigned)(((uint64_t)chopLen * 1000) / 44100);
     unsigned placed = 0;
     for (uint8_t k = 0; k < chopN; k++) if (chopPadOf[k] >= 0) placed++;
-    snprintf(text, sizeof(text), "%u SLICES   %u ON PADS   TAKE %u.%u S   %u BEATS = %u.%u BPM", chopN, placed, totMs / 1000, (totMs % 1000) / 100,
+    snprintf(text, sizeof(text), "%u SLICES  %u PLACED  TAKE %u.%u S  %u BEATS = %u.%u BPM", chopN, placed, totMs / 1000, (totMs % 1000) / 100,
              beats, bpm10 / 10, bpm10 % 10);
-    if (chopZoom) snprintf(text + strlen(text), sizeof(text) - strlen(text), "   ZOOM %uX", 1u << chopZoom);
+    if (chopZoom) snprintf(text + strlen(text), sizeof(text) - strlen(text), "  ZOOM %uX", 1u << chopZoom);
     lcd.setFont(FONT_07x09);
     lcd.setAlignment(LEFT);
     lcd.setForeColor(kThemeHeader);
-    lcd.clearRect(30, 394, 900, 10);
+    lcd.clearRect(30, 393, 900, 14);
     lcd.drawText(text, strlen(text), 30, 396);
+    {   // paste keys, right end of the same row
+        lcd.setAlignment(RIGHT);
+        lcd.setForeColor(kThemeAmber);
+        const char hp[] = "PASTE: ON PADS   ADD + PASTE: LOOP";
+        lcd.drawText(hp, strlen(hp), 930, 396);
+        lcd.setAlignment(LEFT);
+    }
     const uint16_t oy = 182, oh = 4;
     if (chopZoom) {
         for (uint16_t c = 0; c < gw; c += 2) {
@@ -7669,7 +7688,7 @@ void Controller::page_drawGroove() {
     lcd.setAlignment(LEFT);
     lcd.setBackColor(BLACK);
     lcd.setForeColor(kThemeAccent);
-    lcd.drawText("GROOVE", 6, 30, 136);
+    lcd.drawText("GROOVE", 6, 30, 133);
     const char* q = kQuantizeDataLibrary[(rhythm.quantize <= kMaxQuantize) ? rhythm.quantize : kInitialQuantize].nameLongR;
     while (*q == ' ') q++;
     const char* g = kSwingGridName[(rhythm.swingGrid <= kMaxSwingGrid) ? rhythm.swingGrid : kInitialSwingGrid];
@@ -7937,7 +7956,7 @@ void Controller::page_drawSample() {
         if (dot) *dot = 0;
     }
     snprintf(text, sizeof(text), "DRUM %02d  %-40.40s", selectedLayerNum + 1, hasSample ? name : "NO SAMPLE LOADED");
-    lcd.drawText(text, 49, 30, 136);
+    lcd.drawText(text, 49, 30, 133);
 
     const float secs = hasSample ? (float)size / AUDIO_SAMPLE_RATE : 0.0f;
     const float sSec = secs * (float)layer.start / 100.0f;
@@ -8974,7 +8993,7 @@ void Controller::pitch_drawCounter() {
     lcd.setAlignment(RIGHT);
     lcd.setBackColor(BLACK);
     lcd.setForeColor(kThemeAccent);
-    lcd.drawText(text, strlen(text), 930, 138);
+    lcd.drawText(text, strlen(text), 930, 135);
 }
 
 void Controller::pitch_update() {
@@ -9147,7 +9166,7 @@ void Controller::song_drawCounter(bool force_) {
     lcd.setAlignment(RIGHT);
     lcd.setBackColor(BLACK);
     lcd.setForeColor(kThemeAccent);
-    lcd.drawText(pad, 16, 930, 138);
+    lcd.drawText(pad, 16, 930, 135);
 }
 
 void Controller::lcd_drawSongKnobs() {
@@ -9208,9 +9227,9 @@ void Controller::page_drawSong() {
     lcd.setAlignment(LEFT);
     lcd.setBackColor(BLACK);
     lcd.setForeColor(kThemeAccent);
-    lcd.drawText("SONG", 4, 30, 136);
+    lcd.drawText("SONG", 4, 30, 133);
     lcd.setForeColor(songMode ? kThemeAmber : kThemeMid);
-    lcd.drawText(songMode ? "MODE ON " : "MODE OFF", 8, 120, 136);
+    lcd.drawText(songMode ? "MODE ON " : "MODE OFF", 8, 120, 133);
     uint32_t bars = 0, loops = 0;
     for (uint8_t k = 0; k < songCount; k++) { bars += (uint32_t)((songSteps[k] >> 4) + 1) * rhythm.bar; loops += (songSteps[k] >> 4) + 1; }
     const uint32_t bpm = rhythm.tempo ? rhythm.tempo : 90;
@@ -9318,7 +9337,7 @@ void Controller::page_drawLevels() {
     lcd.setBackColor(BLACK);
     lcd.setForeColor(kThemeAccent);
     snprintf(text, sizeof(text), "LEVELS  DRUM %02u %-12.12s", pitchLayer + 1, (*nm) ? nm : "-");
-    lcd.drawText(text, strlen(text), 30, 136);
+    lcd.drawText(text, strlen(text), 30, 133);
     lcd_drawIo_PitchData();
     if (humanize) snprintf(text, sizeof(text), "SOFTEST %2u   PAD VELOCITY %2u   HUMANIZE +-%u", levelsSoftest, padVelocity, humanize);
     else snprintf(text, sizeof(text), "SOFTEST %2u   PAD VELOCITY %2u   HUMANIZE OFF", levelsSoftest, padVelocity);
@@ -9388,7 +9407,7 @@ void Controller::page_drawPitch() {
     lcd.setBackColor(BLACK);
     lcd.setForeColor(kThemeAccent);
     snprintf(text, sizeof(text), "%s  DRUM %02u %-12.12s", slicerOn(pitchLayer) ? "SLICES" : "NOTES ", pitchLayer + 1, (*nm) ? nm : "-");
-    lcd.drawText(text, strlen(text), 30, 136);
+    lcd.drawText(text, strlen(text), 30, 133);
     lcd_drawIo_PitchData();
     snprintf(text, sizeof(text), "ROOT %-2s ON PAD %-2u   SCALE %-11s   OCTAVE %c%d%s  ", kPitchNoteName[pitchRoot % 12], pitchRootPad + 1, kPitchScaleName[pitchScale % kPitchScaleCount],
              (pitchOctave < 0) ? '-' : '+', ((pitchOctave < 0) ? -pitchOctave : pitchOctave) / 2, (((pitchOctave < 0) ? -pitchOctave : pitchOctave) % 2) ? ".5" : "");
@@ -9863,7 +9882,7 @@ void Controller::page_drawReverb() {
     lcd.setAlignment(LEFT);
     lcd.setBackColor(BLACK);
     lcd.setForeColor(on ? kThemeAccent : kThemeMid);
-    lcd.drawText(on ? "REVERB    " : "REVERB OFF", 10, 30, 136);
+    lcd.drawText(on ? "REVERB    " : "REVERB OFF", 10, 30, 133);
 
     char info[96];
     const uint16_t tailT = (uint16_t)(tail * 10.0f + 0.5f);
@@ -9877,7 +9896,7 @@ void Controller::page_drawReverb() {
         snprintf(info, sizeof(info), "%-8s  TAIL %2u.%u S  HIGHS %2u.%u S  PRE-DELAY %3u MS  WET %3u", tn, tailT / 10, tailT % 10,
                  hfT / 10, hfT % 10, (unsigned)(preSec * 1000.0f + 0.5f), reverb.wet);
     page_drawSummary(info, (uint8_t)strlen(tn), on ? kThemeAmber : kThemeMid);   // type in yellow
-    page_drawCpu(930, 136);
+    page_drawCpu(930, 133);
 
     // ---- 5. columns: each pixel of the graph written once per redraw (black, fill, edge)
     // Fills kept dark: the real panel shows these much more saturated than a monitor.
@@ -10062,7 +10081,7 @@ void Controller::page_drawFilter(uint8_t filterNum_) {
     lcd.setForeColor(on ? kThemeAccent : kThemeMid);
     char title[16];
     snprintf(title, sizeof(title), on ? "FILTER %u    " : "FILTER %u OFF", filterNum_ + 1);
-    lcd.drawText(title, 12, 30, 136);
+    lcd.drawText(title, 12, 30, 133);
 
     const char* typeName[] = {"OFF", "LOWPASS", "HIGHPASS", "BANDPASS", "BANDSTOP", "CLASSIC", "VINTAGE"};
     char cut[10];
@@ -10215,7 +10234,7 @@ void Controller::page_drawEq() {
     lcd.setAlignment(LEFT);
     lcd.setBackColor(BLACK);
     lcd.setForeColor(on ? kThemeAccent : kThemeMid);
-    lcd.drawText(on ? "EQ    " : "EQ OFF", 6, 30, 136);
+    lcd.drawText(on ? "EQ    " : "EQ OFF", 6, 30, 133);
     // custom: the preset name leads the summary line, in yellow (same look as the filter type)
     const int8_t presetNum = eq_matchPreset();
     const char* presetName = on ? ((presetNum >= 0) ? kEqPresets[presetNum].name : "CUSTOM") : "OFF";
@@ -10667,7 +10686,7 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
     lcd.setAlignment(LEFT);
     lcd.setForeColor(on ? kThemeAccent : kThemeMid);
     snprintf(padded, sizeof(padded), "%-13s", on ? title : "EFFECT OFF");
-    lcd.drawText(padded, 13, 30, 136);
+    lcd.drawText(padded, 13, 30, 133);
     page_drawSummary(info);
     lcd.setAlignment(CENTER);
     for (uint8_t q = 0; q < 5; q++) {
@@ -10760,7 +10779,7 @@ void Controller::page_drawLfo() {
     lcd.setBackColor(BLACK);
     lcd.setForeColor(on ? kThemeAccent : kThemeMid);
     snprintf(text, sizeof(text), on ? "LFO %02u OF %02u    " : "LFO %02u OF %02u OFF", selectedLfoNum + 1, kLfoLibrarySize);
-    lcd.drawText(text, 16, 30, 136);
+    lcd.drawText(text, 16, 30, 133);
     // custom: which knob changes the LFO, right next to its number
     lcd.setFont(FONT_07x09);
     lcd.setForeColor(kThemeAmber);
@@ -29437,7 +29456,7 @@ void Controller::processAudioSend(uint32_t* outputBuffer) {
         const float g = kLayerVolumeCoef * mixer.masterVolumeFloat * chopGain / 32768.0f;
         uint32_t p = chopPlayPos;
         for (uint16_t i = 0; i < I2S_BLOCK_SIZE; i++) {
-            if (p >= chopEnd) { chopPlay = false; break; }
+            if ((p >= chopEnd) || (p >= chopPlayStop)) { chopPlay = false; break; }
             const float v = (float)src[p++] * g;
             audioSend_L[i] += v;
             audioSend_R[i] += v;

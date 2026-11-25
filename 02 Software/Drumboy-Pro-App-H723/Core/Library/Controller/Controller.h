@@ -622,6 +622,7 @@ class Controller {
     uint8_t slice_beats(uint8_t l_);                                    // slicer drum's loop length in beats
     volatile bool chopPlay = false;                                     // the take is playing (REC on the Chop page)
     volatile uint32_t chopPlayPos = 0;
+    volatile uint32_t chopPlayStop = 0;                                 // where the chop player stops
     bool chopTap = false;                                               // pads drop slice starts while it plays
     uint32_t chopPlayTick = 0;
     void chop_ensureStem();
