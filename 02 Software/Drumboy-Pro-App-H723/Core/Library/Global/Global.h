@@ -346,6 +346,11 @@ const uint32_t kSampleByteSize                      = kSampleSize * 4;
 // Custom: was 15. Ten drums need at most 11 sectors (one extra while a new sample loads),
 // so the last 3 sectors (2.88 MB) now hold the undo history.
 const uint8_t kSampleSectorLibrarySize              = 12;
+// Custom: sampling from Line In. Recorded into the undo region (undo history is cleared), with a
+// short pre-roll ring in front so the attack before the threshold isn't lost.
+const uint16_t kSampPreRoll                         = 1024;                     // must be a power of 2 (23 ms)
+const uint32_t kSampMaxLength                       = kSampleSize - kSampPreRoll - 64;   // what one pad can hold
+const float kSampThreshold                          = 0.03f;                    // about -30 dB starts the take
 #define RAM_UNDO_ADDRESS                            (RAM_SAMPLE_ADDRESS + (12 * kSampleByteSize))
 const uint32_t kUndoRegionBytes                     = 3 * kSampleByteSize;     // ends at RAM_DELAY_ADDRESS
 const uint8_t kUndoSlots                            = 16;                      // 15 undo steps
@@ -2376,7 +2381,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.14 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.15 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;

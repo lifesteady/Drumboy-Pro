@@ -401,6 +401,9 @@ void Controller::update() {
         // Custom: Note Repeat while the sequencer is stopped (free-running at the grid rate).
         noteRepeat_stopped();
 
+        // Custom: sampling from Line In (meter, saving the take).
+        sampling_update();
+
         // Custom: live CPU readout on the Routing and Reverb pages.
         if (((page == PAGE_ROUTE) || (page == PAGE_REVERB)) && ((HAL_GetTick() - routeCpuTick) >= 500)) {
             routeCpuTick = HAL_GetTick();
@@ -1868,6 +1871,8 @@ void Controller::keyboard_action() {
 
 
                             case KEY_REC:
+                                // Custom: on the Sample page REC samples from Line In onto this drum.
+                                if (!alertFlag && (page == PAGE_SAMPLE)) { sampling_key(); break; }
                                 if (!alertFlag) {
                                     if (io.sync.slaveMode && io.syncIn) {
                                         if (playActive) {
@@ -6116,6 +6121,7 @@ uint32_t Controller::undo_slotAddress(uint8_t pos_) {
 }
 
 void Controller::undo_save(uint8_t pos_) {
+    if (sampState != 0) return;   // custom: the undo region holds the recording right now
     uint8_t* dst = (uint8_t*)undo_slotAddress(pos_);
     for (uint8_t l = 0; l < kLayerLibrarySize; l++) memcpy(dst + (l * kUndoLayerBytes), layerLibrary[l].bankLibrary, kUndoLayerBytes);
 }
@@ -6177,6 +6183,7 @@ void Controller::undo_reset() {
 }
 
 void Controller::undo_checkpoint(UndoKind kind_) {
+    if (sampState != 0) return;   // custom: no undo steps while sampling (the region is in use)
     // Call BEFORE an edit. Quick repeats of the same kind of edit become one step.
     const uint32_t now = HAL_GetTick();
     if (kind_ == UNDO_RECORD) {
@@ -6236,6 +6243,269 @@ void Controller::undo_cancelShiftActions() {
     hpUnmuteKeyFlag = false;
     loUnmuteKeyFlag = false;
     liUnmuteKeyFlag = false;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+/* Custom: Sampling from Line In ---------------------------------------------*/
+////////////////////////////////////////////////////////////////////////////////
+// Sample page, REC: armed -> starts by itself when Line In gets loud enough (a short pre-roll
+// keeps the attack) -> REC again or a full pad (5.4 s) stops -> saved as a new WAV in
+// Sample/RECORDED/ and loaded onto the drum. The take is held in the undo region, so the undo
+// history is cleared when you arm.
+
+static float* sampBuf() { return (float*)(RAM_UNDO_ADDRESS); }   // [0..kSampPreRoll) ring, then the take
+
+void Controller::sampling_put(float x_) {
+    /// @brief Audio interrupt: one Line In sample (after the Line In volume knob).
+    const float a = fabsf(x_);
+    if (a > sampPeak) sampPeak = a;
+    float* b = sampBuf();
+    if (sampState == 1) {
+        b[sampRing] = x_;
+        sampRing = (uint16_t)((sampRing + 1) & (kSampPreRoll - 1));
+        if (a >= kSampThreshold) { sampCount = 0; sampState = 2; }
+    } else if (sampState == 2) {
+        b[kSampPreRoll + sampCount] = x_;
+        if (++sampCount >= kSampMaxLength) sampState = 3;
+    }
+}
+
+void Controller::sampling_key() {
+    /// @brief REC on the Sample page.
+    if ((selectedLayerNum < 0) || (selectedLayerNum >= kLayerLibrarySize)) return;
+    switch (sampState) {
+        case 0:   // arm
+            undo_reset();
+            memset((void*)sampBuf(), 0, kSampPreRoll * sizeof(float));
+            sampLayer = (uint8_t)selectedLayerNum;
+            sampRing = 0;
+            sampCount = 0;
+            sampPeak = 0.0f;
+            sampMessage[0] = 0;
+            sampState = 1;
+            break;
+        case 1: sampState = 0; snprintf(sampMessage, sizeof(sampMessage), "CANCELLED"); break;   // cancel
+        case 2: sampState = 3; break;                                                          // stop
+        default: break;                                                                         // saving: wait
+    }
+    page_markDirty(PAGE_SAMPLE);
+    if (sampState == 0) pageFullRedraw = true;
+}
+
+void Controller::sampling_update() {
+    /// @brief Main loop: live meter about 30 times a second, and saving once a take is done.
+    if (sampState == 0) return;
+    if ((page != PAGE_SAMPLE) && (sampState == 1)) { sampState = 0; return; }   // left the page while armed
+    if (sampState == 3) {
+        sampState = 4;
+        if (page == PAGE_SAMPLE) {
+            lcd.setProtect(false);
+            sampling_drawPanel(true);
+            lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
+        }
+        sampling_save();
+        sampState = 0;
+        if (page == PAGE_SAMPLE) { pageFullRedraw = true; page_markDirty(PAGE_SAMPLE); }
+        return;
+    }
+    if ((HAL_GetTick() - sampDrawTick) < 33) return;
+    sampDrawTick = HAL_GetTick();
+    if (page != PAGE_SAMPLE) return;
+    const LcdFont f = lcd.getFont();
+    const LcdAlign al = lcd.getAlignment();
+    lcd.setProtect(false);
+    sampling_drawPanel(sampShown != sampState);
+    lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
+    lcd.setFont(f);
+    lcd.setAlignment(al);
+}
+
+void Controller::sampling_drawPanel(bool full_) {
+    /// @brief The Sample page while sampling: state, input meter with the threshold, take length.
+    const uint16_t x0 = 40, w = 860;
+    char text[96];
+    lcd.setBackColor(BLACK);
+    if (full_) {
+        sampShown = sampState;
+        lcd.clearRect(30, 130, 905, 285);
+        lcd.setFont(FONT_14x18);
+        lcd.setAlignment(LEFT);
+        lcd.setForeColor(kThemeAccent);
+        snprintf(text, sizeof(text), "DRUM %02u  SAMPLING FROM LINE IN", sampLayer + 1);
+        lcd.drawText(text, strlen(text), 30, 136);
+        const char* st = (sampState == 1) ? "ARMED: STARTS WHEN THE SOUND COMES IN"
+                       : (sampState == 2) ? "RECORDING"
+                                          : "SAVING TO THE SD CARD";
+        snprintf(text, sizeof(text), "%s", st);
+        page_drawSummary(text, (uint8_t)((sampState == 2) ? 9 : ((sampState == 1) ? 5 : 6)), (sampState == 2) ? RED : kThemeAmber);
+        lcd.setFont(FONT_07x09);
+        lcd.setForeColor(kThemeHeader);
+        lcd.drawText("INPUT", 5, x0, 200);
+        lcd.drawText("TAKE", 4, x0, 290);
+        const char* hint = (sampState == 1) ? "REC: CANCEL    MIXER LINE IN LEVEL: INPUT LEVEL    THE WHITE LINE: WHERE IT STARTS"
+                         : (sampState == 2) ? "REC: STOP    IT STOPS BY ITSELF WHEN THE PAD IS FULL"
+                                            : "";
+        lcd.clearRect(30, 380, 905, 12);
+        lcd.drawText(hint, strlen(hint), x0, 380);
+        if (mixer.liMute) {
+            lcd.setForeColor(RED);
+            lcd.drawText("LINE IN IS MUTED: UNMUTE IT IN THE MIXER", 40, x0, 360);
+        }
+    }
+    // input meter: -60 dB .. 0 dB
+    const uint16_t my = 214, mh = 40;
+    float pk = sampPeak;
+    sampPeak = 0.0f;
+    sampMeter = (pk > sampMeter) ? pk : sampMeter * 0.85f;
+    auto toX = [&](float v) -> uint16_t {
+        if (v < 0.001f) return 0;
+        float db = 20.0f * log10f(v);
+        if (db < -60.0f) db = -60.0f;
+        if (db > 0.0f) db = 0.0f;
+        return (uint16_t)((db + 60.0f) / 60.0f * w);
+    };
+    const uint16_t fill = toX(sampMeter), thr = toX(kSampThreshold);
+    const uint16_t warn = toX(0.5f), clip = toX(0.89f);
+    for (uint16_t c = 0; c < w; c += 4) {
+        RGB16Color k = page_mix(BLACK, kThemeLine, 0.5f);
+        if (c < fill) k = (c >= clip) ? RED : ((c >= warn) ? kThemeAmber : kThemeGood);
+        lcd.setForeColor(k);
+        lcd.fillRect(x0 + c, my, 3, mh);
+    }
+    lcd.setForeColor(kThemeInk);
+    lcd.drawVLine(x0 + thr, my - 6, mh + 12);
+    // take length
+    const uint16_t ty = 304, th = 22;
+    const uint32_t n = (sampState >= 2) ? sampCount : 0;
+    const uint16_t tf = (uint16_t)(((uint64_t)n * w) / kSampMaxLength);
+    lcd.setForeColor((sampState == 2) ? RED : kThemeAmber);
+    if (tf) lcd.fillRect(x0, ty, tf, th);
+    lcd.setForeColor(page_mix(BLACK, kThemeLine, 0.4f));
+    if (tf < w) lcd.fillRect(x0 + tf, ty, w - tf, th);
+    const unsigned cs = (unsigned)(((uint64_t)n * 100) / (uint32_t)AUDIO_SAMPLE_RATE);
+    const unsigned mx = (unsigned)(((uint64_t)kSampMaxLength * 100) / (uint32_t)AUDIO_SAMPLE_RATE);
+    snprintf(text, sizeof(text), "%u.%02u S OF %u.%02u S", cs / 100, cs % 100, mx / 100, mx % 100);
+    lcd.setFont(FONT_07x09);
+    lcd.setAlignment(RIGHT);
+    lcd.setForeColor(kThemeHeader);
+    lcd.drawText(text, strlen(text), x0 + w, 290);
+    lcd.setAlignment(LEFT);
+}
+
+bool Controller::sampling_save() {
+    /// @brief Writes the take as a 16-bit mono 44.1 kHz WAV in Sample/RECORDED/, adds it to the
+    /// sample library and loads it onto the drum. Peak-normalised to about -1 dB.
+    const uint32_t total = kSampPreRoll + sampCount;
+    const float* b = sampBuf();
+    auto at = [&](uint32_t k_) -> float {   // pre-roll ring (oldest first), then the take
+        return (k_ < kSampPreRoll) ? b[(sampRing + k_) & (kSampPreRoll - 1)] : b[k_];
+    };
+    float peak = 0.0001f;
+    for (uint32_t k = 0; k < total; k++) { const float a = fabsf(at(k)); if (a > peak) peak = a; }
+    float gain = 0.89f / peak;
+    if (gain > 16.0f) gain = 16.0f;
+
+    keyboard_disable();
+    f_close(&sd.file);
+    f_mkdir("Sample/RECORDED");
+    char name[kFileNameSize];
+    char path[96];
+    uint16_t num = 1;
+    for (; num < 1000; num++) {
+        snprintf(name, sizeof(name), "REC_%03u.wav", num);
+        snprintf(path, sizeof(path), "Sample/RECORDED/%s", name);
+        if (f_stat(path, &sd.fileInfo) != FR_OK) break;
+    }
+    bool ok = (num < 1000) && (f_open(&sd.file, path, FA_WRITE | FA_CREATE_ALWAYS) == FR_OK);
+    if (ok) {
+        static uint8_t hdr[44] __attribute__((aligned(32)));
+        const uint32_t dataBytes = total * 2;
+        auto w32 = [&](uint8_t* p, uint32_t v) { p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24; };
+        auto w16 = [&](uint8_t* p, uint16_t v) { p[0] = v; p[1] = v >> 8; };
+        memcpy(hdr, "RIFF", 4); w32(hdr + 4, 36 + dataBytes); memcpy(hdr + 8, "WAVE", 4);
+        memcpy(hdr + 12, "fmt ", 4); w32(hdr + 16, 16); w16(hdr + 20, 1); w16(hdr + 22, 1);
+        w32(hdr + 24, 44100); w32(hdr + 28, 44100 * 2); w16(hdr + 32, 2); w16(hdr + 34, 16);
+        memcpy(hdr + 36, "data", 4); w32(hdr + 40, dataBytes);
+        UINT bw = 0;
+        ok = (f_write(&sd.file, hdr, 44, &bw) == FR_OK) && (bw == 44);
+        static int16_t pcm[2048] __attribute__((aligned(32)));
+        for (uint32_t k = 0; ok && (k < total);) {
+            uint32_t n = 0;
+            for (; (n < 2048) && (k < total); n++, k++) {
+                float v = at(k) * gain;
+                if (v > 1.0f) v = 1.0f;
+                if (v < -1.0f) v = -1.0f;
+                pcm[n] = (int16_t)(v * 32767.0f);
+            }
+            ok = (f_write(&sd.file, pcm, n * 2, &bw) == FR_OK) && (bw == n * 2);
+        }
+        f_close(&sd.file);
+    }
+
+    // add it to the library: the RECORDED instrument (folder) and its sample list
+    int16_t inst = -1;
+    if (ok) {
+        char entry[kFileNameSize];
+        if (f_open(&sd.file, "System/Data/Inst.lib", FA_READ) == FR_OK) {
+            for (uint16_t i = 0; i < instLibrarySize; i++) {
+                UINT br = 0;
+                if ((f_lseek(&sd.file, 25 + (uint32_t)i * kFileNameSize) != FR_OK) || (f_read(&sd.file, entry, kFileNameSize, &br) != FR_OK) || (br < kFileNameSize)) break;
+                entry[kFileNameSize - 1] = 0;
+                if (strcmp(entry, "RECORDED") == 0) { inst = (int16_t)i; break; }
+            }
+            f_close(&sd.file);
+        }
+        static char rec[kFileNameSize] __attribute__((aligned(32)));
+        if ((inst < 0) && (instLibrarySize < kInstLibraryMaxSize)) {   // new instrument at the end of the list
+            if (f_open(&sd.file, "System/Data/Inst.lib", FA_WRITE | FA_OPEN_ALWAYS) == FR_OK) {
+                memset(rec, 0, sizeof(rec));
+                strcpy(rec, "RECORDED");
+                UINT bw = 0;
+                if ((f_lseek(&sd.file, 25 + (uint32_t)instLibrarySize * kFileNameSize) == FR_OK) && (f_write(&sd.file, rec, kFileNameSize, &bw) == FR_OK) &&
+                    (f_write(&sd.file, "EOF", 3, &bw) == FR_OK)) {
+                    inst = (int16_t)instLibrarySize;
+                    sampleLibrarySize[inst] = 0;
+                    instLibrarySize++;
+                }
+                f_close(&sd.file);
+            }
+        }
+        if (inst >= 0) {
+            const uint16_t count = sampleLibrarySize[inst];
+            if (f_open(&sd.file, "System/Data/RECORDED.ins", (count == 0) ? (FA_WRITE | FA_CREATE_ALWAYS) : (FA_WRITE | FA_OPEN_ALWAYS)) == FR_OK) {
+                UINT bw = 0;
+                bool w = true;
+                if (count == 0) {
+                    static const char header[] __attribute__((aligned(4))) = "RW_DRUMBOY_SAMPLE        ";
+                    w = (f_write(&sd.file, header, 25, &bw) == FR_OK);
+                }
+                memset(rec, 0, sizeof(rec));
+                strncpy(rec, name, kFileNameSize - 1);
+                w = w && (f_lseek(&sd.file, 25 + (uint32_t)count * kFileNameSize) == FR_OK) && (f_write(&sd.file, rec, kFileNameSize, &bw) == FR_OK) &&
+                    (f_write(&sd.file, "EOF", 3, &bw) == FR_OK);
+                f_close(&sd.file);
+                if (w) sampleLibrarySize[inst] = count + 1;
+                else inst = -1;
+            } else {
+                inst = -1;
+            }
+        }
+    }
+    keyboard_enable();
+
+    if (!ok) { snprintf(sampMessage, sizeof(sampMessage), "COULD NOT SAVE TO THE SD CARD"); undo_showText("ERROR"); return false; }
+    if (inst < 0) { snprintf(sampMessage, sizeof(sampMessage), "SAVED %s, NOT IN THE LIST YET", name); return false; }
+
+    // load it onto the drum (same steps as picking a sample in the INST menu)
+    layerInst_setInstSelected(sampLayer, inst);
+    layerInst_setSampleSelected(sampLayer, (int16_t)(sampleLibrarySize[inst] - 1));
+    layerInst_setInstLoaded(sampLayer);
+    layerInst_setSampleLoaded(sampLayer);
+    layerInst_setEnd(sampLayer, kInitialLayerEnd);       // whole take plays
+    layerInst_setStart(sampLayer, kInitialLayerStart);
+    snprintf(sampMessage, sizeof(sampMessage), "SAVED AS RECORDED / %s", name);
+    undo_showText("SAVED");
+    return true;
 }
 
 void Controller::tap_tempo() {
@@ -6701,8 +6971,14 @@ void Controller::page_drawSample() {
         lcd.setAlignment(RIGHT);
         const char h2[] = "TAP LAYER INST: BACK";
         lcd.drawText(h2, strlen(h2), 930, 438);
+        lcd.setAlignment(LEFT);
+        lcd.setForeColor(kThemeAmber);
+        const char h3[] = "REC: SAMPLE FROM LINE IN ONTO THIS DRUM";
+        lcd.drawText(h3, strlen(h3), 30, 438);
         pageFullRedraw = false;
+        sampShown = 0xFF;
     }
+    if (sampState != 0) { sampling_drawPanel(sampShown != sampState); return; }   // custom: sampling
 
     // ---- title + summary
     lcd.setFont(FONT_14x18);
@@ -27151,6 +27427,8 @@ void Controller::processAudioReceive(uint32_t* inputBuffer_) {
 
         float out = signal * gateGain * currentVol;
         audioReceive[i] = clamp(out, -1.0f, 1.0f);
+        // custom: sampling takes Line In after its own volume knob, before the master volume
+        if (sampState == 1 || sampState == 2) sampling_put(signal * gateGain * kMixerLiVolumeDataLibrary[mixer.liVolume].data);
     }
 }
 

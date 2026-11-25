@@ -575,6 +575,21 @@ class Controller {
     void undo_cancelShiftActions();
     void undo_showText(const char* text_);
     void tap_tempo();                                                   // custom: ADD + RHYTHM taps the tempo
+    // custom: sampling from Line In onto the selected drum (Sample page, REC key)
+    void sampling_key();                                                // REC on the Sample page: arm / cancel / stop
+    void sampling_put(float x_);                                        // audio interrupt: one Line In sample
+    void sampling_update();                                             // main loop: meter, save when done
+    void sampling_drawPanel(bool full_);
+    bool sampling_save();
+    volatile uint8_t sampState = 0;                                     // 0 idle, 1 armed, 2 recording, 3 done (to save), 4 saving
+    uint8_t sampLayer = 0;
+    volatile uint32_t sampCount = 0;                                    // samples recorded after the trigger
+    volatile uint16_t sampRing = 0;                                     // pre-roll ring write position
+    volatile float sampPeak = 0.0f;                                     // input peak since the meter last looked
+    float sampMeter = 0.0f;                                             // meter value shown (with fall-off)
+    uint32_t sampDrawTick = 0;
+    uint8_t sampShown = 0xFF;                                           // state the panel was last drawn for
+    char sampMessage[48] = "";                                          // last result (saved as ... / error)
     uint32_t tapTick[5] = {0};                                          // custom: last tap times (ms)
     uint8_t tapCount = 0;
     void preview_update();
