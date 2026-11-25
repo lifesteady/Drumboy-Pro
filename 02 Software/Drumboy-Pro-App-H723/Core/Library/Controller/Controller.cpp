@@ -10605,6 +10605,34 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
             yl[0] = "+1"; yl[1] = "0"; yl[2] = "-1";
         } break;
 
+        case EF_VINYL: {
+            // Custom VINYL SIM: a test tone through it - pitch drifting with WOW, rounded by AGE,
+            // hiss and pops on top (a fixed picture of the settings, not live audio).
+            Vinyl& v = e.vinyl;
+            const float dry = v.eDry / 100.0f, wet = v.fWet / 100.0f;
+            const float range = 1.25f;
+            uint32_t r = 0xBEEF1u;
+            auto rnd = [&r]() -> float { r = r * 1664525u + 1013904223u; return (float)(r >> 8) * (1.0f / 16777216.0f); };
+            const float a = v.dAge / 100.0f;
+            float pop = 0.0f, sign = 1.0f;
+            for (uint16_t i = 0; i < gw; i++) {
+                const float t = (float)i / (float)gw;
+                const float x = 0.8f * sinf(2.0f * 3.14159265f * 6.0f * t);
+                const float wob = (v.cWow / 100.0f) * 0.35f * sinf(2.0f * 3.14159265f * 0.9f * t);
+                float y = 0.8f * (1.0f - 0.35f * a) * sinf(2.0f * 3.14159265f * 6.0f * t + wob * 6.0f);
+                y += (rnd() - 0.5f) * v.noiseAmt * 6.0f;
+                if (rnd() < (v.bCrackle / 100.0f) * 0.02f) { pop = v.crackAmt * 2.0f; sign = (rnd() < 0.5f) ? -1.0f : 1.0f; }
+                if (pop > 0.01f) { y += pop * sign; pop *= 0.5f; sign = -sign; }
+                const float m = wet * y + dry * x;
+                curveY[i] = yFromUnit((m + range) / (2.0f * range));
+                if ((i % 4) < 2) refY[i] = yFromUnit((x + range) / (2.0f * range));
+            }
+            snprintf(title, sizeof(title), "VINYL SIM %u", effectNum_ + 1);
+            snprintf(info, sizeof(info), "NOISE %3u   CRACKLE %3u   WOW %3u   AGE %3u   DRY %3u   WET %3u", v.aNoise, v.bCrackle, v.cWow, v.dAge, v.eDry, v.fWet);
+            xl[0] = "0"; xl[1] = ""; xl[2] = "TEST TONE"; xl[3] = ""; xl[4] = "";
+            yl[0] = "+1"; yl[1] = "0"; yl[2] = "-1";
+        } break;
+
         default:
             snprintf(title, sizeof(title), "EFFECT %u", effectNum_ + 1);
             snprintf(info, sizeof(info), " ");
@@ -11431,6 +11459,17 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
                         }
                     }
 
+                    // custom: VINYL SIM settings (only in files that have them)
+                    if (data[kVinylFileAddr + 12] == kVinylFileMark) {
+                        for (uint8_t i = 0; i < kEffectLibrarySize; i++) {
+                            effect_setAData(i, EF_VINYL, data[kVinylFileAddr + i * 6 + 0]);
+                            effect_setBData(i, EF_VINYL, data[kVinylFileAddr + i * 6 + 1]);
+                            effect_setCData(i, EF_VINYL, data[kVinylFileAddr + i * 6 + 2]);
+                            effect_setDData(i, EF_VINYL, data[kVinylFileAddr + i * 6 + 3]);
+                            effect_setEData(i, EF_VINYL, data[kVinylFileAddr + i * 6 + 4]);
+                            effect_setFData(i, EF_VINYL, data[kVinylFileAddr + i * 6 + 5]);
+                        }
+                    }
                     // custom: SPACE settings (only in files that have them)
                     if (data[177] == 'S') {
                         const uint16_t pos[2][6] = {{490, 491, 492, 493, 494, 495}, {496, 497, 498, 499, 175, 176}};
@@ -11443,6 +11482,7 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
                             effect_setFData(i, EF_SPACE, data[pos[i][5]]);
                         }
                     }
+                    for (uint8_t i = 0; i < kEffectLibrarySize; i++) { effect[i].mixTransition.active = false; effect_updateMixFloats(i); }   // custom: mix of the type in use
 
                     // custom: routing layout (older files: CHAIN). Drums are recalculated as they load.
                     routeMode = ((data[179] & 0xF0) == kRouteModeFileMark) ? ((data[179] & 0x01) ? ROUTE_LANES : ROUTE_CHAIN) : ROUTE_CHAIN;
@@ -11873,6 +11913,12 @@ void Controller::sd_encodeProject(uint8_t* data) {
     for (uint8_t l = 0; l < kLayerLibrarySize; l++) data[kRevSendFileAddr + l] = (uint8_t)((layerLibrary[l].revSend & 0x0F) | ((layerLibrary[l].muteGroup & 0x07) << 4) | (layerLibrary[l].sliceOff ? 0x80 : 0));   // custom: reverb send + mute group + slices off
     for (uint8_t l = 0; l < kLayerLibrarySize; l++) data[kSliceFileAddr + l] = (uint8_t)((layerLibrary[l].sliceBeats & 0x3F) | (layerLibrary[l].sliceSync ? 0x80 : 0));   // custom: slicer SYNC + BEATS
     data[kSliceFileAddr + kLayerLibrarySize] = kSliceFileMark;
+    for (uint8_t i = 0; i < kEffectLibrarySize; i++) {   // custom: VINYL SIM settings
+        const Vinyl& vv = effect[i].vinyl;
+        const uint8_t vals[6] = {vv.aNoise, vv.bCrackle, vv.cWow, vv.dAge, vv.eDry, vv.fWet};
+        for (uint8_t k = 0; k < 6; k++) data[kVinylFileAddr + i * 6 + k] = vals[k];
+    }
+    data[kVinylFileAddr + 12] = kVinylFileMark;
     data[kRevSendFileAddr + kLayerLibrarySize] = kRevSendFileMark;
     {   // custom: Song mode (34 bytes in unused bytes 87-99 of drums 2-4's asset blocks)
         auto at = [](uint8_t k_) -> uint16_t { return (uint16_t)(500 + 100 * (1 + k_ / 13) + 87 + (k_ % 13)); };
@@ -12347,6 +12393,17 @@ SdResult Controller::sd_loadDrumkit(uint8_t kitNum_) {
                         }
                     }
 
+                    // custom: VINYL SIM settings (only in files that have them)
+                    if (data[kVinylFileAddr + 12] == kVinylFileMark) {
+                        for (uint8_t i = 0; i < kEffectLibrarySize; i++) {
+                            effect_setAData(i, EF_VINYL, data[kVinylFileAddr + i * 6 + 0]);
+                            effect_setBData(i, EF_VINYL, data[kVinylFileAddr + i * 6 + 1]);
+                            effect_setCData(i, EF_VINYL, data[kVinylFileAddr + i * 6 + 2]);
+                            effect_setDData(i, EF_VINYL, data[kVinylFileAddr + i * 6 + 3]);
+                            effect_setEData(i, EF_VINYL, data[kVinylFileAddr + i * 6 + 4]);
+                            effect_setFData(i, EF_VINYL, data[kVinylFileAddr + i * 6 + 5]);
+                        }
+                    }
                     // custom: SPACE settings (only in files that have them)
                     if (data[177] == 'S') {
                         const uint16_t pos[2][6] = {{490, 491, 492, 493, 494, 495}, {496, 497, 498, 499, 175, 176}};
@@ -12359,6 +12416,7 @@ SdResult Controller::sd_loadDrumkit(uint8_t kitNum_) {
                             effect_setFData(i, EF_SPACE, data[pos[i][5]]);
                         }
                     }
+                    for (uint8_t i = 0; i < kEffectLibrarySize; i++) { effect[i].mixTransition.active = false; effect_updateMixFloats(i); }   // custom: mix of the type in use
 
                     // custom: routing layout (older files: CHAIN). Drums are recalculated as they load.
                     routeMode = ((data[179] & 0xF0) == kRouteModeFileMark) ? ((data[179] & 0x01) ? ROUTE_LANES : ROUTE_CHAIN) : ROUTE_CHAIN;
@@ -12706,6 +12764,12 @@ SdResult Controller::sd_saveDrumkit(uint8_t kitNum_) {
     for (uint8_t l = 0; l < kLayerLibrarySize; l++) data[kRevSendFileAddr + l] = (uint8_t)((layerLibrary[l].revSend & 0x0F) | ((layerLibrary[l].muteGroup & 0x07) << 4) | (layerLibrary[l].sliceOff ? 0x80 : 0));   // custom: reverb send + mute group + slices off
     for (uint8_t l = 0; l < kLayerLibrarySize; l++) data[kSliceFileAddr + l] = (uint8_t)((layerLibrary[l].sliceBeats & 0x3F) | (layerLibrary[l].sliceSync ? 0x80 : 0));   // custom: slicer SYNC + BEATS
     data[kSliceFileAddr + kLayerLibrarySize] = kSliceFileMark;
+    for (uint8_t i = 0; i < kEffectLibrarySize; i++) {   // custom: VINYL SIM settings
+        const Vinyl& vv = effect[i].vinyl;
+        const uint8_t vals[6] = {vv.aNoise, vv.bCrackle, vv.cWow, vv.dAge, vv.eDry, vv.fWet};
+        for (uint8_t k = 0; k < 6; k++) data[kVinylFileAddr + i * 6 + k] = vals[k];
+    }
+    data[kVinylFileAddr + 12] = kVinylFileMark;
     data[kRevSendFileAddr + kLayerLibrarySize] = kRevSendFileMark;
     data[500 + kMetroRouteFileOffset] = kMetroRouteFileMark | ((uint8_t)metronome.mixerInMode & 0x0F);   // custom: where the metronome goes
     data[168] = reverb.size;
@@ -14994,6 +15058,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
                     case EF_SPACE:   // custom
                         textPtr = kSpaceRateDataLibrary[effect[0].space.aRate].nameLongR;
                         break;
+
+                    case EF_VINYL:   // custom
+                        textPtr = kNumberDataLibrary[effect[0].vinyl.aNoise].nameLongR;
+                        break;
                 }
                 break;
 
@@ -15037,6 +15105,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
 
                     case EF_SPACE:   // custom
                         textPtr = kNumberDataLibrary[effect[0].space.bIntensity].nameLongR;
+                        break;
+
+                    case EF_VINYL:   // custom
+                        textPtr = kNumberDataLibrary[effect[0].vinyl.bCrackle].nameLongR;
                         break;
                 }
                 break;
@@ -15082,6 +15154,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
                     case EF_SPACE:   // custom
                         textPtr = kSpaceHeadsDataLibrary[effect[0].space.cHeads].nameLongR;
                         break;
+
+                    case EF_VINYL:   // custom
+                        textPtr = kNumberDataLibrary[effect[0].vinyl.cWow].nameLongR;
+                        break;
                 }
                 break;
 
@@ -15125,6 +15201,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
 
                     case EF_SPACE:   // custom
                         textPtr = kNumberDataLibrary[effect[0].space.dAge].nameLongR;
+                        break;
+
+                    case EF_VINYL:   // custom
+                        textPtr = kNumberDataLibrary[effect[0].vinyl.dAge].nameLongR;
                         break;
                 }
                 break;
@@ -15170,6 +15250,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
                     case EF_SPACE:   // custom
                         textPtr = kNumberDataLibrary[effect[0].space.eDry].nameLongR;
                         break;
+
+                    case EF_VINYL:   // custom
+                        textPtr = kNumberDataLibrary[effect[0].vinyl.eDry].nameLongR;
+                        break;
                 }
                 break;
 
@@ -15213,6 +15297,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
 
                     case EF_SPACE:   // custom
                         textPtr = kNumberDataLibrary[effect[0].space.fWet].nameLongR;
+                        break;
+
+                    case EF_VINYL:   // custom
+                        textPtr = kNumberDataLibrary[effect[0].vinyl.fWet].nameLongR;
                         break;
                 }
                 break;
@@ -15268,6 +15356,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
                     case EF_SPACE:   // custom
                         textPtr = kSpaceRateDataLibrary[effect[1].space.aRate].nameLongR;
                         break;
+
+                    case EF_VINYL:   // custom
+                        textPtr = kNumberDataLibrary[effect[1].vinyl.aNoise].nameLongR;
+                        break;
                 }
                 break;
 
@@ -15313,6 +15405,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
                     case EF_SPACE:   // custom
                         textPtr = kNumberDataLibrary[effect[1].space.bIntensity].nameLongR;
                         break;
+
+                    case EF_VINYL:   // custom
+                        textPtr = kNumberDataLibrary[effect[1].vinyl.bCrackle].nameLongR;
+                        break;
                 }
                 break;
 
@@ -15356,6 +15452,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
 
                     case EF_SPACE:   // custom
                         textPtr = kSpaceHeadsDataLibrary[effect[1].space.cHeads].nameLongR;
+                        break;
+
+                    case EF_VINYL:   // custom
+                        textPtr = kNumberDataLibrary[effect[1].vinyl.cWow].nameLongR;
                         break;
                 }
                 break;
@@ -15401,6 +15501,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
                     case EF_SPACE:   // custom
                         textPtr = kNumberDataLibrary[effect[1].space.dAge].nameLongR;
                         break;
+
+                    case EF_VINYL:   // custom
+                        textPtr = kNumberDataLibrary[effect[1].vinyl.dAge].nameLongR;
+                        break;
                 }
                 break;
 
@@ -15445,6 +15549,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
                     case EF_SPACE:   // custom
                         textPtr = kNumberDataLibrary[effect[1].space.eDry].nameLongR;
                         break;
+
+                    case EF_VINYL:   // custom
+                        textPtr = kNumberDataLibrary[effect[1].vinyl.eDry].nameLongR;
+                        break;
                 }
                 break;
 
@@ -15488,6 +15596,10 @@ void Controller::lcd_drawGlobalMenuData(uint8_t encoderNum_) {
 
                     case EF_SPACE:   // custom
                         textPtr = kNumberDataLibrary[effect[1].space.fWet].nameLongR;
+                        break;
+
+                    case EF_VINYL:   // custom
+                        textPtr = kNumberDataLibrary[effect[1].vinyl.fWet].nameLongR;
                         break;
                 }
                 break;
@@ -16740,6 +16852,10 @@ void Controller::lcd_drawEffect_AData(uint8_t effectNum_) {
             textPtr = kSpaceRateDataLibrary[effect_.space.aRate].nameLongR;
             break;
 
+        case EF_VINYL:   // custom
+            textPtr = kNumberDataLibrary[effect_.vinyl.aNoise].nameLongR;
+            break;
+
         default:
             textPtr = "----------";
             break;
@@ -16806,6 +16922,10 @@ void Controller::lcd_drawEffect_BData(uint8_t effectNum_) {
         case EF_SPACE:   // custom
             textPtr = kNumberDataLibrary[effect_.space.bIntensity].nameLongR;
             break;
+
+        case EF_VINYL:   // custom
+            textPtr = kNumberDataLibrary[effect_.vinyl.bCrackle].nameLongR;
+            break;
     }
     // 3. VALUE DRAW
     // Draw resolved parameter-B value.
@@ -16868,6 +16988,10 @@ void Controller::lcd_drawEffect_CData(uint8_t effectNum_) {
 
         case EF_SPACE:   // custom
             textPtr = kSpaceHeadsDataLibrary[effect_.space.cHeads].nameLongR;
+            break;
+
+        case EF_VINYL:   // custom
+            textPtr = kNumberDataLibrary[effect_.vinyl.cWow].nameLongR;
             break;
     }
     // 3. VALUE DRAW
@@ -16932,6 +17056,10 @@ void Controller::lcd_drawEffect_DData(uint8_t effectNum_) {
         case EF_SPACE:   // custom
             textPtr = kNumberDataLibrary[effect_.space.dAge].nameLongR;
             break;
+
+        case EF_VINYL:   // custom
+            textPtr = kNumberDataLibrary[effect_.vinyl.dAge].nameLongR;
+            break;
     }
     // 3. VALUE DRAW
     // Draw resolved parameter-D value.
@@ -16995,6 +17123,10 @@ void Controller::lcd_drawEffect_EData(uint8_t effectNum_) {
         case EF_SPACE:   // custom
             textPtr = kNumberDataLibrary[effect_.space.eDry].nameLongR;
             break;
+
+        case EF_VINYL:   // custom
+            textPtr = kNumberDataLibrary[effect_.vinyl.eDry].nameLongR;
+            break;
     }
     // 3. VALUE DRAW
     // Draw resolved parameter-E value.
@@ -17057,6 +17189,10 @@ void Controller::lcd_drawEffect_FData(uint8_t effectNum_) {
 
         case EF_SPACE:   // custom
             textPtr = kNumberDataLibrary[effect_.space.fWet].nameLongR;
+            break;
+
+        case EF_VINYL:   // custom
+            textPtr = kNumberDataLibrary[effect_.vinyl.fWet].nameLongR;
             break;
     }
     // 3. VALUE DRAW
@@ -22939,6 +23075,12 @@ void Controller::effect_setAData(uint8_t effectNum_, uint8_t subEffectNum_, uint
                 space.aRate = aData_;
                 space.update();
             } break;
+
+            case EF_VINYL: {  // custom
+                subEffect_.aData = aData_;
+                effect_.vinyl.aNoise = aData_;
+                effect_.vinyl.update();
+            } break;
         }
 
         // 3. UI & GLOBAL REFRESH
@@ -23058,6 +23200,12 @@ void Controller::effect_setBData(uint8_t effectNum_, uint8_t subEffectNum_, uint
                 space.bIntensity = bData_;
                 space.update();
             } break;
+
+            case EF_VINYL: {  // custom
+                subEffect_.bData = bData_;
+                effect_.vinyl.bCrackle = bData_;
+                effect_.vinyl.update();
+            } break;
         }
 
         // 3. UI & GLOBAL REFRESH
@@ -23159,6 +23307,12 @@ void Controller::effect_setCData(uint8_t effectNum_, uint8_t subEffectNum_, uint
                 space.cHeads = cData_;
                 space.update();
             } break;
+
+            case EF_VINYL: {  // custom
+                subEffect_.cData = cData_;
+                effect_.vinyl.cWow = cData_;
+                effect_.vinyl.update();
+            } break;
         }
 
         // 3. UI & GLOBAL REFRESH
@@ -23252,6 +23406,12 @@ void Controller::effect_setDData(uint8_t effectNum_, uint8_t subEffectNum_, uint
                 subEffect_.dData = dData_;
                 space.dAge = dData_;
                 space.update();
+            } break;
+
+            case EF_VINYL: {  // custom
+                subEffect_.dData = dData_;
+                effect_.vinyl.dAge = dData_;
+                effect_.vinyl.update();
             } break;
         }
 
@@ -23419,6 +23579,20 @@ void Controller::effect_setEData(uint8_t effectNum_, uint8_t subEffectNum_, uint
 
             case EF_SPACE: {
                 Space& space = effect_.space;
+                targetDry = eData_;
+                targetWet = space.fWet;
+                if ((space.limitMix) && ((targetDry + targetWet) > space.limitMixData)) {
+                    targetWet = space.limitMixData - targetDry;
+                }
+                subEffect_.eData = targetDry;
+                subEffect_.fData = targetWet;
+                space.eDry = targetDry;
+                space.fWet = targetWet;
+                targetDryFloat = kNumberDataLibrary[space.eDry].stdMultiplier;
+                targetWetFloat = kNumberDataLibrary[space.fWet].stdMultiplier;
+            } break;
+            case EF_VINYL: {
+                Vinyl& space = effect_.vinyl;
                 targetDry = eData_;
                 targetWet = space.fWet;
                 if ((space.limitMix) && ((targetDry + targetWet) > space.limitMixData)) {
@@ -23608,6 +23782,20 @@ void Controller::effect_setFData(uint8_t effectNum_, uint8_t subEffectNum_, uint
 
             case EF_SPACE: {
                 Space& space = effect_.space;
+                targetDry = space.eDry;
+                targetWet = fData_;
+                if ((space.limitMix) && ((targetDry + targetWet) > space.limitMixData)) {
+                    targetDry = space.limitMixData - targetWet;
+                }
+                subEffect_.eData = targetDry;
+                subEffect_.fData = targetWet;
+                space.eDry = targetDry;
+                space.fWet = targetWet;
+                targetDryFloat = kNumberDataLibrary[space.eDry].stdMultiplier;
+                targetWetFloat = kNumberDataLibrary[space.fWet].stdMultiplier;
+            } break;
+            case EF_VINYL: {
+                Vinyl& space = effect_.vinyl;
                 targetDry = space.eDry;
                 targetWet = fData_;
                 if ((space.limitMix) && ((targetDry + targetWet) > space.limitMixData)) {
@@ -23887,6 +24075,11 @@ void Controller::effect_updateMixFloats(uint8_t effectNum_) {
             effect_.dryFloat = kNumberDataLibrary[effect_.space.eDry].stdMultiplier;
             effect_.wetFloat = kNumberDataLibrary[effect_.space.fWet].stdMultiplier;
             break;
+
+        case EF_VINYL:   // custom
+            effect_.dryFloat = kNumberDataLibrary[effect_.vinyl.eDry].stdMultiplier;
+            effect_.wetFloat = kNumberDataLibrary[effect_.vinyl.fWet].stdMultiplier;
+            break;
     }
 }
 
@@ -23941,6 +24134,11 @@ void Controller::effect_cleanMemory(uint8_t effectNum_, uint8_t type_) {
         case EF_SPACE:
             effect_.space.cleanMemory();
             memset((void*)effect_.delayAddress, 0, kDelayBufferSize * sizeof(float));   // fresh tape
+            break;
+
+        case EF_VINYL:   // custom
+            effect_.vinyl.cleanMemory();
+            memset((void*)effect_.chorusAddress, 0, kVinylRing * sizeof(float));
             break;
     }
 }
@@ -30062,6 +30260,39 @@ float Controller::processAudioEffectHelper(uint8_t effectNum_, float audio_) {
                 s.lpOut += s.lpCoef * (heads - s.lpOut);
                 const float wet = filterFastTanh(s.lpOut);
                 const float mixData = (wet * effect_.wetFloat) + (input * effect_.dryFloat);
+                output = (effect_.genTransition.active) ? ((mixData * effect_.genTransition.activeWet) + (input * effect_.genTransition.activeDry)) : mixData;
+            } break;
+
+            case EF_VINYL: {
+                // Custom VINYL SIM: wow + flutter (a short wobbling delay), the band narrowed by AGE
+                // with warm saturation, then surface hiss and crackle on top.
+                Vinyl& v = effect_.vinyl;
+                float* ring = (float*)effect_.chorusAddress;
+                ring[v.writeIdx] = input;
+                v.wowPhase += 0.55f * kInvSampleRate;  if (v.wowPhase >= 1.0f) v.wowPhase -= 1.0f;
+                v.flutPhase += 6.1f * kInvSampleRate;  if (v.flutPhase >= 1.0f) v.flutPhase -= 1.0f;
+                const float d = 4.0f + v.wowDepth * (1.0f + sinFast(v.wowPhase)) + v.flutDepth * (1.0f + sinFast(v.flutPhase));
+                float pos = (float)v.writeIdx - d;
+                if (pos < 0.0f) pos += (float)kVinylRing;
+                const uint32_t i0 = (uint32_t)pos & (kVinylRing - 1);
+                const uint32_t i1 = (i0 + 1) & (kVinylRing - 1);
+                const float fr = pos - (float)(uint32_t)pos;
+                float x = ring[i0] + (ring[i1] - ring[i0]) * fr;
+                v.writeIdx = (v.writeIdx + 1) & (kVinylRing - 1);
+                // AGE: 2-pole low-pass, 1-pole high-pass, a little warmth
+                v.lp1 += v.lpCoef * (x - v.lp1);
+                v.lp2 += v.lpCoef * (v.lp1 - v.lp2);
+                const float hp = v.hpCoef * (v.hpY + v.lp2 - v.hpX);
+                v.hpX = v.lp2;
+                v.hpY = hp + 1.0e-20f;
+                x = (v.drive > 0.0f) ? (hp * (1.0f + v.drive)) / (1.0f + v.drive * fabsf(hp)) : hp;
+                // surface: soft hiss + crackle (short random bursts)
+                v.hiss += 0.35f * ((v.rand01() - 0.5f) - v.hiss);
+                x += v.hiss * v.noiseAmt * 4.0f;
+                if (v.rand01() < v.crackProb) { v.crack = v.crackAmt * (0.3f + 0.7f * v.rand01()); v.crackSign = (v.rand01() < 0.5f) ? -1.0f : 1.0f; }
+                if (v.crack > 0.0005f) { x += v.crack * v.crackSign * (0.5f + v.rand01()); v.crack *= 0.62f; v.crackSign = -v.crackSign; }
+                if (!(x > -4.0f && x < 4.0f)) x = 0.0f;
+                const float mixData = (x * effect_.wetFloat) + (input * effect_.dryFloat);
                 output = (effect_.genTransition.active) ? ((mixData * effect_.genTransition.activeWet) + (input * effect_.genTransition.activeDry)) : mixData;
             } break;
 

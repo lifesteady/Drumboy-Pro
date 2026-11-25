@@ -2065,6 +2065,8 @@ const uint16_t kRevSendFileAddr                     = 1087;   // custom: 10 reve
 const uint8_t kRevSendFileMark                      = 0xA7;
 const uint16_t kSliceFileAddr                       = 1187;   // custom: slicer SYNC + BEATS per drum at 1187-1196 (drum 7 asset block), marker at 1197
 const uint8_t kSliceFileMark                        = 0xA9;
+const uint16_t kVinylFileAddr                       = 1287;   // custom: VINYL SIM settings, 6 per effect at 1287-1298 (drum 8 asset block), marker at 1299
+const uint8_t kVinylFileMark                        = 0xAB;
 const uint16_t kMetroRouteFileOffset                = 88;     // inside drum 1's asset block (unused bytes)
 
 const MixerInMode kInitialMixerLiMixerInMode        = MIXER_IN_EQ;
@@ -2408,7 +2410,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.21 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.22 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -5472,6 +5474,61 @@ struct Space {
 };
 
 ////////////////////////////////////////////////////////////////////////////////
+/* Custom Effect-Vinyl (VINYL SIM, SP-303 flavour) ---------------------------*/
+////////////////////////////////////////////////////////////////////////////////
+// Surface hiss, crackle and pops, wow + flutter (a short wobbling delay), and AGE: the band
+// narrows (low end and top end roll off) with a touch of warm saturation.
+
+const uint8_t kMinVinylNoise = 0, kMaxVinylNoise = 100, kInitialVinylNoise = 20;
+const uint8_t kMinVinylCrackle = 0, kMaxVinylCrackle = 100, kInitialVinylCrackle = 30;
+const uint8_t kMinVinylWow = 0, kMaxVinylWow = 100, kInitialVinylWow = 20;
+const uint8_t kMinVinylAge = 0, kMaxVinylAge = 100, kInitialVinylAge = 50;
+const uint8_t kMinVinylDry = 0, kMaxVinylDry = 100, kInitialVinylDry = 0;
+const uint8_t kMinVinylWet = 0, kMaxVinylWet = 100, kInitialVinylWet = 100;
+const uint32_t kVinylRing = 2048;   // wow delay line (in this effect's chorus buffer)
+
+struct Vinyl {
+    uint8_t aNoise;
+    uint8_t bCrackle;
+    uint8_t cWow;
+    uint8_t dAge;
+    uint8_t eDry;
+    uint8_t fWet;
+
+    uint32_t rng = 0x1234567u;
+    uint32_t writeIdx = 0;
+    float wowPhase = 0.0f, flutPhase = 0.0f;
+    float lp1 = 0.0f, lp2 = 0.0f, hpX = 0.0f, hpY = 0.0f, hiss = 0.0f, crack = 0.0f, crackSign = 1.0f;
+    float noiseAmt = 0.0f, crackProb = 0.0f, crackAmt = 0.0f, wowDepth = 0.0f, flutDepth = 0.0f;
+    float lpCoef = 0.9f, hpCoef = 0.995f, drive = 0.0f;
+
+    const bool limitMix                             = true;
+    const uint8_t limitMixData                      = 125;
+
+    float rand01() { rng = rng * 1664525u + 1013904223u; return (float)(rng >> 8) * (1.0f / 16777216.0f); }
+    void reset() {
+        aNoise = kInitialVinylNoise; bCrackle = kInitialVinylCrackle; cWow = kInitialVinylWow;
+        dAge = kInitialVinylAge; eDry = kInitialVinylDry; fWet = kInitialVinylWet;
+        update();
+        cleanMemory();
+    }
+    void update() {
+        const float n = (float)aNoise / 100.0f, c = (float)bCrackle / 100.0f, w = (float)cWow / 100.0f, a = (float)dAge / 100.0f;
+        noiseAmt = 0.018f * n * n + 0.002f * n;
+        crackProb = (c * c * 40.0f + c * 2.0f) / AUDIO_SAMPLE_RATE;   // pops per sample (up to about 40 a second)
+        crackAmt = 0.08f + 0.35f * c;
+        wowDepth = 26.0f * w;                                      // samples of drift (slow, 0.55 Hz)
+        flutDepth = 3.0f * w;                                      // samples of flutter (6 Hz)
+        const float fc = 16000.0f - 12500.0f * a;                  // top end rolls off with age
+        lpCoef = 1.0f - expf(-2.0f * 3.14159265f * fc / AUDIO_SAMPLE_RATE);
+        const float hc = 20.0f + 230.0f * a;                       // and the low end thins out
+        hpCoef = expf(-2.0f * 3.14159265f * hc / AUDIO_SAMPLE_RATE);
+        drive = 0.6f * a;
+    }
+    void cleanMemory() { writeIdx = 0; lp1 = lp2 = hpX = hpY = hiss = crack = 0.0f; }
+};
+
+////////////////////////////////////////////////////////////////////////////////
 /* Effect Constants ----------------------------------------------------------*/
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -5479,11 +5536,11 @@ const uint8_t kMinEffect                            = 0;
 const uint8_t kMaxEffect                            = 1;
 
 const uint8_t kMinEffectType                        = 0;
-const uint8_t kMaxEffectType                        = 9;   // custom: + SPACE
+const uint8_t kMaxEffectType                        = 10;  // custom: + SPACE, VINYL SIM
 
 // Custom: order of the TYPE knob. EXPANDER, OVERDRIVE and DISTORTION are hidden (still loadable).
 const uint8_t kEffectTypeOrder[]                    = {0x00 /*DELAY*/, 0x09 /*SPACE*/, 0x01 /*CHORUS*/, 0x02 /*FLANGER*/,
-                                                       0x03 /*PHASER*/, 0x04 /*PUNCH*/, 0x08 /*BITCRUSHER*/};
+                                                       0x03 /*PHASER*/, 0x04 /*PUNCH*/, 0x08 /*BITCRUSHER*/, 0x0A /*VINYL SIM*/};
 const uint8_t kEffectTypeOrderSize                  = sizeof(kEffectTypeOrder);
 
 const bool kInitialEffectActive                     = false;
@@ -5499,7 +5556,8 @@ typedef enum {
     EF_OVERDRIVE                                    = 0x06,
     EF_DISTORTION                                   = 0x07,
     EF_BITCRUSHER                                   = 0x08,
-    EF_SPACE                                        = 0x09   // custom tape echo
+    EF_SPACE                                        = 0x09,  // custom tape echo
+    EF_VINYL                                        = 0x0A   // custom VINYL SIM (SP-303 flavour)
 } EffectType;
 
 typedef enum {
@@ -5522,25 +5580,26 @@ const struct EffectTypeData kEffectTypeDataLibrary[] = {
     {" OVERDRIVE", EF_COMP_MODE_LIGHT},
     {"DISTORTION", EF_COMP_MODE_LIGHT},
     {"BITCRUSHER", EF_COMP_MODE_LIGHT},
-    {"     SPACE", EF_COMP_MODE_HEAVY}};
+    {"     SPACE", EF_COMP_MODE_HEAVY},
+    {" VINYL SIM", EF_COMP_MODE_LIGHT}};
 
 const uint8_t kEffectLibrarySize                    = 2;
-const uint8_t kSubEffectLibrarySize                 = 10;  // custom: + SPACE
+const uint8_t kSubEffectLibrarySize                 = 11;  // custom: + SPACE, VINYL SIM
 const uint8_t kSubEffectFileCount                   = 9;   // song files keep the stock 9-effect layout
 
-const char aHeader[kSubEffectLibrarySize][11]       = {"TIME      ", "TIME      ", "TIME      ", "START     ", "THRESHOLD ", "THRESHOLD ", "GAIN      ", "GAIN      ", "RESOLUTION", "RATE      "};
-const char bHeader[kSubEffectLibrarySize][11]       = {"LEVEL     ", "FEEDBACK  ", "FEEDBACK  ", "END       ", "RATIO     ", "RATE      ", "THRESHOLD ", "THRESHOLD ", "SAMPLERATE", "INTENSITY "};
-const char cHeader[kSubEffectLibrarySize][11]       = {"FEEDBACK  ", "RATE      ", "RATE      ", "RATE      ", "STYLE     ", "ATTACK    ", "TONE      ", "TONE      ", "THRESHOLD ", "HEADS     "};
-const char dHeader[kSubEffectLibrarySize][11]       = {"DAMPING   ", "DEPTH     ", "WIDTH     ", "FEEDBACK  ", "THRUST    ", "RELEASE   ", "COLOR     ", "BIAS      ", "SMOOTH    ", "AGE       "};
-const char eHeader[kSubEffectLibrarySize][11]       = {"DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       "};
-const char fHeader[kSubEffectLibrarySize][11]       = {"WET       ", "WET       ", "WET       ", "WET       ", "WET       ", "WET       ", "WET       ", "WET       ", "WET       ", "WET       "};
+const char aHeader[kSubEffectLibrarySize][11]       = {"TIME      ", "TIME      ", "TIME      ", "START     ", "THRESHOLD ", "THRESHOLD ", "GAIN      ", "GAIN      ", "RESOLUTION", "RATE      ", "NOISE     "};
+const char bHeader[kSubEffectLibrarySize][11]       = {"LEVEL     ", "FEEDBACK  ", "FEEDBACK  ", "END       ", "RATIO     ", "RATE      ", "THRESHOLD ", "THRESHOLD ", "SAMPLERATE", "INTENSITY ", "CRACKLE   "};
+const char cHeader[kSubEffectLibrarySize][11]       = {"FEEDBACK  ", "RATE      ", "RATE      ", "RATE      ", "STYLE     ", "ATTACK    ", "TONE      ", "TONE      ", "THRESHOLD ", "HEADS     ", "WOW       "};
+const char dHeader[kSubEffectLibrarySize][11]       = {"DAMPING   ", "DEPTH     ", "WIDTH     ", "FEEDBACK  ", "THRUST    ", "RELEASE   ", "COLOR     ", "BIAS      ", "SMOOTH    ", "AGE       ", "AGE       "};
+const char eHeader[kSubEffectLibrarySize][11]       = {"DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       ", "DRY       "};
+const char fHeader[kSubEffectLibrarySize][11]       = {"WET       ", "WET       ", "WET       ", "WET       ", "WET       ", "WET       ", "WET       ", "WET       ", "WET       ", "WET       ", "WET       "};
 
-const char aSign[kSubEffectLibrarySize][4]          = {"  %", " MS", " MS", " HZ", " DB", " DB", " DB", " DB", " BR", " MS"};
-const char bSign[kSubEffectLibrarySize][4]          = {"  %", "  %", "  %", " HZ", " :1", "  X", " DB", " DB", "  %", "  %"};
-const char cSign[kSubEffectLibrarySize][4]          = {"  %", " HZ", " HZ", " HZ", "   ", " MS", " HZ", " HZ", " DB", "   "};
-const char dSign[kSubEffectLibrarySize][4]          = {"   ", "   ", "   ", "   ", "   ", " MS", "   ", "   ", "   ", "   "};
-const char eSign[kSubEffectLibrarySize][4]          = {"  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %"};
-const char fSign[kSubEffectLibrarySize][4]          = {"  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %"};
+const char aSign[kSubEffectLibrarySize][4]          = {"  %", " MS", " MS", " HZ", " DB", " DB", " DB", " DB", " BR", " MS", "   "};
+const char bSign[kSubEffectLibrarySize][4]          = {"  %", "  %", "  %", " HZ", " :1", "  X", " DB", " DB", "  %", "  %", "   "};
+const char cSign[kSubEffectLibrarySize][4]          = {"  %", " HZ", " HZ", " HZ", "   ", " MS", " HZ", " HZ", " DB", "   ", "   "};
+const char dSign[kSubEffectLibrarySize][4]          = {"   ", "   ", "   ", "   ", "   ", " MS", "   ", "   ", "   ", "   ", "   "};
+const char eSign[kSubEffectLibrarySize][4]          = {"  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %"};
+const char fSign[kSubEffectLibrarySize][4]          = {"  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %", "  %"};
 
 struct SubEffect {
     bool activeA;
@@ -5663,6 +5722,7 @@ struct Effect {
     Distortion distortion;
     Bitcrusher bitcrusher;
     Space space;                 // custom tape echo (shares this effect's delay buffer)
+    Vinyl vinyl;                 // custom VINYL SIM (uses this effect's chorus buffer)
 
     uint32_t delayAddress;
     uint32_t chorusAddress;
@@ -6069,6 +6129,22 @@ struct Effect {
         subEffect[9].eData = kInitialSpaceDry;
         subEffect[9].fData = kInitialSpaceWet;
 
+        // Custom: Vinyl Sim
+        subEffect[10].activeA = subEffect[10].activeB = subEffect[10].activeC = true;
+        subEffect[10].activeD = subEffect[10].activeE = subEffect[10].activeF = true;
+        subEffect[10].kMinAData = kMinVinylNoise;   subEffect[10].kMaxAData = kMaxVinylNoise;
+        subEffect[10].kMinBData = kMinVinylCrackle; subEffect[10].kMaxBData = kMaxVinylCrackle;
+        subEffect[10].kMinCData = kMinVinylWow;     subEffect[10].kMaxCData = kMaxVinylWow;
+        subEffect[10].kMinDData = kMinVinylAge;     subEffect[10].kMaxDData = kMaxVinylAge;
+        subEffect[10].kMinEData = kMinVinylDry;     subEffect[10].kMaxEData = kMaxVinylDry;
+        subEffect[10].kMinFData = kMinVinylWet;     subEffect[10].kMaxFData = kMaxVinylWet;
+        subEffect[10].kInitialAData = subEffect[10].aData = kInitialVinylNoise;
+        subEffect[10].kInitialBData = subEffect[10].bData = kInitialVinylCrackle;
+        subEffect[10].kInitialCData = subEffect[10].cData = kInitialVinylWow;
+        subEffect[10].kInitialDData = subEffect[10].dData = kInitialVinylAge;
+        subEffect[10].kInitialEData = subEffect[10].eData = kInitialVinylDry;
+        subEffect[10].kInitialFData = subEffect[10].fData = kInitialVinylWet;
+
         delay.reset();
         chorus.reset();
         flanger.reset();
@@ -6079,6 +6155,7 @@ struct Effect {
         distortion.reset();
         bitcrusher.reset();
         space.reset();
+        vinyl.reset();
 
         memset((void*)delayAddress, 0, kDelayBufferSize * sizeof(float));
         memset((void*)chorusAddress, 0, kChorusBufferSize * sizeof(float));
