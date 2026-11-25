@@ -2406,7 +2406,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.19 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.20 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -7668,6 +7668,9 @@ struct Layer {
     bool laneEq                                     = false;            // custom: 2 LANES, EQ on this drum
     uint8_t revSend                                 = 0;                // custom: REVERB SEND 0-10 (x 10%), on top of the routing
     uint8_t muteGroup                               = 0;                // custom: 0 off, 1-4: a hit cuts the other drums in its group
+    uint8_t sliceCount                              = 0;                // custom: slicer drum - cue markers in its sample (0: none)
+    uint32_t slicePos[16]                           = {0};              // custom: slice starts (samples)
+    bool sliceOff                                   = false;            // custom: slices switched off on the Notes page
     uint8_t envAttack                               = kInitialEnvAttack;   // custom envelope (0-100)
     uint8_t envHold                                 = kInitialEnvHold;
     uint8_t envDecay                                = kInitialEnvDecay;

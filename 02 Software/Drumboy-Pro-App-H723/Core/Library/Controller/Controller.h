@@ -581,7 +581,7 @@ class Controller {
     void sampling_update();                                             // main loop: meter, save when done
     void sampling_drawPanel(bool full_);
     bool sampling_save();
-    bool sampling_writeWav(const char* path_, const int16_t* src_, uint32_t n_, float gain_);
+    bool sampling_writeWav(const char* path_, const int16_t* src_, uint32_t n_, float gain_, const uint32_t* cues_ = nullptr, uint8_t nCues_ = 0);
     int16_t sampling_libAdd(const char* fileName_);                     // adds to RECORDED, returns the instrument (or -1)
     // custom: Chop page (slice a take onto pads)
     void chop_begin(const char* base_, uint8_t firstPad_);
@@ -613,6 +613,12 @@ class Controller {
     char chopTakePath[64] = "";
     uint8_t chopTakeLayer = 0;
     void choke(uint8_t layerNum_);                                      // custom: mute groups
+    // custom: slicer drums (a sample with cue markers: each hit plays one slice)
+    bool slicerOn(uint8_t l_) const { return (layerLibrary[l_].sliceCount > 0) && !layerLibrary[l_].sliceOff; }
+    uint8_t wav_readCues(const char* path_, const WavData& wav_, uint32_t* out_, uint8_t max_, uint32_t limit_);
+    void chop_pasteLoop();
+    void chop_ensureStem();
+    volatile int16_t pendingStep[kLayerLibrarySize] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1};   // sequencer step of the hit being triggered
     volatile uint8_t sampState = 0;                                     // 0 idle, 1 armed, 2 recording, 3 done (to save), 4 saving
     uint8_t sampLayer = 0;
     volatile uint32_t sampCount = 0;                                    // samples recorded after the trigger

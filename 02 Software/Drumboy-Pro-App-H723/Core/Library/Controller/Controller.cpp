@@ -6440,15 +6440,67 @@ void Controller::sampling_drawPanel(bool full_) {
     lcd.setAlignment(LEFT);
 }
 
-bool Controller::sampling_writeWav(const char* path_, const int16_t* src_, uint32_t n_, float gain_) {
-    /// @brief 16-bit mono 44.1 kHz WAV from 16-bit samples in SDRAM, times gain_.
+uint8_t Controller::wav_readCues(const char* path_, const WavData& wav_, uint32_t* out_, uint8_t max_, uint32_t limit_) {
+    /// @brief Custom: cue markers of a WAV, converted to sample positions as loaded (44.1 kHz),
+    /// sorted, closer than 64 samples dropped. Returns how many (0: none / not a WAV).
+    const uint32_t sRate = wav_.fmt_chunk.sampleRate;
+    if (sRate == 0) return 0;
+    const uint8_t coefSamplerate = (sRate >= 176400) ? 4 : (sRate >= 88200 ? 2 : 1);
+    uint16_t writeCount = 1;
+    if (sRate < 44100) {
+        if (sRate == 8000) writeCount = 6;
+        else if (sRate == 11025) writeCount = 4;
+        else if (sRate == 16000) writeCount = 3;
+        else if ((sRate == 22050) || (sRate == 24000)) writeCount = 2;
+        else writeCount = (uint16_t)(44100 / sRate);
+        if (writeCount < 1) writeCount = 1;
+    }
+    f_close(&sd.file);
+    if (f_open(&sd.file, path_, FA_READ) != FR_OK) return 0;
+    FIL& f = sd.file;
+    uint32_t tmp[16];
+    uint8_t n = 0;
+    uint32_t pos = 12;
+    const uint32_t fsz = f_size(&f);
+    static uint8_t ck[24];
+    for (uint8_t guard = 0; (guard < 64) && (pos + 8 <= fsz); guard++) {
+        UINT br = 0;
+        if ((f_lseek(&f, pos) != FR_OK) || (f_read(&f, ck, 8, &br) != FR_OK) || (br < 8)) break;
+        const uint32_t size = ck[4] | (ck[5] << 8) | (ck[6] << 16) | ((uint32_t)ck[7] << 24);
+        if (memcmp(ck, "cue ", 4) == 0) {
+            if ((f_read(&f, ck, 4, &br) != FR_OK) || (br < 4)) break;
+            uint32_t count = ck[0] | (ck[1] << 8) | (ck[2] << 16) | ((uint32_t)ck[3] << 24);
+            if (count > 64) count = 64;
+            for (uint32_t q = 0; q < count; q++) {
+                if ((f_read(&f, ck, 24, &br) != FR_OK) || (br < 24)) break;
+                const uint32_t frame = ck[20] | (ck[21] << 8) | (ck[22] << 16) | ((uint32_t)ck[23] << 24);
+                const uint32_t at = (uint32_t)(((uint64_t)frame * writeCount) / coefSamplerate);
+                if ((at + 64 < limit_) && (n < 16)) tmp[n++] = at;
+            }
+            break;
+        }
+        if (size > fsz) break;
+        pos += 8 + size + (size & 1);
+    }
+    f_close(&f);
+    for (uint8_t q = 1; q < n; q++)
+        for (uint8_t r = q; (r > 0) && (tmp[r] < tmp[r - 1]); r--) { const uint32_t t = tmp[r]; tmp[r] = tmp[r - 1]; tmp[r - 1] = t; }
+    uint8_t m = 0;
+    for (uint8_t q = 0; (q < n) && (m < max_); q++) if ((m == 0) || (tmp[q] >= out_[m - 1] + 64)) out_[m++] = tmp[q];
+    return m;
+}
+
+bool Controller::sampling_writeWav(const char* path_, const int16_t* src_, uint32_t n_, float gain_, const uint32_t* cues_, uint8_t nCues_) {
+    /// @brief 16-bit mono 44.1 kHz WAV from 16-bit samples in SDRAM, times gain_. With cues_,
+    /// a cue chunk marks each slice (any DAW sees them; the Drumboy makes it a slicer drum).
     f_close(&sd.file);
     if (f_open(&sd.file, path_, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK) return false;
     static uint8_t hdr[44] __attribute__((aligned(32)));
     const uint32_t dataBytes = n_ * 2;
+    const uint32_t cueBytes = nCues_ ? (8 + 4 + 24u * nCues_) : 0;
     auto w32 = [&](uint8_t* p, uint32_t v) { p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24; };
     auto w16 = [&](uint8_t* p, uint16_t v) { p[0] = v; p[1] = v >> 8; };
-    memcpy(hdr, "RIFF", 4); w32(hdr + 4, 36 + dataBytes); memcpy(hdr + 8, "WAVE", 4);
+    memcpy(hdr, "RIFF", 4); w32(hdr + 4, 36 + dataBytes + cueBytes); memcpy(hdr + 8, "WAVE", 4);
     memcpy(hdr + 12, "fmt ", 4); w32(hdr + 16, 16); w16(hdr + 20, 1); w16(hdr + 22, 1);
     w32(hdr + 24, 44100); w32(hdr + 28, 44100 * 2); w16(hdr + 32, 2); w16(hdr + 34, 16);
     memcpy(hdr + 36, "data", 4); w32(hdr + 40, dataBytes);
@@ -6464,6 +6516,19 @@ bool Controller::sampling_writeWav(const char* path_, const int16_t* src_, uint3
             pcm[n] = (int16_t)v;
         }
         ok = (f_write(&sd.file, pcm, n * 2, &bw) == FR_OK) && (bw == n * 2);
+    }
+    if (ok && nCues_) {
+        static uint8_t cue[24] __attribute__((aligned(32)));
+        memcpy(cue, "cue ", 4); w32(cue + 4, 4 + 24u * nCues_); w32(cue + 8, nCues_);
+        ok = (f_write(&sd.file, cue, 12, &bw) == FR_OK) && (bw == 12);
+        for (uint8_t q = 0; ok && (q < nCues_); q++) {
+            memset(cue, 0, sizeof(cue));
+            w32(cue + 0, q + 1);            // id
+            w32(cue + 4, cues_[q]);         // position
+            memcpy(cue + 8, "data", 4);     // chunk
+            w32(cue + 20, cues_[q]);        // sample offset
+            ok = (f_write(&sd.file, cue, 24, &bw) == FR_OK) && (bw == 24);
+        }
     }
     f_close(&sd.file);
     return ok;
@@ -6757,7 +6822,7 @@ bool Controller::chop_key(uint8_t key_) {
             chopSavedIdx[chopN] = -1;
             if (chopSel > 0) chopSel--;
         } break;
-        case KEY_PASTE: chop_paste(); return true;
+        case KEY_PASTE: if (keyboard.shiftKeyPress) chop_pasteLoop(); else chop_paste(); return true;   // ADD + PASTE: slicer drum
         case KEY_COPY:
         case KEY_REC: return true;
         default: return false;
@@ -6949,6 +7014,77 @@ void Controller::chop_truncate() {
     undo_showText("CUT  ");
 }
 
+void Controller::chop_ensureStem() {
+    /// @brief A file name stem nobody has used yet: BASE, else BASEB, BASEC ... (checked on _01 and _LOOP).
+    if (chopStem[0] != 0) return;
+    char path[96];
+    for (char letter = 0; letter <= 'Z'; letter = (letter == 0) ? 'B' : (char)(letter + 1)) {
+        if (letter) snprintf(chopStem, sizeof(chopStem), "%s%c", chopBase, letter); else snprintf(chopStem, sizeof(chopStem), "%s", chopBase);
+        snprintf(path, sizeof(path), "Sample/RECORDED/%s_01.wav", chopStem);
+        if (f_stat(path, &sd.fileInfo) == FR_OK) continue;
+        snprintf(path, sizeof(path), "Sample/RECORDED/%s_LOOP.wav", chopStem);
+        if (f_stat(path, &sd.fileInfo) != FR_OK) break;
+    }
+}
+
+void Controller::chop_pasteLoop() {
+    /// @brief ADD + PASTE: the whole loop (slice 1 to TAKE END, at most 5.4 s) as one file with a
+    /// cue marker per slice, loaded onto FIRST PAD - a slicer drum: on the Notes page pads play
+    /// slices, recorded hits keep their slice, hits without one play the slice of their step.
+    const uint32_t s0 = chopMark[0];
+    uint32_t n = chopEnd - s0;
+    if (n > kSampleSize - 64) n = kSampleSize - 64;
+    uint32_t cues[kChopMaxSlices];
+    uint8_t nc = 0;
+    for (uint8_t k = 0; k < chopN; k++) if (chopMark[k] - s0 + 64 < n) cues[nc++] = chopMark[k] - s0;
+    keyboard_disable();
+    f_mkdir("Sample/RECORDED");
+    chop_ensureStem();
+    char name[kFileNameSize], path[96];
+    snprintf(name, sizeof(name), "%s_LOOP.wav", chopStem);
+    snprintf(path, sizeof(path), "Sample/RECORDED/%s", name);
+    const bool exists = (f_stat(path, &sd.fileInfo) == FR_OK);
+    const bool ok = sampling_writeWav(path, sampBuf() + s0, n, chopGain, cues, nc);
+    int16_t inst = -1, idx = -1;
+    if (ok && !exists) { inst = sampling_libAdd(name); if (inst >= 0) idx = (int16_t)(sampleLibrarySize[inst] - 1); }
+    keyboard_enable();
+    if (ok && exists) {   // written again: find it in the RECORDED list
+        f_close(&sd.file);
+        char entry[kFileNameSize];
+        if (f_open(&sd.file, "System/Data/Inst.lib", FA_READ) == FR_OK) {
+            for (uint16_t q = 0; q < instLibrarySize; q++) {
+                UINT br = 0;
+                if ((f_lseek(&sd.file, 25 + (uint32_t)q * kFileNameSize) != FR_OK) || (f_read(&sd.file, entry, kFileNameSize, &br) != FR_OK) || (br < kFileNameSize)) break;
+                entry[kFileNameSize - 1] = 0;
+                if (strcmp(entry, "RECORDED") == 0) { inst = (int16_t)q; break; }
+            }
+            f_close(&sd.file);
+        }
+        if ((inst >= 0) && (f_open(&sd.file, "System/Data/RECORDED.ins", FA_READ) == FR_OK)) {
+            for (uint16_t q = 0; q < sampleLibrarySize[inst]; q++) {
+                UINT br = 0;
+                if ((f_lseek(&sd.file, 25 + (uint32_t)q * kFileNameSize) != FR_OK) || (f_read(&sd.file, entry, kFileNameSize, &br) != FR_OK) || (br < kFileNameSize)) break;
+                entry[kFileNameSize - 1] = 0;
+                if (strcmp(entry, name) == 0) { idx = (int16_t)q; break; }
+            }
+            f_close(&sd.file);
+        }
+    }
+    if ((inst < 0) || (idx < 0)) { undo_showText("ERROR"); return; }
+    const uint8_t pad = chopFirstPad;
+    layerInst_setInstSelected(pad, inst);
+    layerInst_setSampleSelected(pad, idx);
+    layerInst_setInstLoaded(pad);
+    memset(layerLibrary[pad].sampleLoadedData.fileName, 0, sizeof(layerLibrary[pad].sampleLoadedData.fileName));
+    layerInst_setSampleLoaded(pad);   // reads the cue markers: it's a slicer drum now
+    layerInst_setEnd(pad, kInitialLayerEnd);
+    layerInst_setStart(pad, kInitialLayerStart);
+    layerLibrary[pad].sliceOff = false;
+    layerLibrary[pad].muteGroup = 0;
+    undo_showText("LOOP ");
+    page_markDirty(PAGE_CHOP);
+}
+
 bool Controller::chop_putSlice(uint8_t i_, uint8_t pad_) {
     /// @brief One slice -> Sample/RECORDED/<name>_nn.wav (written again if it changed) and loaded
     /// onto a pad, in this take's mute group. Longer than a pad: cut to 5.4 s.
@@ -6956,13 +7092,7 @@ bool Controller::chop_putSlice(uint8_t i_, uint8_t pad_) {
     keyboard_disable();
     f_mkdir("Sample/RECORDED");
     char name[kFileNameSize], path[96];
-    if (chopStem[0] == 0) {   // a name nobody has used yet: BASE_01.wav, else BASEB_01.wav ...
-        for (char letter = 0; letter <= 'Z'; letter = (letter == 0) ? 'B' : (char)(letter + 1)) {
-            if (letter) snprintf(chopStem, sizeof(chopStem), "%s%c", chopBase, letter); else snprintf(chopStem, sizeof(chopStem), "%s", chopBase);
-            snprintf(path, sizeof(path), "Sample/RECORDED/%s_01.wav", chopStem);
-            if (f_stat(path, &sd.fileInfo) != FR_OK) break;
-        }
-    }
+    chop_ensureStem();
     if (chopGroup == 0) {   // first slice placed: pick a mute group no other drum uses
         bool used[5] = {false, false, false, false, false};
         for (uint8_t l = 0; l < kLayerLibrarySize; l++) if (layerLibrary[l].muteGroup <= 4) used[layerLibrary[l].muteGroup] = true;
@@ -7086,13 +7216,13 @@ void Controller::page_drawChop() {
         lcd.setFont(FONT_07x09);
         lcd.setAlignment(LEFT);
         lcd.setForeColor(kThemeHeader);
-        const char h1[] = "PADS: HEAR A SLICE   ADD + PAD: PUT THIS SLICE THERE   LEFT / RIGHT: SLICE   UP / DOWN: ZOOM";
+        const char h1[] = "PADS: HEAR   ADD + PAD: PUT THE SLICE THERE   LEFT / RIGHT: SLICE   UP / DOWN: ZOOM";
         lcd.drawText(h1, strlen(h1), 30, 420);
-        const char h2[] = "CENTER: SPLIT   CLEAR: REMOVE   ADD + CLEAR: TRUNCATE   PASTE: ALL SLICES FROM FIRST PAD";
+        const char h2[] = "CENTER: SPLIT  CLEAR: REMOVE  ADD + CLEAR: TRUNCATE  PASTE: SLICES ON PADS  ADD + PASTE: LOOP ON ONE PAD";
         lcd.drawText(h2, strlen(h2), 30, 438);
         lcd.setAlignment(RIGHT);
         const char h3[] = "TAP LAYER INST: BACK";
-        lcd.drawText(h3, strlen(h3), 930, 438);
+        lcd.drawText(h3, strlen(h3), 930, 420);
         pageFullRedraw = false;
     }
     lcd_drawChopKnobs();
@@ -8309,7 +8439,7 @@ int8_t Controller::noteRepeat_pitchPad() {
 
 void Controller::noteRepeat_pitchHit(int8_t pad_, bool record_, uint16_t at_) {
     /// @brief Custom: one pitched repeat in Notes (Notes drum at that pad's note).
-    const int8_t note = levelsMode ? 0 : pitch_padNote((uint8_t)pad_);
+    const int8_t note = levelsMode ? 0 : (slicerOn(pitchLayer) ? (int8_t)(pad_ + 1) : pitch_padNote((uint8_t)pad_));   // custom: slicer = slice
     const uint8_t vel = levelsMode ? levels_padVel((uint8_t)pad_) : vel_pad();
     Layer& layer = layerLibrary[pitchLayer];
     pendingNote[pitchLayer] = note;
@@ -8448,7 +8578,10 @@ void Controller::pitch_knob(uint8_t which_, int8_t step_) {
         case 7: pitchGate = !pitchGate; break;
         case 6: { int16_t v = (int16_t)L.pitch + step_; if (v < kMinLayerPitch) v = kMinLayerPitch; if (v > kMaxLayerPitch) v = kMaxLayerPitch; layerInst_setPitch(pitchLayer, (uint8_t)v); } break;
         case 0: pitchLayer = (uint8_t)((pitchLayer + kLayerLibrarySize + step_) % kLayerLibrarySize); break;
-        case 1: pitchRoot = (uint8_t)((pitchRoot + 12 + step_) % 12); break;
+        case 1:
+            if (L.sliceCount > 0) { L.sliceOff = (step_ < 0); break; }   // custom: drums with slices: SLICES ON / OFF
+            pitchRoot = (uint8_t)((pitchRoot + 12 + step_) % 12);
+            break;
         case 2: pitchScale = (uint8_t)((pitchScale + kPitchScaleCount + step_) % kPitchScaleCount); break;
         case 3: {
             int8_t o = pitchOctave + step_;   // half-octave steps (6 semitones), +-2 octaves
@@ -8464,7 +8597,7 @@ void Controller::pitch_knob(uint8_t which_, int8_t step_) {
 void Controller::pitch_pad(uint8_t pad_) {
     /// @brief A pad in Pitch mode: play the chosen drum at that pad's note, record it into that drum's lane.
     if (pad_ >= kLayerLibrarySize) return;
-    const int8_t note = levelsMode ? 0 : pitch_padNote(pad_);   // custom: LEVELS = same pitch, pad = velocity
+    const int8_t note = levelsMode ? 0 : (slicerOn(pitchLayer) ? (int8_t)(pad_ + 1) : pitch_padNote(pad_));   // custom: LEVELS = same pitch; slicer = slice
     const uint8_t vel = levelsMode ? levels_padVel(pad_) : vel_pad();
     Layer& layer = layerLibrary[pitchLayer];
     pendingNote[pitchLayer] = note;
@@ -8585,7 +8718,7 @@ void Controller::lcd_drawIo_PitchData() {
         lcd.drawText(kLayerPitchDataLibrary[LL.pitch].nameLongR, kMenuDataTextSize, kMenuDataX[6], kMenuDataY[6]);
         return;
     }
-    const char* hdr[8] = {"PITCH-DRUM", "ROOT      ", "SCALE     ", "OCTAVE    ", "ROOT-PAD  ", "LEVEL     ", "TUNE      ", "GATE      "};
+    const char* hdr[8] = {"PITCH-DRUM", (L.sliceCount > 0) ? "SLICES    " : "ROOT      ", "SCALE     ", "OCTAVE    ", "ROOT-PAD  ", "LEVEL     ", "TUNE      ", "GATE      "};
     lcd_setMenuHeaderState(CYAN);
     for (uint8_t k = 0; k < 8; k++) lcd.drawText(hdr[k], kMenuHeaderTextSize, kMenuHeaderX[k], kMenuHeaderY[k]);
     lcd_setMenuSignState(CYAN);
@@ -8597,7 +8730,11 @@ void Controller::lcd_drawIo_PitchData() {
     const char* nm = name; while (*nm == ' ') nm++;
     snprintf(text, sizeof(text), "%02u %7.7s", pitchLayer + 1, (*nm) ? nm : "-");
     lcd.drawText(text, kMenuDataTextSize, kMenuDataX[0], kMenuDataY[0]);
-    snprintf(text, sizeof(text), "%10s", kPitchNoteName[pitchRoot % 12]);
+    if (L.sliceCount > 0) {   // custom: slicer drum - SLICES ON / OFF
+        if (L.sliceOff) snprintf(text, sizeof(text), "%10s", "OFF"); else snprintf(text, sizeof(text), "%7u ON", L.sliceCount);
+    } else {
+        snprintf(text, sizeof(text), "%10s", kPitchNoteName[pitchRoot % 12]);
+    }
     lcd.drawText(text, kMenuDataTextSize, kMenuDataX[1], kMenuDataY[1]);
     snprintf(text, sizeof(text), "%10.10s", kPitchScaleName[pitchScale % kPitchScaleCount]);
     lcd.drawText(text, kMenuDataTextSize, kMenuDataX[2], kMenuDataY[2]);
@@ -9111,7 +9248,7 @@ void Controller::page_drawPitch() {
     lcd.setAlignment(LEFT);
     lcd.setBackColor(BLACK);
     lcd.setForeColor(kThemeAccent);
-    snprintf(text, sizeof(text), "NOTES  DRUM %02u %-12.12s", pitchLayer + 1, (*nm) ? nm : "-");
+    snprintf(text, sizeof(text), "%s  DRUM %02u %-12.12s", slicerOn(pitchLayer) ? "SLICES" : "NOTES ", pitchLayer + 1, (*nm) ? nm : "-");
     lcd.drawText(text, strlen(text), 30, 136);
     lcd_drawIo_PitchData();
     snprintf(text, sizeof(text), "ROOT %-2s ON PAD %-2u   SCALE %-11s   OCTAVE %c%d%s  ", kPitchNoteName[pitchRoot % 12], pitchRootPad + 1, kPitchScaleName[pitchScale % kPitchScaleCount],
@@ -9129,7 +9266,7 @@ void Controller::page_drawPitch() {
         const int16_t oct = abs / 12 - 1;
         const bool isRoot = (pc == (pitchRoot % 12));
         static int16_t drawn[kLayerLibrarySize];   // custom: repaint only the boxes that changed
-        const int16_t sig = (int16_t)((n + 64) * 4 + (hit ? 2 : 0) + (isRoot ? 1 : 0));
+        const int16_t sig = (int16_t)((n + 64) * 4 + (hit ? 2 : 0) + (isRoot ? 1 : 0) + (slicerOn(pitchLayer) ? 1024 : 0));
         if (fullStrip) drawn[p] = -1;
         if (drawn[p] == sig) continue;
         drawn[p] = sig;
@@ -9146,11 +9283,13 @@ void Controller::page_drawPitch() {
         lcd.drawText(text, strlen(text), bx + boxW / 2, boxTop + 10);
         lcd.setFont(FONT_14x18);
         lcd.setForeColor(hit ? kThemeAccent : kThemeInk);
-        snprintf(text, sizeof(text), "%s%d", kPitchNoteName[pc], oct);
+        const bool slc = slicerOn(pitchLayer);   // custom: slicer drum - pad = slice
+        if (slc) { if (p < layerLibrary[pitchLayer].sliceCount) snprintf(text, sizeof(text), "%u", p + 1); else snprintf(text, sizeof(text), "-"); }
+        else snprintf(text, sizeof(text), "%s%d", kPitchNoteName[pc], oct);
         lcd.drawText(text, strlen(text), bx + boxW / 2, boxTop + 52);
         lcd.setFont(FONT_07x09);
         lcd.setForeColor(isRoot ? kThemeAmber : kThemeMid);
-        snprintf(text, sizeof(text), "%+d", n);
+        if (slc) snprintf(text, sizeof(text), "SLICE"); else snprintf(text, sizeof(text), "%+d", n);
         lcd.drawText(text, strlen(text), bx + boxW / 2, boxTop + 104);
         lcd.setBackColor(BLACK);
     }
@@ -11179,7 +11318,8 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
                         for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
                             const uint8_t v = has ? data[kRevSendFileAddr + l] : 0;
                             layerLibrary[l].revSend = ((v & 0x0F) <= 10) ? (v & 0x0F) : 0;
-                            layerLibrary[l].muteGroup = ((v >> 4) <= 4) ? (v >> 4) : 0;   // custom: mute group
+                            layerLibrary[l].muteGroup = (((v >> 4) & 0x07) <= 4) ? ((v >> 4) & 0x07) : 0;   // custom: mute group
+                            layerLibrary[l].sliceOff = (v & 0x80) != 0;                                  // custom: slices off
                         }
                     }
                     {   // custom: Song mode
@@ -11593,7 +11733,7 @@ void Controller::sd_encodeProject(uint8_t* data) {
     data[167] = reverb.active;
     data[178] = kReverbTypeFileMark | reverb.type;   // custom: reverb type
     data[179] = kRouteModeFileMark | (uint8_t)((routeLaneRev & 0x03) << 2) | (routeMode & 0x01);   // custom: layout + lane reverb
-    for (uint8_t l = 0; l < kLayerLibrarySize; l++) data[kRevSendFileAddr + l] = (uint8_t)((layerLibrary[l].revSend & 0x0F) | ((layerLibrary[l].muteGroup & 0x07) << 4));   // custom: reverb send + mute group
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) data[kRevSendFileAddr + l] = (uint8_t)((layerLibrary[l].revSend & 0x0F) | ((layerLibrary[l].muteGroup & 0x07) << 4) | (layerLibrary[l].sliceOff ? 0x80 : 0));   // custom: reverb send + mute group + slices off
     data[kRevSendFileAddr + kLayerLibrarySize] = kRevSendFileMark;
     {   // custom: Song mode (34 bytes in unused bytes 87-99 of drums 2-4's asset blocks)
         auto at = [](uint8_t k_) -> uint16_t { return (uint16_t)(500 + 100 * (1 + k_ / 13) + 87 + (k_ % 13)); };
@@ -12089,7 +12229,8 @@ SdResult Controller::sd_loadDrumkit(uint8_t kitNum_) {
                         for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
                             const uint8_t v = has ? data[kRevSendFileAddr + l] : 0;
                             layerLibrary[l].revSend = ((v & 0x0F) <= 10) ? (v & 0x0F) : 0;
-                            layerLibrary[l].muteGroup = ((v >> 4) <= 4) ? (v >> 4) : 0;   // custom: mute group
+                            layerLibrary[l].muteGroup = (((v >> 4) & 0x07) <= 4) ? ((v >> 4) & 0x07) : 0;   // custom: mute group
+                            layerLibrary[l].sliceOff = (v & 0x80) != 0;                                  // custom: slices off
                         }
                     }
                     if ((data[500 + kMetroRouteFileOffset] & 0xF0) == kMetroRouteFileMark) {
@@ -12420,7 +12561,7 @@ SdResult Controller::sd_saveDrumkit(uint8_t kitNum_) {
     data[167] = reverb.active;
     data[178] = kReverbTypeFileMark | reverb.type;   // custom: reverb type
     data[179] = kRouteModeFileMark | (uint8_t)((routeLaneRev & 0x03) << 2) | (routeMode & 0x01);   // custom: layout + lane reverb
-    for (uint8_t l = 0; l < kLayerLibrarySize; l++) data[kRevSendFileAddr + l] = (uint8_t)((layerLibrary[l].revSend & 0x0F) | ((layerLibrary[l].muteGroup & 0x07) << 4));   // custom: reverb send + mute group
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) data[kRevSendFileAddr + l] = (uint8_t)((layerLibrary[l].revSend & 0x0F) | ((layerLibrary[l].muteGroup & 0x07) << 4) | (layerLibrary[l].sliceOff ? 0x80 : 0));   // custom: reverb send + mute group + slices off
     data[kRevSendFileAddr + kLayerLibrarySize] = kRevSendFileMark;
     data[500 + kMetroRouteFileOffset] = kMetroRouteFileMark | ((uint8_t)metronome.mixerInMode & 0x0F);   // custom: where the metronome goes
     data[168] = reverb.size;
@@ -24760,8 +24901,26 @@ void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
                     tBD.counterEnd = tBD.counterMax;
                 }
 
+                // Custom: slicer drum. The hit plays one slice: its own (note 1-16 = slice), else the
+                // slice of its step (STEP), else (a pad played live) the whole sample.
+                if (slicerOn(layerNum_)) {
+                    const uint8_t cnt = layer.sliceCount;
+                    int16_t k = -1;
+                    if (pendingNote[layerNum_] > 0) k = (int16_t)((pendingNote[layerNum_] - 1) % cnt);
+                    else if (pendingStep[layerNum_] >= 0) k = (int16_t)(pendingStep[layerNum_] % cnt);
+                    if (k >= 0) {
+                        float a = (float)layer.slicePos[k];
+                        float b = ((k + 1) < cnt) ? (float)layer.slicePos[k + 1] : tBD.counterMax;
+                        if (b > tBD.counterMax) b = tBD.counterMax;
+                        if (a >= b) a = (b > 64.0f) ? (b - 64.0f) : 0.0f;
+                        tBD.counterStart = a;
+                        tBD.counterEnd = b;
+                        ((tBD.directionMode == 0) || (tBD.directionMode == 2)) ? tBD.counter = tBD.counterStart : tBD.counter = tBD.counterEnd - 1;
+                    }
+                }
+
                 // Custom: Pitch mode note for this hit (semitones on top of the drum's PITCH).
-                if (pendingNote[layerNum_] != 0) {
+                if ((pendingNote[layerNum_] != 0) && !slicerOn(layerNum_)) {
                     tBD.increment *= exp2f((float)pendingNote[layerNum_] / 12.0f);
                     if (tBD.increment > 8.0f) tBD.increment = 8.0f;
                     if (tBD.increment < 0.0625f) tBD.increment = 0.0625f;
@@ -25886,6 +26045,9 @@ void Controller::layerInst_setSampleLoaded(uint8_t layerNum_) {
         }
         f_close(&sd.file);
         layer.sampleLoading = false;
+        // Custom: cue markers in the file make this a slicer drum.
+        layer.sliceCount = layer.samplePlay ? wav_readCues(layer.sampleLoadedData.fileName, layer.wavLoadedData, layer.slicePos, 16,
+                                                           layer.sampleLoadedData.sampleSize) : 0;
         keyboard_enable();
 
         // 4. GRAPH CACHE RESET ON SAMPLE CHANGE
@@ -27033,7 +27195,9 @@ void Controller::lcd_drawLayerSong_NoteGateData(uint8_t layerNum_) {
         const int16_t abs = 48 + b.note;
         char nm[8];
         snprintf(nm, sizeof(nm), "%s%d", kPitchNoteName[abs % 12], abs / 12 - 1);
-        if (b.note) snprintf(t, sizeof(t), "%5s %+3d", nm, b.note); else snprintf(t, sizeof(t), "%10s", nm);
+        if (slicerOn(layerNum_)) {   // custom: slicer drum - the hit's slice
+            if (b.note > 0) snprintf(t, sizeof(t), "  SLICE %2d", b.note); else snprintf(t, sizeof(t), "%10s", "BY STEP");
+        } else if (b.note) snprintf(t, sizeof(t), "%5s %+3d", nm, b.note); else snprintf(t, sizeof(t), "%10s", nm);
         lcd.drawText(t, kMenuDataTextSize, kMenuDataX[6], kMenuDataY[6]);
         const uint16_t g = b.getGate();
         if (g == 0) snprintf(t, sizeof(t), "%10s", "RING OUT");
@@ -27052,14 +27216,17 @@ void Controller::layerSong_noteKnob(int8_t step_) {
     undo_checkpoint(UNDO_FILL);
     Beat& b = bank.beatLibrary[selectedBeatNum];
     int16_t n = (int16_t)b.note + step_;
-    if (n < -36) n = -36;
-    if (n > 36) n = 36;
+    const bool sl = slicerOn((uint8_t)selectedLayerNum);   // custom: slicer drum - 0 = by step, 1-16 = slice
+    if (n < (sl ? 0 : -36)) n = sl ? 0 : -36;
+    if (n > (sl ? (int16_t)layerLibrary[selectedLayerNum].sliceCount : 36)) n = sl ? layerLibrary[selectedLayerNum].sliceCount : 36;
     b.note = (int8_t)n;
     Layer& layer = layerLibrary[selectedLayerNum];
     if (!playActive && !layer.mute && layer.samplePlay) {
         pendingNote[selectedLayerNum] = b.note;
+        pendingStep[selectedLayerNum] = (int16_t)(b.getStartInterval() / (kMeasureInterval / 4));
         layer_playBeat(selectedLayerNum, vel_gain(b.getVel()));
         pendingNote[selectedLayerNum] = 0;
+        pendingStep[selectedLayerNum] = -1;
     }
     lcd_drawLayerSong_NoteGateData(selectedLayerNum);
 }
@@ -29916,11 +30083,13 @@ void Controller::interruptPlay() {
                             }
                             swingDelayTicks[i] = groove_swingDelay(i, playInterval);   // custom per-drum swing
                             pendingNote[i] = beat.note;                                  // custom Pitch mode note
+                            pendingStep[i] = (int16_t)(beat.getStartInterval() / (kMeasureInterval / 4));   // custom: slicer STEP
                             if (beat.getGate() && songInterval) { gateOff[i] = (uint16_t)((playInterval + beat.getGate()) % songInterval); gateArmed[i] = true; }
                             else gateArmed[i] = false;
                             if (fillVolMultiplier > 0.0f) layer_playBeat(layer.number, fillVolMultiplier * vel_gain(beat.getVel()));   // custom: velocity
                             swingDelayTicks[i] = 0;
                             pendingNote[i] = 0;
+                            pendingStep[i] = -1;
 
                             // Advance to the next beat index
                             (playBeatNum < bank.lastActiveBeatNum) ? bank.playBeatNum += 1 : bank.playBeatNum = 0;
@@ -29937,8 +30106,10 @@ void Controller::interruptPlay() {
                             if ((!layer.mute) && (layer.samplePlay) && ((playBeatMicroNum == 0) || ((playBeatMicroNum != 0) && (layer.fill)))) {
                                 fillVolMultiplier = kNumberDataLibrary[beatMicro.getLevel()].powMultiplier;
                                 pendingNote[i] = beat.note;   // custom: rolls keep their note
+                                pendingStep[i] = (int16_t)(beat.getStartInterval() / (kMeasureInterval / 4));   // and their slice
                                 if (fillVolMultiplier > 0.0f) layer_playBeat(layer.number, fillVolMultiplier * vel_gain(beat.getVel()));
                                 pendingNote[i] = 0;
+                                pendingStep[i] = -1;
                             }
 
                             // Advance micro-step index within the fill
