@@ -13754,6 +13754,7 @@ void Controller::lcd_drawPage(bool animate_) {
     } else {
         lcd.drawRGB16Image(indexPtr, dataPtr, 64, kImageMenuBX, kImageMenuBY, kImageMenuBWidth, kImageMenuBHeight);
     }
+    lcd_drawEncoderBankTab();   // custom: the pad bank corner (over the image's KNOB label)
 
     // 5. LAYER LABEL RENDER
     // Draw two-digit layer labels with alternating foreground color.
@@ -14170,10 +14171,11 @@ void Controller::lcd_drawEncoderBankTab() {
     const RGB16Color k = colours[liveBank % kPadBankCount];
     lcd.setBackColor(BLACK);
     lcd.setForeColor(k);
-    lcd.drawText("BANK", 4, 76, 463);
+    lcd.setFont(FONT_10x14);
+    lcd.drawText("BANK", 4, 76, 459);
     lcd.setFont(FONT_14x18);
     char textData[2] = {(char)('A' + (liveBank % kPadBankCount)), 0};
-    lcd.drawText(textData, 1, 76, 481);
+    lcd.drawText(textData, 1, 76, 480);
     lcd.setFont(FONT_07x09);
 }
 
