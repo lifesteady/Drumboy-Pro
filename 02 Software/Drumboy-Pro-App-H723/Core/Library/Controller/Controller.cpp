@@ -4202,7 +4202,7 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
         case ENC_CH_SLICE: chop_knob(0, 1); break;
         case ENC_CH_MOVE: chop_knob(1, 1); break;
         case ENC_CH_FINE: chop_knob(2, 1); break;
-        case ENC_CH_ZOOM: chop_knob(3, 1); break;
+        case ENC_CH_PITCH: chop_knob(3, 1); break;
         case ENC_CH_AUTO: chop_knob(4, 1); break;
         case ENC_CH_EQUAL: chop_knob(5, 1); break;
         case ENC_CH_PAD: chop_knob(6, 1); break;
@@ -4214,6 +4214,10 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
 
         case ENC_SMP_DECAY:
             sample_setEnv(2, (int16_t)layerLibrary[selectedLayerNum].envDecay + 1);
+            break;
+
+        case ENC_SMP_GROUP:   // custom
+            if (layerLibrary[selectedLayerNum].muteGroup < 4) { layerLibrary[selectedLayerNum].muteGroup++; page_markDirty(PAGE_SAMPLE); }
             break;
 
             // Layer inst functions
@@ -4828,7 +4832,7 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
         case ENC_CH_SLICE: chop_knob(0, -1); break;
         case ENC_CH_MOVE: chop_knob(1, -1); break;
         case ENC_CH_FINE: chop_knob(2, -1); break;
-        case ENC_CH_ZOOM: chop_knob(3, -1); break;
+        case ENC_CH_PITCH: chop_knob(3, -1); break;
         case ENC_CH_AUTO: chop_knob(4, -1); break;
         case ENC_CH_EQUAL: chop_knob(5, -1); break;
         case ENC_CH_PAD: chop_knob(6, -1); break;
@@ -4840,6 +4844,10 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
 
         case ENC_SMP_DECAY:
             sample_setEnv(2, (int16_t)layerLibrary[selectedLayerNum].envDecay - 1);
+            break;
+
+        case ENC_SMP_GROUP:   // custom
+            if (layerLibrary[selectedLayerNum].muteGroup > 0) { layerLibrary[selectedLayerNum].muteGroup--; page_markDirty(PAGE_SAMPLE); }
             break;
 
             // Layer inst functions
@@ -6567,12 +6575,14 @@ bool Controller::sampling_save() {
 ////////////////////////////////////////////////////////////////////////////////
 // One take (up to 30 s, 16-bit, in the undo region) cut into up to 10 slices that sit side by
 // side. Slices are placed by hand (CENTER splits, CLEAR removes, MOVE / FINE nudge a start), by
-// AUTO CHOP (finds the hits) or EQUAL. PASTE saves each slice as its own WAV and loads slice 1
-// onto FIRST PAD, slice 2 onto the next pad, and so on.
+// AUTO CHOP (finds the hits), EQUAL, or come from cue markers in the WAV. ADD + pad puts the
+// selected slice on that pad; PASTE puts them all on FIRST PAD onwards. Slices of one take share
+// a mute group, so they cut each other off like one loop.
 
 void Controller::chop_begin(const char* base_, uint8_t firstPad_) {
     strncpy(chopBase, base_, sizeof(chopBase) - 1);
     chopBase[sizeof(chopBase) - 1] = 0;
+    chopStem[0] = 0;
     chopN = 1;
     chopMark[0] = 0;
     chopEnd = chopLen;
@@ -6580,13 +6590,16 @@ void Controller::chop_begin(const char* base_, uint8_t firstPad_) {
     chopZoom = 0;
     chopAutoSens = 0;
     chopEqualIdx = 0;
+    chopGroup = 0;
+    for (uint8_t k = 0; k < kChopMaxSlices; k++) { chopPadOf[k] = -1; chopSavedIdx[k] = -1; }
     chopFirstPad = (firstPad_ < kLayerLibrarySize) ? firstPad_ : 0;
     chopActive = true;
 }
 
 bool Controller::chop_loadLayer(uint8_t layerNum_) {
     /// @brief ADD + REC on the Sample page: the drum's sample file, read from the SD card in full
-    /// (up to 30 s, not just the 5.4 s a pad holds), into the chop buffer.
+    /// (up to 30 s, not just the 5.4 s a pad holds), into the chop buffer. Cue markers in the
+    /// file (from a DAW, or a REX loop exported to WAV) become the slices.
     Layer& layer = layerLibrary[layerNum_];
     if ((layer.sampleLoaded < 0) || (layer.sampleLoadedData.fileName[0] == 0)) return false;
     const WavData& wav = layer.wavLoadedData;
@@ -6615,6 +6628,8 @@ bool Controller::chop_loadLayer(uint8_t layerNum_) {
     uint32_t outCount = 0;
     int32_t peak = 1;
     bool ok = false;
+    uint32_t cue[kChopMaxSlices];
+    uint8_t nCue = 0;
     if ((f_open(&sd.file, layer.sampleLoadedData.fileName, FA_READ) == FR_OK) && (f_lseek(&sd.file, wav.data_chunk.chunkStartByte + 8) == FR_OK)) {
         const uint32_t onDisk = f_size(&sd.file) - (wav.data_chunk.chunkStartByte + 8);
         const uint32_t total = (wav.data_chunk.chunkSize <= onDisk) ? wav.data_chunk.chunkSize : onDisk;
@@ -6647,6 +6662,28 @@ bool Controller::chop_loadLayer(uint8_t layerNum_) {
             }
             done += sd.bytesread;
         }
+        // cue markers: walk the RIFF chunks for "cue "
+        uint32_t pos = 12;
+        const uint32_t fsz = f_size(&sd.file);
+        static uint8_t ck[24];
+        for (uint8_t guard = 0; (guard < 64) && (pos + 8 <= fsz); guard++) {
+            UINT br = 0;
+            if ((f_lseek(&sd.file, pos) != FR_OK) || (f_read(&sd.file, ck, 8, &br) != FR_OK) || (br < 8)) break;
+            const uint32_t size = ck[4] | (ck[5] << 8) | (ck[6] << 16) | ((uint32_t)ck[7] << 24);
+            if (memcmp(ck, "cue ", 4) == 0) {
+                if ((f_read(&sd.file, ck, 4, &br) != FR_OK) || (br < 4)) break;
+                uint32_t count = ck[0] | (ck[1] << 8) | (ck[2] << 16) | ((uint32_t)ck[3] << 24);
+                if (count > 64) count = 64;
+                for (uint32_t q = 0; q < count; q++) {
+                    if ((f_read(&sd.file, ck, 24, &br) != FR_OK) || (br < 24)) break;
+                    const uint32_t frame = ck[20] | (ck[21] << 8) | (ck[22] << 16) | ((uint32_t)ck[23] << 24);
+                    const uint32_t at = (uint32_t)(((uint64_t)frame * writeCount) / coefSamplerate);
+                    if ((at < outCount) && (nCue < kChopMaxSlices)) cue[nCue++] = at;
+                }
+                break;
+            }
+            pos += 8 + size + (size & 1);
+        }
         f_close(&sd.file);
     }
     keyboard_enable();
@@ -6662,6 +6699,14 @@ bool Controller::chop_loadLayer(uint8_t layerNum_) {
     if (dot) *dot = 0;
     base[14] = 0;   // room for _nn.wav and a letter
     chop_begin(base, layerNum_);
+    if (nCue > 0) {   // slices from the file's markers
+        for (uint8_t q = 1; q < nCue; q++)
+            for (uint8_t r = q; (r > 0) && (cue[r] < cue[r - 1]); r--) { const uint32_t t = cue[r]; cue[r] = cue[r - 1]; cue[r - 1] = t; }
+        uint8_t n = 0;
+        for (uint8_t q = 0; q < nCue; q++) if ((n == 0) || (cue[q] >= chopMark[n - 1] + 64)) chopMark[n++] = cue[q];
+        chopN = n;
+        undo_showText("CUES ");
+    }
     return true;
 }
 
@@ -6681,7 +6726,7 @@ void Controller::chop_view(uint32_t& start_, uint32_t& len_) {
 bool Controller::chop_key(uint8_t key_) {
     /// @brief Left keypad on the Chop page. Returns true when the key was used here.
     switch (key_) {
-        case KEY_ADD: keyboard.shiftKeyPress = true; return true;   // modifier only (no sample loading here)
+        case KEY_ADD: keyboard.shiftKeyPress = true; return true;   // modifier only (ADD + pad = put the slice there)
         case KEY_LEFT: if (chopSel > 0) chopSel--; break;
         case KEY_RIGHT: if (chopSel + 1 < chopN) chopSel++; break;
         case KEY_UP: if (chopZoom < 10) chopZoom++; break;
@@ -6690,16 +6735,20 @@ bool Controller::chop_key(uint8_t key_) {
             if (chopN >= kChopMaxSlices) { undo_showText("FULL "); return true; }
             const uint32_t s = chopMark[chopSel], e = chop_sliceEnd(chopSel);
             if (e - s < 512) return true;
-            for (int8_t k = (int8_t)chopN; k > (int8_t)chopSel + 1; k--) chopMark[k] = chopMark[k - 1];
+            for (int8_t k = (int8_t)chopN; k > (int8_t)chopSel + 1; k--) { chopMark[k] = chopMark[k - 1]; chopPadOf[k] = chopPadOf[k - 1]; chopSavedIdx[k] = chopSavedIdx[k - 1]; }
             chopMark[chopSel + 1] = s + (e - s) / 2;
+            chopPadOf[chopSel + 1] = -1;
+            chopSavedIdx[chopSel + 1] = -1;
             chopN++;
             chopSel++;
         } break;
         case KEY_CLEAR: {   // remove the selected slice (it joins the one before it)
             if (chopN <= 1) return true;
             const uint8_t r = (chopSel == 0) ? 1 : chopSel;   // removing slice 1 keeps its start
-            for (uint8_t k = r; k + 1 < chopN; k++) chopMark[k] = chopMark[k + 1];
+            for (uint8_t k = r; k + 1 < chopN; k++) { chopMark[k] = chopMark[k + 1]; chopPadOf[k] = chopPadOf[k + 1]; chopSavedIdx[k] = chopSavedIdx[k + 1]; }
             chopN--;
+            chopPadOf[chopN] = -1;
+            chopSavedIdx[chopN] = -1;
             if (chopSel > 0) chopSel--;
         } break;
         case KEY_PASTE: chop_paste(); return true;
@@ -6712,7 +6761,13 @@ bool Controller::chop_key(uint8_t key_) {
 }
 
 void Controller::chop_pad(uint8_t pad_) {
-    /// @brief Pad on the Chop page: select that slice and hear it (first 3 s).
+    /// @brief Pad on the Chop page: hear that slice (first 3 s). ADD + pad: put the SELECTED
+    /// slice on this pad.
+    if (keyboard.shiftKeyPress) {
+        if (chop_putSlice(chopSel, pad_)) undo_showText("DONE ");
+        page_markDirty(PAGE_CHOP);
+        return;
+    }
     if (pad_ >= chopN) return;
     chopSel = pad_;
     page_markDirty(PAGE_CHOP);
@@ -6725,8 +6780,9 @@ void Controller::chop_pad(uint8_t pad_) {
     volatile float* dst = (volatile float*)RAM_PREVIEW_ADDRESS;
     const float g = chopGain / 32768.0f;
     for (uint32_t k = 0; k < n; k++) dst[k] = (float)src[k] * g;
-    uint8_t voice = (uint8_t)(chopFirstPad + pad_);
-    if (voice >= kLayerLibrarySize) voice = chopFirstPad;
+    // heard through the drum it sits on (its tune), else the first pad
+    uint8_t voice = (chopPadOf[pad_] >= 0) ? (uint8_t)chopPadOf[pad_] : chopFirstPad;
+    if (voice >= kLayerLibrarySize) voice = 0;
     const Layer& layer = layerLibrary[voice];
     BeatPlayData b;
     memset(&b, 0x00, sizeof(BeatPlayData));
@@ -6738,7 +6794,8 @@ void Controller::chop_pad(uint8_t pad_) {
     b.counterEnd = n;
     b.fadeFlag = true;
     b.counterFadeStart = (n > 300) ? (n - 200) : (n - 20);
-    b.increment = 1.0f;
+    b.increment = (chopPadOf[pad_] >= 0) ? kLayerPitchDataLibrary[layer.pitch].data : 1.0f;
+    if (!(b.increment > 0.05f && b.increment < 8.0f)) b.increment = 1.0f;
     b.mixerInMode = layer.mixerInMode;
     LayerPlayData& lD = layerPlayData[voice];
     uint32_t primask = __get_PRIMASK();
@@ -6771,7 +6828,14 @@ void Controller::chop_knob(uint8_t which_, int8_t step_) {
         case 0: { int16_t v = (int16_t)chopSel + step_; if (v < 0) v = 0; if (v >= chopN) v = chopN - 1; chopSel = (uint8_t)v; } break;
         case 1: moveMark((int32_t)step_ * (int32_t)((vl / 100) ? (vl / 100) : 1)); break;
         case 2: moveMark((int32_t)step_ * (int32_t)((vl / 860) ? (vl / 860) : 1)); break;
-        case 3: { int16_t v = (int16_t)chopZoom + step_; if (v < 0) v = 0; if (v > 10) v = 10; chopZoom = (uint8_t)v; } break;
+        case 3: {   // pitch = TUNE of the drum the slice is on
+            if (chopPadOf[chopSel] < 0) break;   // the knob box says NOT ON PAD
+            const uint8_t l = (uint8_t)chopPadOf[chopSel];
+            int16_t v = (int16_t)layerLibrary[l].pitch + step_;
+            if (v < kMinLayerPitch) v = kMinLayerPitch;
+            if (v > kMaxLayerPitch) v = kMaxLayerPitch;
+            layerInst_setPitch(l, (uint8_t)v);
+        } break;
         case 4: { int16_t v = (int16_t)chopAutoSens + step_; if (v < 1) v = 1; if (v > 10) v = 10; chopAutoSens = (uint8_t)v; chop_auto(); } break;
         case 5: { int16_t v = (int16_t)chopEqualIdx + step_; if (v < 1) v = 1; if (v > 6) v = 6; chopEqualIdx = (uint8_t)v; chop_equal(); } break;
         case 6: { int16_t v = (int16_t)chopFirstPad + step_; if (v < 0) v = 0; if (v >= kLayerLibrarySize) v = kLayerLibrarySize - 1; chopFirstPad = (uint8_t)v; } break;
@@ -6794,7 +6858,7 @@ void Controller::chop_equal() {
     const uint8_t n = counts[(chopEqualIdx <= 6) ? chopEqualIdx : 0];
     const uint32_t s = chopMark[0], e = chopEnd;
     if (e <= s + 64u * n) return;
-    for (uint8_t k = 0; k < n; k++) chopMark[k] = s + (uint32_t)(((uint64_t)(e - s) * k) / n);
+    for (uint8_t k = 0; k < n; k++) { chopMark[k] = s + (uint32_t)(((uint64_t)(e - s) * k) / n); chopPadOf[k] = -1; chopSavedIdx[k] = -1; }
     chopN = n;
     chopSel = 0;
 }
@@ -6808,7 +6872,7 @@ void Controller::chop_auto() {
     const uint32_t hop = 256;
     const uint32_t nb = chopEnd / hop;
     if (nb < 4) return;
-    float* e = (float*)RAM_PREVIEW_ADDRESS;   // scratch (the audition buffer)
+    float* e = (float*)RAM_PREVIEW_ADDRESS;
     if (nb > kPreviewMaxSamples) return;
     float emax = 1.0f;
     for (uint32_t j = 0; j < nb; j++) {
@@ -6846,54 +6910,92 @@ void Controller::chop_auto() {
     if (n == 0) { undo_showText("NONE "); return; }
     for (uint8_t q = 1; q < n; q++)   // time order
         for (uint8_t r = q; (r > 0) && (pos[r] < pos[r - 1]); r--) { const uint32_t t = pos[r]; pos[r] = pos[r - 1]; pos[r - 1] = t; }
-    for (uint8_t q = 0; q < n; q++) chopMark[q] = pos[q];
+    for (uint8_t q = 0; q < n; q++) { chopMark[q] = pos[q]; chopPadOf[q] = -1; chopSavedIdx[q] = -1; }
     chopN = n;
     chopSel = 0;
 }
 
-void Controller::chop_paste() {
-    /// @brief PASTE: each slice -> Sample/RECORDED/<name>_nn.wav, loaded onto FIRST PAD, the next
-    /// pad, and so on (slices past pad 10 are left out). Slices longer than a pad are cut to 5.4 s.
-    const uint8_t count = ((chopFirstPad + chopN) > kLayerLibrarySize) ? (uint8_t)(kLayerLibrarySize - chopFirstPad) : chopN;
-    if (count == 0) return;
+bool Controller::chop_putSlice(uint8_t i_, uint8_t pad_) {
+    /// @brief One slice -> Sample/RECORDED/<name>_nn.wav (written again if it changed) and loaded
+    /// onto a pad, in this take's mute group. Longer than a pad: cut to 5.4 s.
+    if ((i_ >= chopN) || (pad_ >= kLayerLibrarySize)) return false;
     keyboard_disable();
     f_mkdir("Sample/RECORDED");
-    // a name nobody has used yet: BASE_01.wav, else BASEB_01.wav, BASEC_01.wav ...
-    char stem[24], name[kFileNameSize], path[96];
-    char letter = 0;
-    for (; letter <= 'Z'; letter = (letter == 0) ? 'B' : (char)(letter + 1)) {
-        if (letter) snprintf(stem, sizeof(stem), "%s%c", chopBase, letter); else snprintf(stem, sizeof(stem), "%s", chopBase);
-        snprintf(path, sizeof(path), "Sample/RECORDED/%s_01.wav", stem);
-        if (f_stat(path, &sd.fileInfo) != FR_OK) break;
+    char name[kFileNameSize], path[96];
+    if (chopStem[0] == 0) {   // a name nobody has used yet: BASE_01.wav, else BASEB_01.wav ...
+        for (char letter = 0; letter <= 'Z'; letter = (letter == 0) ? 'B' : (char)(letter + 1)) {
+            if (letter) snprintf(chopStem, sizeof(chopStem), "%s%c", chopBase, letter); else snprintf(chopStem, sizeof(chopStem), "%s", chopBase);
+            snprintf(path, sizeof(path), "Sample/RECORDED/%s_01.wav", chopStem);
+            if (f_stat(path, &sd.fileInfo) != FR_OK) break;
+        }
     }
+    if (chopGroup == 0) {   // first slice placed: pick a mute group no other drum uses
+        bool used[5] = {false, false, false, false, false};
+        for (uint8_t l = 0; l < kLayerLibrarySize; l++) if (layerLibrary[l].muteGroup <= 4) used[layerLibrary[l].muteGroup] = true;
+        chopGroup = 4;
+        for (uint8_t gq = 1; gq <= 4; gq++) if (!used[gq]) { chopGroup = gq; break; }
+    }
+    const uint32_t s = chopMark[i_];
+    uint32_t n = chop_sliceEnd(i_) - s;
+    if (n > kSampleSize - 64) n = kSampleSize - 64;
+    snprintf(name, sizeof(name), "%s_%02u.wav", chopStem, i_ + 1);
+    snprintf(path, sizeof(path), "Sample/RECORDED/%s", name);
+    const bool ok = sampling_writeWav(path, sampBuf() + s, n, chopGain);
+    keyboard_enable();
+    if (!ok) return false;
+    int16_t inst = -1, idx = -1;
+    // library entry: once per slice file
+    keyboard_disable();
+    if (chopSavedIdx[i_] < 0) {
+        inst = sampling_libAdd(name);
+        if (inst >= 0) { idx = (int16_t)(sampleLibrarySize[inst] - 1); chopSavedIdx[i_] = idx; }
+    } else {
+        idx = chopSavedIdx[i_];
+        inst = -1;
+        // the RECORDED instrument number: look it up by name in Inst.lib
+        char entry[kFileNameSize];
+        f_close(&sd.file);
+        if (f_open(&sd.file, "System/Data/Inst.lib", FA_READ) == FR_OK) {
+            for (uint16_t q = 0; q < instLibrarySize; q++) {
+                UINT br = 0;
+                if ((f_lseek(&sd.file, 25 + (uint32_t)q * kFileNameSize) != FR_OK) || (f_read(&sd.file, entry, kFileNameSize, &br) != FR_OK) || (br < kFileNameSize)) break;
+                entry[kFileNameSize - 1] = 0;
+                if (strcmp(entry, "RECORDED") == 0) { inst = (int16_t)q; break; }
+            }
+            f_close(&sd.file);
+        }
+    }
+    keyboard_enable();
+    if ((inst < 0) || (idx < 0)) return false;
+    layerInst_setInstSelected(pad_, inst);
+    layerInst_setSampleSelected(pad_, idx);
+    layerInst_setInstLoaded(pad_);
+    // force a reload even if this drum already had this file (the slice may have moved)
+    memset(layerLibrary[pad_].sampleLoadedData.fileName, 0, sizeof(layerLibrary[pad_].sampleLoadedData.fileName));
+    layerInst_setSampleLoaded(pad_);
+    layerInst_setEnd(pad_, kInitialLayerEnd);
+    layerInst_setStart(pad_, kInitialLayerStart);
+    layerLibrary[pad_].muteGroup = chopGroup;
+    for (uint8_t k = 0; k < chopN; k++) if (chopPadOf[k] == (int8_t)pad_) chopPadOf[k] = -1;   // a pad holds one slice
+    chopPadOf[i_] = (int8_t)pad_;
+    return true;
+}
+
+void Controller::chop_paste() {
+    /// @brief PASTE: every slice onto FIRST PAD, the next pad, and so on (past pad 10: left out).
+    const uint8_t count = ((chopFirstPad + chopN) > kLayerLibrarySize) ? (uint8_t)(kLayerLibrarySize - chopFirstPad) : chopN;
+    if (count == 0) return;
     const LcdFont f = lcd.getFont();
     const LcdAlign al = lcd.getAlignment();
     bool allOk = true;
     for (uint8_t i = 0; i < count; i++) {
-        const uint8_t pad = (uint8_t)(chopFirstPad + i);
         char msg[64];
-        snprintf(msg, sizeof(msg), "PUTTING SLICE %u ON PAD %u", i + 1, pad + 1);
+        snprintf(msg, sizeof(msg), "PUTTING SLICE %u ON PAD %u", i + 1, chopFirstPad + i + 1);
         lcd.setProtect(false);
         page_drawSummary(msg, 7, kThemeAmber);
         lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
-        const uint32_t s = chopMark[i];
-        uint32_t n = chop_sliceEnd(i) - s;
-        if (n > kSampleSize - 64) n = kSampleSize - 64;
-        snprintf(name, sizeof(name), "%s_%02u.wav", stem, i + 1);
-        snprintf(path, sizeof(path), "Sample/RECORDED/%s", name);
-        keyboard_disable();
-        const bool ok = sampling_writeWav(path, sampBuf() + s, n, chopGain);
-        const int16_t inst = ok ? sampling_libAdd(name) : -1;
-        keyboard_enable();
-        if (inst < 0) { allOk = false; continue; }
-        layerInst_setInstSelected(pad, inst);
-        layerInst_setSampleSelected(pad, (int16_t)(sampleLibrarySize[inst] - 1));
-        layerInst_setInstLoaded(pad);
-        layerInst_setSampleLoaded(pad);
-        layerInst_setEnd(pad, kInitialLayerEnd);
-        layerInst_setStart(pad, kInitialLayerStart);
+        if (!chop_putSlice(i, (uint8_t)(chopFirstPad + i))) allOk = false;
     }
-    keyboard_enable();
     lcd.setFont(f);
     lcd.setAlignment(al);
     undo_showText(allOk ? "DONE " : "ERROR");
@@ -6901,7 +7003,7 @@ void Controller::chop_paste() {
 }
 
 void Controller::lcd_drawChopKnobs() {
-    const char* hdr[8] = {"SLICE     ", "MOVE      ", "FINE      ", "ZOOM      ", "AUTO CHOP ", "EQUAL     ", "FIRST PAD ", "TAKE END  "};
+    const char* hdr[8] = {"SLICE     ", "MOVE      ", "FINE      ", "PITCH     ", "AUTO CHOP ", "EQUAL     ", "FIRST PAD ", "TAKE END  "};
     static const uint8_t counts[7] = {1, 2, 3, 4, 6, 8, 10};
     char t[16];
     lcd_setMenuHeaderState(CYAN);
@@ -6914,7 +7016,7 @@ void Controller::lcd_drawChopKnobs() {
     lcd_setMenuDataState(WHITE);
     auto secs = [](uint32_t n, char* o, size_t sz) {
         const unsigned ms = (unsigned)(((uint64_t)n * 1000) / 44100);
-        snprintf(o, sz, "%7u.%03u", ms / 1000, ms % 1000);
+        snprintf(o, sz, "%6u.%03u", ms / 1000, ms % 1000);
     };
     snprintf(t, sizeof(t), "%4u OF %2u", chopSel + 1, chopN);
     lcd.drawText(t, kMenuDataTextSize, kMenuDataX[0], kMenuDataY[0]);
@@ -6922,8 +7024,8 @@ void Controller::lcd_drawChopKnobs() {
     lcd.drawText(t, kMenuDataTextSize, kMenuDataX[1], kMenuDataY[1]);
     snprintf(t, sizeof(t), "%10s", "NUDGE");
     lcd.drawText(t, kMenuDataTextSize, kMenuDataX[2], kMenuDataY[2]);
-    snprintf(t, sizeof(t), "%9ux", 1u << chopZoom);
-    lcd.drawText(t, kMenuDataTextSize, kMenuDataX[3], kMenuDataY[3]);
+    if (chopPadOf[chopSel] >= 0) lcd.drawText(kLayerPitchDataLibrary[layerLibrary[(uint8_t)chopPadOf[chopSel]].pitch].nameLongR, kMenuDataTextSize, kMenuDataX[3], kMenuDataY[3]);
+    else { snprintf(t, sizeof(t), "%10s", "NOT ON PAD"); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[3], kMenuDataY[3]); }
     if (chopAutoSens) snprintf(t, sizeof(t), "%10u", chopAutoSens); else snprintf(t, sizeof(t), "%10s", "TURN");
     lcd.drawText(t, kMenuDataTextSize, kMenuDataX[4], kMenuDataY[4]);
     if (chopEqualIdx) snprintf(t, sizeof(t), "%10u", counts[chopEqualIdx]); else snprintf(t, sizeof(t), "%10s", "TURN");
@@ -6935,10 +7037,12 @@ void Controller::lcd_drawChopKnobs() {
 }
 
 void Controller::page_drawChop() {
-    /// @brief Chop page: the take (or the zoomed part of it) with the slices, an overview strip.
-    const uint16_t gx = 40, gw = 860, gTop = 196, gBot = 368;
+    /// @brief Chop page, in the house style: the take filling the page, a thin accent line at
+    /// each cut with its number in a small tag, the selected slice lit, the slice / beat / tempo
+    /// line underneath, and a thin overview of the whole take while zoomed.
+    const uint16_t gx = 30, gw = 900, gTop = 190, gBot = 386;
     const int16_t mid = (gTop + gBot) / 2;
-    const float half = (gBot - gTop) / 2.0f - 2.0f;
+    const float half = (gBot - gTop) / 2.0f - 3.0f;
     char text[112];
     if (pageFullRedraw) {
         lcd.setBackColor(BLACK);
@@ -6948,94 +7052,123 @@ void Controller::page_drawChop() {
         lcd.setFont(FONT_07x09);
         lcd.setAlignment(LEFT);
         lcd.setForeColor(kThemeHeader);
-        const char h1[] = "PADS: HEAR A SLICE   LEFT / RIGHT: SLICE   UP / DOWN: ZOOM   CENTER: SPLIT   CLEAR: REMOVE";
+        const char h1[] = "PADS: HEAR A SLICE   ADD + PAD: PUT THIS SLICE THERE   LEFT / RIGHT: SLICE   UP / DOWN: ZOOM";
         lcd.drawText(h1, strlen(h1), 30, 420);
-        lcd.setForeColor(kThemeAmber);
-        const char h2[] = "PASTE: PUT THE SLICES ON THE PADS";
+        const char h2[] = "CENTER: SPLIT   CLEAR: REMOVE   PASTE: ALL SLICES FROM FIRST PAD";
         lcd.drawText(h2, strlen(h2), 30, 438);
         lcd.setAlignment(RIGHT);
-        lcd.setForeColor(kThemeHeader);
         const char h3[] = "TAP LAYER INST: BACK";
         lcd.drawText(h3, strlen(h3), 930, 438);
         pageFullRedraw = false;
     }
     lcd_drawChopKnobs();
-    // title + summary
-    const unsigned totMs = (unsigned)(((uint64_t)chopLen * 1000) / 44100);
+
+    // ---- title + summary
     lcd.setFont(FONT_14x18);
     lcd.setAlignment(LEFT);
     lcd.setBackColor(BLACK);
     lcd.setForeColor(kThemeAccent);
-    snprintf(text, sizeof(text), "CHOP  %-16s  %u.%u S", chopBase, totMs / 1000, (totMs % 1000) / 100);
-    lcd.drawText(text, 40, 30, 136);
+    snprintf(text, sizeof(text), "CHOP  %-30s", chopBase);
+    lcd.drawText(text, 36, 30, 136);
     const uint32_t s = chopMark[chopSel], e = chop_sliceEnd(chopSel);
     const unsigned sMs = (unsigned)(((uint64_t)s * 1000) / 44100), lMs = (unsigned)(((uint64_t)(e - s) * 1000) / 44100);
-    const uint8_t pad = (uint8_t)(chopFirstPad + chopSel);
     char where[24];
-    if (pad < kLayerLibrarySize) snprintf(where, sizeof(where), "GOES ON PAD %u", pad + 1); else snprintf(where, sizeof(where), "NO PAD LEFT");
-    snprintf(text, sizeof(text), "SLICE %u  AT %u.%03u S  LONG %u.%03u S  %s%s", chopSel + 1, sMs / 1000, sMs % 1000, lMs / 1000, lMs % 1000, where,
-             ((e - s) > kSampleSize - 64) ? "  (CUT TO 5.4 S)" : "");
-    page_drawSummary(text, (uint8_t)(chopSel >= 9 ? 8 : 7));
+    if (chopPadOf[chopSel] >= 0) snprintf(where, sizeof(where), "ON PAD %u", chopPadOf[chopSel] + 1);
+    else snprintf(where, sizeof(where), "NOT ON A PAD");
+    char slice[12];
+    snprintf(slice, sizeof(slice), "SLICE %u", chopSel + 1);
+    snprintf(text, sizeof(text), "%s  AT %u.%03u S  LONG %u.%03u S  %s%s", slice, sMs / 1000, sMs % 1000, lMs / 1000, lMs % 1000, where,
+             ((e - s) > kSampleSize - 64) ? "  CUT TO 5.4 S" : "");
+    page_drawSummary(text, (uint8_t)strlen(slice));
 
-    // waveform of the view, slices shaded, markers
+    // ---- waveform: black, the selected slice lit in a faint accent, a 1-px accent line per cut
     uint32_t vs, vl;
     chop_view(vs, vl);
     const int16_t* b = sampBuf();
     const float sc = 1.0f / (chopPeak * 32767.0f + 1.0f);
-    auto sliceOf = [&](uint32_t idx) -> int8_t {
-        if ((idx < chopMark[0]) || (idx >= chopEnd)) return -1;
-        int8_t k = 0;
-        while (((uint8_t)(k + 1) < chopN) && (idx >= chopMark[k + 1])) k++;
-        return k;
-    };
+    const RGB16Color selBg = page_mix(BLACK, kThemeAccent, 0.14f);
+    const RGB16Color waveOn = kThemeInk, waveDim = page_mix(BLACK, kThemeInk, 0.55f), waveOut = page_mix(BLACK, kThemeLine, 0.6f);
+    int8_t sl = -1;   // slice of the current column (walks left to right)
+    for (uint8_t k = 0; k < chopN; k++) if (chopMark[k] <= vs) sl = (int8_t)k;
     for (uint16_t c = 0; c < gw; c++) {
         const uint32_t a0 = vs + (uint32_t)(((uint64_t)vl * c) / gw);
         uint32_t a1 = vs + (uint32_t)(((uint64_t)vl * (c + 1)) / gw);
         if (a1 <= a0) a1 = a0 + 1;
+        bool cut = false;
+        while (((uint8_t)(sl + 1) < chopN) && (chopMark[sl + 1] < a1)) { sl++; cut = true; }
+        if ((sl >= 0) && (chopMark[sl] >= a0) && (chopMark[sl] < a1)) cut = true;
+        const bool inTake = (sl >= 0) && (a0 < chopEnd);
+        const bool endCut = (chopEnd >= a0) && (chopEnd < a1);
+        const bool sel = inTake && (sl == (int8_t)chopSel);
         int16_t mx = -32767, mn = 32767;
-        const uint32_t stepK = ((a1 - a0) > 64) ? ((a1 - a0) / 64) : 1;   // sample it, it's only a picture
+        const uint32_t stepK = ((a1 - a0) > 48) ? ((a1 - a0) / 48) : 1;   // sampled: it's a picture
         for (uint32_t k = a0; (k < a1) && (k < chopLen); k += stepK) { const int16_t v = b[k]; if (v > mx) mx = v; if (v < mn) mn = v; }
         if (mx < mn) { mx = 0; mn = 0; }
-        const int8_t sl = sliceOf(a0);
-        const bool sel = (sl == (int8_t)chopSel);
-        const RGB16Color bg = (sl < 0) ? BLACK : (sel ? page_mix(BLACK, kThemeAccent, 0.22f) : ((sl % 2) ? page_mix(BLACK, kThemeLine, 0.25f) : page_mix(BLACK, kThemeLine, 0.12f)));
         const uint16_t x = gx + c;
-        lcd.setForeColor(bg);
+        lcd.setForeColor(sel ? selBg : BLACK);
         lcd.drawVLine(x, gTop, gBot - gTop + 1);
+        if ((c % 3) == 0) { lcd.setForeColor(kThemeLine); lcd.drawPixel(x, mid); }
         int16_t yMax = (int16_t)(mid - (float)mx * sc * half);
         int16_t yMin = (int16_t)(mid - (float)mn * sc * half);
-        if (yMax < gTop) yMax = gTop;
-        if (yMin > gBot) yMin = gBot;
-        lcd.setForeColor((sl < 0) ? page_mix(BLACK, kThemeLine, 0.6f) : (sel ? kThemeInk : page_mix(BLACK, kThemeInk, 0.6f)));
+        if (yMax < gTop + 1) yMax = gTop + 1;
+        if (yMin > gBot - 1) yMin = gBot - 1;
+        lcd.setForeColor(!inTake ? waveOut : (sel ? waveOn : waveDim));
         if (yMin > yMax) lcd.drawVLine(x, yMax, yMin - yMax + 1); else lcd.drawPixel(x, mid);
-        // slice starts and the end
-        bool mark = false;
-        for (uint8_t k = 0; k < chopN; k++) if ((chopMark[k] >= a0) && (chopMark[k] < a1)) mark = true;
-        const bool endMark = (chopEnd >= a0) && (chopEnd < a1);
-        if (mark || endMark) { lcd.setForeColor(endMark && !mark ? kThemeAmber : kThemeAccent); lcd.drawVLine(x, gTop, gBot - gTop + 1); }
+        if (cut) { lcd.setForeColor(kThemeAccent); lcd.drawVLine(x, gTop, gBot - gTop + 1); }
+        else if (endCut) { lcd.setForeColor(kThemeAmber); lcd.drawVLine(x, gTop, gBot - gTop + 1); }
     }
-    // slice numbers above the waveform
+    // number tags on the cut lines (selected = amber), skipped where they would overlap
     lcd.setFont(FONT_07x09);
-    lcd.setAlignment(LEFT);
-    lcd.setBackColor(BLACK);
-    lcd.clearRect(gx - 4, gTop - 14, gw + 12, 11);
+    lcd.setAlignment(CENTER);
+    int16_t lastTag = -100;
     for (uint8_t k = 0; k < chopN; k++) {
         if ((chopMark[k] < vs) || (chopMark[k] >= vs + vl)) continue;
-        const uint16_t x = gx + (uint16_t)(((uint64_t)(chopMark[k] - vs) * gw) / vl);
+        const int16_t x = (int16_t)(gx + (((uint64_t)(chopMark[k] - vs) * gw) / vl));
+        if ((x - lastTag < 20) && (k != chopSel)) continue;
+        lastTag = x;
+        const bool sel = (k == chopSel);
+        const RGB16Color tag = sel ? kThemeAmber : kThemeAccent;
+        const int16_t tx = (x + 18 > gx + gw) ? (int16_t)(gx + gw - 18) : x;
+        lcd.setForeColor(tag);
+        lcd.fillRect(tx, gTop, 18, 13);
+        lcd.setBackColor(tag);
+        lcd.setForeColor(BLACK);
         snprintf(text, sizeof(text), "%u", k + 1);
-        lcd.setForeColor((k == chopSel) ? kThemeAccent : kThemeHeader);
-        if (x + 16 < gx + gw) lcd.drawText(text, strlen(text), x + 3, gTop - 13);
+        lcd.drawText(text, strlen(text), tx + 9, gTop + 3);
     }
-    // overview: whole take, the slices, and the part on screen
-    const uint16_t oy = 380, oh = 10;
-    for (uint16_t c = 0; c < gw; c += 2) {
-        const uint32_t idx = (uint32_t)(((uint64_t)chopLen * c) / gw);
-        const int8_t sl = sliceOf(idx);
-        const bool inView = (idx >= vs) && (idx < vs + vl);
-        RGB16Color k = (sl < 0) ? page_mix(BLACK, kThemeLine, 0.3f) : ((sl % 2) ? page_mix(BLACK, kThemeAccent, 0.5f) : page_mix(BLACK, kThemeAmber, 0.5f));
-        if (!inView) k = page_mix(BLACK, k, 0.5f);
-        lcd.setForeColor(k);
-        lcd.fillRect(gx + c, oy, 2, oh);
+    lcd.setBackColor(BLACK);
+
+    // ---- slices / beats / tempo line, and the overview while zoomed
+    const uint32_t loop = (chopEnd > chopMark[0]) ? (chopEnd - chopMark[0]) : 1;
+    const float loopSec = (float)loop / 44100.0f;
+    const float bpmNow = (float)(rhythm.tempo ? rhythm.tempo : 90);
+    static const uint8_t beatChoices[10] = {1, 2, 3, 4, 6, 8, 12, 16, 24, 32};
+    const float raw = loopSec * bpmNow / 60.0f;
+    uint8_t beats = 1;
+    float best = 1e9f;
+    for (uint8_t q = 0; q < 10; q++) { const float d = fabsf(logf((float)beatChoices[q] / (raw > 0.01f ? raw : 0.01f))); if (d < best) { best = d; beats = beatChoices[q]; } }
+    const unsigned bpm10 = (unsigned)((float)beats * 600.0f / loopSec + 0.5f);
+    const unsigned totMs = (unsigned)(((uint64_t)chopLen * 1000) / 44100);
+    unsigned placed = 0;
+    for (uint8_t k = 0; k < chopN; k++) if (chopPadOf[k] >= 0) placed++;
+    snprintf(text, sizeof(text), "%u SLICES   %u ON PADS   TAKE %u.%u S   %u BEATS = %u.%u BPM", chopN, placed, totMs / 1000, (totMs % 1000) / 100,
+             beats, bpm10 / 10, bpm10 % 10);
+    if (chopZoom) snprintf(text + strlen(text), sizeof(text) - strlen(text), "   ZOOM %uX", 1u << chopZoom);
+    lcd.setFont(FONT_07x09);
+    lcd.setAlignment(LEFT);
+    lcd.setForeColor(kThemeHeader);
+    lcd.clearRect(30, 394, 900, 10);
+    lcd.drawText(text, strlen(text), 30, 396);
+    const uint16_t oy = 182, oh = 4;
+    if (chopZoom) {
+        for (uint16_t c = 0; c < gw; c += 2) {
+            const uint32_t idx = (uint32_t)(((uint64_t)chopLen * c) / gw);
+            const bool inView = (idx >= vs) && (idx < vs + vl);
+            lcd.setForeColor(inView ? kThemeAccent : page_mix(BLACK, kThemeLine, 0.5f));
+            lcd.fillRect(gx + c, oy, 2, oh);
+        }
+    } else {
+        lcd.clearRect(gx, oy, gw, oh);
     }
 }
 
@@ -7414,7 +7547,7 @@ void Controller::page_drawSampleKnobs() {
     lcd.drawText(kHeaderStart, kMenuHeaderTextSize, kMenuHeaderX[4], kMenuHeaderY[4]);
     lcd.drawText(kHeaderEnd, kMenuHeaderTextSize, kMenuHeaderX[5], kMenuHeaderY[5]);
     lcd.drawText("DECAY     ", kMenuHeaderTextSize, kMenuHeaderX[6], kMenuHeaderY[6]);
-    lcd.drawText("          ", kMenuHeaderTextSize, kMenuHeaderX[7], kMenuHeaderY[7]);
+    lcd.drawText("MUTE GROUP", kMenuHeaderTextSize, kMenuHeaderX[7], kMenuHeaderY[7]);
 
     lcd_setMenuSignState(CYAN);
     lcd.drawText(" MS", kMenuSignTextSize, kMenuSignBoxX[2], kMenuSignBoxY[2]);
@@ -7431,7 +7564,8 @@ void Controller::page_drawSampleKnobs() {
     if (layer.envHold >= 100) snprintf(text, sizeof(text), "         -");
     else snprintf(text, sizeof(text), "%10u", (unsigned)(sample_envMs(layer.envDecay, kEnvDecayMaxMs) + 0.5f));
     lcd.drawText(text, kMenuDataTextSize, kMenuDataX[6], kMenuDataY[6]);
-    lcd.drawText("          ", kMenuDataTextSize, kMenuDataX[7], kMenuDataY[7]);
+    if (layer.muteGroup) snprintf(text, sizeof(text), "%10u", layer.muteGroup); else snprintf(text, sizeof(text), "%10s", "OFF");
+    lcd.drawText(text, kMenuDataTextSize, kMenuDataX[7], kMenuDataY[7]);
     lcd_drawLayerInst_StartData(selectedLayerNum);
     lcd_drawLayerInst_EndData(selectedLayerNum);
 }
@@ -11008,8 +11142,11 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
                     routeLaneRev = ((data[179] & 0xF0) == kRouteModeFileMark) ? ((data[179] >> 2) & 0x03) : 0;
                     {   // custom: reverb sends (older files: none)
                         const bool has = (data[kRevSendFileAddr + kLayerLibrarySize] == kRevSendFileMark);
-                        for (uint8_t l = 0; l < kLayerLibrarySize; l++)
-                            layerLibrary[l].revSend = (has && (data[kRevSendFileAddr + l] <= 10)) ? data[kRevSendFileAddr + l] : 0;
+                        for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
+                            const uint8_t v = has ? data[kRevSendFileAddr + l] : 0;
+                            layerLibrary[l].revSend = ((v & 0x0F) <= 10) ? (v & 0x0F) : 0;
+                            layerLibrary[l].muteGroup = ((v >> 4) <= 4) ? (v >> 4) : 0;   // custom: mute group
+                        }
                     }
                     {   // custom: Song mode
                         auto at = [](uint8_t k_) -> uint16_t { return (uint16_t)(500 + 100 * (1 + k_ / 13) + 87 + (k_ % 13)); };
@@ -11422,7 +11559,7 @@ void Controller::sd_encodeProject(uint8_t* data) {
     data[167] = reverb.active;
     data[178] = kReverbTypeFileMark | reverb.type;   // custom: reverb type
     data[179] = kRouteModeFileMark | (uint8_t)((routeLaneRev & 0x03) << 2) | (routeMode & 0x01);   // custom: layout + lane reverb
-    for (uint8_t l = 0; l < kLayerLibrarySize; l++) data[kRevSendFileAddr + l] = layerLibrary[l].revSend;   // custom: reverb sends
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) data[kRevSendFileAddr + l] = (uint8_t)((layerLibrary[l].revSend & 0x0F) | ((layerLibrary[l].muteGroup & 0x07) << 4));   // custom: reverb send + mute group
     data[kRevSendFileAddr + kLayerLibrarySize] = kRevSendFileMark;
     {   // custom: Song mode (34 bytes in unused bytes 87-99 of drums 2-4's asset blocks)
         auto at = [](uint8_t k_) -> uint16_t { return (uint16_t)(500 + 100 * (1 + k_ / 13) + 87 + (k_ % 13)); };
@@ -11915,8 +12052,11 @@ SdResult Controller::sd_loadDrumkit(uint8_t kitNum_) {
                     routeLaneRev = ((data[179] & 0xF0) == kRouteModeFileMark) ? ((data[179] >> 2) & 0x03) : 0;
                     {   // custom: reverb sends (older files: none)
                         const bool has = (data[kRevSendFileAddr + kLayerLibrarySize] == kRevSendFileMark);
-                        for (uint8_t l = 0; l < kLayerLibrarySize; l++)
-                            layerLibrary[l].revSend = (has && (data[kRevSendFileAddr + l] <= 10)) ? data[kRevSendFileAddr + l] : 0;
+                        for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
+                            const uint8_t v = has ? data[kRevSendFileAddr + l] : 0;
+                            layerLibrary[l].revSend = ((v & 0x0F) <= 10) ? (v & 0x0F) : 0;
+                            layerLibrary[l].muteGroup = ((v >> 4) <= 4) ? (v >> 4) : 0;   // custom: mute group
+                        }
                     }
                     if ((data[500 + kMetroRouteFileOffset] & 0xF0) == kMetroRouteFileMark) {
                         const uint8_t mr = data[500 + kMetroRouteFileOffset] & 0x0F;
@@ -12246,7 +12386,7 @@ SdResult Controller::sd_saveDrumkit(uint8_t kitNum_) {
     data[167] = reverb.active;
     data[178] = kReverbTypeFileMark | reverb.type;   // custom: reverb type
     data[179] = kRouteModeFileMark | (uint8_t)((routeLaneRev & 0x03) << 2) | (routeMode & 0x01);   // custom: layout + lane reverb
-    for (uint8_t l = 0; l < kLayerLibrarySize; l++) data[kRevSendFileAddr + l] = layerLibrary[l].revSend;   // custom: reverb sends
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) data[kRevSendFileAddr + l] = (uint8_t)((layerLibrary[l].revSend & 0x0F) | ((layerLibrary[l].muteGroup & 0x07) << 4));   // custom: reverb send + mute group
     data[kRevSendFileAddr + kLayerLibrarySize] = kRevSendFileMark;
     data[500 + kMetroRouteFileOffset] = kMetroRouteFileMark | ((uint8_t)metronome.mixerInMode & 0x0F);   // custom: where the metronome goes
     data[168] = reverb.size;
@@ -19377,7 +19517,7 @@ void Controller::mixer_reset() {
     padVelocity = 16; humanize = 0; levelsSoftest = 4;   // custom: velocity settings
     memset(songSteps, 0, sizeof(songSteps));
     routeLaneRev = 0;
-    for (uint8_t l = 0; l < kLayerLibrarySize; l++) layerLibrary[l].revSend = 0;   // custom
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) { layerLibrary[l].revSend = 0; layerLibrary[l].muteGroup = 0; }   // custom
     /// @brief Restores mixer mute, level, routing, and dynamics parameters to default values.
 
     // 1. MUTE STATE RESET
@@ -24402,6 +24542,18 @@ void Controller::lfo_paste() {
 /* Layer Functions -----------------------------------------------------------*/
 ////////////////////////////////////////////////////////////////////////////////
 
+void Controller::choke(uint8_t layerNum_) {
+    /// @brief Custom mute groups: a drum that starts cuts the others in its group (short fade, no click).
+    /// Called with interrupts off.
+    const uint8_t g = layerLibrary[layerNum_].muteGroup;
+    if (g == 0) return;
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
+        if ((l == layerNum_) || (layerLibrary[l].muteGroup != g)) continue;
+        BeatPlayData& a = layerPlayData[l].activeBeatPlayData;
+        if (a.active && !a.fadeAction) { a.fadeAction = true; a.counterFade = 0; a.newBeatFlag = false; }
+    }
+}
+
 void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
     /// @brief Prepares and triggers layer beat playback with LFO/style-dependent modulation.
 
@@ -24653,6 +24805,7 @@ void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
                     // or a torn fadeAction/counterFade pair.
                     uint32_t primaskBeat = __get_PRIMASK();
                     __disable_irq();
+                    choke(layerNum_);   // custom: mute groups
                     if (aBD.active) {
                         aBD.fadeAction = true;
                         aBD.counterFade = 0;
@@ -29859,6 +30012,7 @@ void Controller::interruptPlay() {
                 lD.tempBeatTimingFlag = false;
                 uint32_t primaskTiming = __get_PRIMASK();
                 __disable_irq();
+                choke(i);   // custom: mute groups (a delayed hit cuts its group when it starts)
                 memcpy(&lD.activeBeatPlayData, &lD.tempBeatPlayData, sizeof(BeatPlayData));
                 __set_PRIMASK(primaskTiming);
             }

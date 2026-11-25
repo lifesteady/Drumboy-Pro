@@ -603,6 +603,12 @@ class Controller {
     uint8_t chopN = 1, chopSel = 0, chopZoom = 0, chopFirstPad = 0, chopAutoSens = 0, chopEqualIdx = 0;
     float chopGain = 1.0f, chopPeak = 1.0f;
     char chopBase[24] = "";
+    char chopStem[24] = "";                                             // file name stem once the first slice is saved
+    int8_t chopPadOf[kChopMaxSlices];                                   // pad each slice was put on (-1: none)
+    int16_t chopSavedIdx[kChopMaxSlices];                               // its entry in the RECORDED list (-1: not saved)
+    uint8_t chopGroup = 0;                                              // mute group the slices of this take share
+    bool chop_putSlice(uint8_t i_, uint8_t pad_);
+    void choke(uint8_t layerNum_);                                      // custom: mute groups
     volatile uint8_t sampState = 0;                                     // 0 idle, 1 armed, 2 recording, 3 done (to save), 4 saving
     uint8_t sampLayer = 0;
     volatile uint32_t sampCount = 0;                                    // samples recorded after the trigger

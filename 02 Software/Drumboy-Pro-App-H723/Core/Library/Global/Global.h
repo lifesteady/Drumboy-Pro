@@ -1351,11 +1351,12 @@ typedef enum {
     ENC_CH_SLICE                                    = 0x89,  // custom: Chop page
     ENC_CH_MOVE                                     = 0x8A,
     ENC_CH_FINE                                     = 0x8B,
-    ENC_CH_ZOOM                                     = 0x8C,
+    ENC_CH_PITCH                                     = 0x8C,
     ENC_CH_AUTO                                     = 0x8D,
     ENC_CH_EQUAL                                    = 0x8E,
     ENC_CH_PAD                                      = 0x8F,
-    ENC_CH_END                                      = 0x90
+    ENC_CH_END                                      = 0x90,
+    ENC_SMP_GROUP                                   = 0x91   // custom: Sample page, mute group (choke)
 } EncoderFunc;
 
 const EncoderFunc encoderLocalFunction[][8] = {
@@ -1571,11 +1572,12 @@ const EncoderFuncData kEncoderFuncDataLibrary[] = {
     {ENC_CH_SLICE,            ENC_RES_S, "SLICE     ", "CHOP  ", "   ", false},
     {ENC_CH_MOVE,             ENC_RES_F, "MOVE      ", "CHOP  ", "   ", false},
     {ENC_CH_FINE,             ENC_RES_F, "FINE      ", "CHOP  ", "   ", false},
-    {ENC_CH_ZOOM,             ENC_RES_S, "ZOOM      ", "CHOP  ", "   ", false},
+    {ENC_CH_PITCH,            ENC_RES_S, "PITCH     ", "CHOP  ", "   ", false},
     {ENC_CH_AUTO,             ENC_RES_S, "AUTO CHOP ", "CHOP  ", "   ", false},
     {ENC_CH_EQUAL,            ENC_RES_S, "EQUAL     ", "CHOP  ", "   ", false},
     {ENC_CH_PAD,              ENC_RES_S, "FIRST PAD ", "CHOP  ", "   ", false},
-    {ENC_CH_END,              ENC_RES_F, "TAKE END  ", "CHOP  ", "   ", false}
+    {ENC_CH_END,              ENC_RES_F, "TAKE END  ", "CHOP  ", "   ", false},
+    {ENC_SMP_GROUP,           ENC_RES_S, "MUTE GROUP", "LAYER ", "   ", false}
 };
 
 // Knobs while the Song page is open.
@@ -1584,7 +1586,7 @@ const EncoderFunc kSongPageFunctions[8] = {ENC_SM_STEP, ENC_SM_BANK, ENC_SM_REPE
 const uint8_t kSongMaxSteps = 32;
 
 // Knobs while the Chop page is open.
-const EncoderFunc kChopPageFunctions[8] = {ENC_CH_SLICE, ENC_CH_MOVE, ENC_CH_FINE, ENC_CH_ZOOM,
+const EncoderFunc kChopPageFunctions[8] = {ENC_CH_SLICE, ENC_CH_MOVE, ENC_CH_FINE, ENC_CH_PITCH,
                                            ENC_CH_AUTO, ENC_CH_EQUAL, ENC_CH_PAD, ENC_CH_END};
 const uint8_t kChopMaxSlices = 10;   // one per pad
 const uint8_t kSongFileMark = 0xA5;
@@ -1595,10 +1597,10 @@ const EncoderFunc kPitchPageFunctions[8] = {ENC_PITCH_DRUM, ENC_PITCH_ROOT, ENC_
 
 // Knob layout while the Sample page is open (any of the three Layer Inst menus).
 const EncoderFunc kSamplePageFunctions[8] = {ENC_INST_0_INST, ENC_INST_0_SAMPLE, ENC_SMP_ATTACK, ENC_SMP_HOLD,
-                                             ENC_INST_1_START, ENC_INST_1_END, ENC_SMP_DECAY, ENC_FNC_NONE};
+                                             ENC_INST_1_START, ENC_INST_1_END, ENC_SMP_DECAY, ENC_SMP_GROUP};
 
 // The table above is indexed by EncoderFunc value, so every entry must sit at its own enum number.
-static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_CH_END + 1,
+static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_SMP_GROUP + 1,
               "kEncoderFuncDataLibrary must have one entry per EncoderFunc value");
 
 typedef enum {
@@ -2404,7 +2406,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.17 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.18 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -7665,6 +7667,7 @@ struct Layer {
     uint8_t laneDest                                = LANE_DEST_AUTO;   // custom: 2 LANES destination
     bool laneEq                                     = false;            // custom: 2 LANES, EQ on this drum
     uint8_t revSend                                 = 0;                // custom: REVERB SEND 0-10 (x 10%), on top of the routing
+    uint8_t muteGroup                               = 0;                // custom: 0 off, 1-4: a hit cuts the other drums in its group
     uint8_t envAttack                               = kInitialEnvAttack;   // custom envelope (0-100)
     uint8_t envHold                                 = kInitialEnvHold;
     uint8_t envDecay                                = kInitialEnvDecay;
