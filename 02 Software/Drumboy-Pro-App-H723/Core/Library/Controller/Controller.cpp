@@ -25194,8 +25194,11 @@ void Controller::sound_toLayer(const Sound& S_, Layer& L_) {
 
 void Controller::bank_initAll() {
     /// @brief Boot: every waiting sound empty, bank A playing.
+    /// SDRAM is device memory here: no unaligned access, so Sounds are built in RAM and copied
+    /// over with memcpy (never constructed or assigned in place).
+    new (&bankTmp) Sound();
     for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
-        for (uint8_t b = 0; b < kPadBankCount; b++) new (bank_sound(l, b)) Sound();
+        for (uint8_t b = 0; b < kPadBankCount; b++) memcpy((void*)bank_sound(l, b), &bankTmp, sizeof(Sound));
         layerLive[l] = 0;
     }
     liveBank = 0;
@@ -25252,7 +25255,8 @@ void Controller::bank_freeSound(uint8_t l_, uint8_t b_) {
             layerInst_clearSampleSector(i);
             __set_PRIMASK(primask);
         }
-    new (bank_sound(l_, b_)) Sound();
+    new (&bankTmp) Sound();   // built in RAM, copied to SDRAM (no unaligned access there)
+    memcpy((void*)bank_sound(l_, b_), &bankTmp, sizeof(Sound));
 }
 
 void Controller::bank_clearOthers() {
@@ -25265,7 +25269,11 @@ void Controller::bank_clearOthers() {
 bool Controller::bank_samplePlay(uint8_t l_, uint8_t b_) {
     if (b_ == layerLive[l_]) return layerLibrary[l_].samplePlay;
     const Sound* S = bank_sound(l_, b_);
-    return S->samplePlay && (S->playSampleSector >= 0);
+    bool play;
+    int8_t sec;
+    memcpy(&play, &S->samplePlay, 1);   // byte reads: fine on SDRAM
+    memcpy(&sec, &S->playSampleSector, 1);
+    return play && (sec >= 0);
 }
 
 void Controller::layer_playBank(uint8_t l_, float gain_, uint8_t b_) {
@@ -25273,8 +25281,27 @@ void Controller::layer_playBank(uint8_t l_, float gain_, uint8_t b_) {
     /// Runs in the sequencer interrupt, so the main loop never sees the swap.
     if (b_ == layerLive[l_]) { layer_playBeat(l_, gain_); return; }
     Layer& L = layerLibrary[l_];
-    const Sound& S = *bank_sound(l_, b_);
-    if (!S.samplePlay || (S.playSampleSector < 0)) return;
+    if (!bank_samplePlay(l_, b_)) return;
+    // the fields needed, copied out of SDRAM with memcpy (safe for any alignment)
+    struct Src {
+        uint8_t level, pitch, direction, resolution, start, end, envAttack, envHold, envDecay, sliceCount, sliceBeats;
+        bool normalize, sliceOff, sliceSync, samplePlay;
+        int8_t playSampleSector;
+        uint32_t sampleSize;
+        uint32_t slicePos[16];
+    } S;
+    {
+        const Sound* P = bank_sound(l_, b_);
+        const uint8_t* base = (const uint8_t*)P;
+        auto get8 = [&](const void* field) -> uint8_t { uint8_t v; memcpy(&v, base + ((const uint8_t*)field - (const uint8_t*)P), 1); return v; };
+        S.level = get8(&P->level); S.pitch = get8(&P->pitch); S.direction = get8(&P->direction); S.resolution = get8(&P->resolution);
+        S.start = get8(&P->start); S.end = get8(&P->end); S.envAttack = get8(&P->envAttack); S.envHold = get8(&P->envHold); S.envDecay = get8(&P->envDecay);
+        S.sliceCount = get8(&P->sliceCount); S.sliceBeats = get8(&P->sliceBeats);
+        S.normalize = get8(&P->normalize); S.sliceOff = get8(&P->sliceOff); S.sliceSync = get8(&P->sliceSync); S.samplePlay = get8(&P->samplePlay);
+        S.playSampleSector = (int8_t)get8(&P->playSampleSector);
+        memcpy(&S.sampleSize, &P->sampleLoadedData.sampleSize, 4);
+        memcpy(S.slicePos, P->slicePos, sizeof(S.slicePos));
+    }
     struct Keep {
         uint8_t level, pitch, direction, resolution, start, end, envAttack, envHold, envDecay, sliceCount, sliceBeats;
         bool normalize, sliceOff, sliceSync, samplePlay;
@@ -25290,7 +25317,7 @@ void Controller::layer_playBank(uint8_t l_, float gain_, uint8_t b_) {
     L.level = S.level; L.pitch = S.pitch; L.direction = S.direction; L.resolution = S.resolution; L.start = S.start; L.end = S.end;
     L.envAttack = S.envAttack; L.envHold = S.envHold; L.envDecay = S.envDecay; L.sliceCount = S.sliceCount; L.sliceBeats = S.sliceBeats;
     L.normalize = S.normalize; L.sliceOff = S.sliceOff; L.sliceSync = S.sliceSync; L.samplePlay = S.samplePlay;
-    L.playSampleSector = S.playSampleSector; L.sampleLoadedData.sampleSize = S.sampleLoadedData.sampleSize;
+    L.playSampleSector = S.playSampleSector; L.sampleLoadedData.sampleSize = S.sampleSize;
     memcpy(L.slicePos, S.slicePos, sizeof(L.slicePos));
     layer_playBeat(l_, gain_);
     L.level = k.level; L.pitch = k.pitch; L.direction = k.direction; L.resolution = k.resolution; L.start = k.start; L.end = k.end;
@@ -25334,7 +25361,7 @@ void Controller::bank_saveSidecar(bool kit_, uint8_t num_) {
     bool any = false;
     for (uint8_t l = 0; l < kLayerLibrarySize; l++)
         for (uint8_t b = 0; b < kPadBankCount; b++)
-            if (b != layerLive[l] ? (bank_sound(l, b)->sampleLoaded >= 0) : false) any = true;
+            if (b != layerLive[l]) { int16_t sl; memcpy(&sl, &bank_sound(l, b)->sampleLoaded, sizeof(sl)); if (sl >= 0) any = true; }
     // the bank in the Layer counts too when it isn't A
     for (uint8_t l = 0; l < kLayerLibrarySize; l++) if ((layerLive[l] != 0) && (layerLibrary[l].sampleLoaded >= 0)) any = true;
     f_close(&sd.file);
