@@ -9092,6 +9092,10 @@ void Controller::page_drawLfo() {
         snprintf(num, sizeof(num), "DRUM %02u", l + 1);
         lcd.drawText(num, strlen(num), mX + l * mColW + mColW / 2, mHeadY);
     }
+    // custom: which knob scrolls the rows
+    lcd.setAlignment(LEFT);
+    lcd.setForeColor(kThemeAmber);
+    lcd.drawText("TOP KNOB 3", 10, mLabelX, mHeadY);
     for (uint8_t t = 0; t < 8; t++) {
         const uint16_t y = mRowY + t * mRowH;
         const bool sel = (t == lfoTargetParam);
