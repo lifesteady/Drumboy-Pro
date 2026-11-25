@@ -582,7 +582,7 @@ class Controller {
     uint16_t mainLaneY[kLayerLibrarySize] = {0};
     uint16_t mainLaneH[kLayerLibrarySize] = {0};
     char mainCounter[24] = "";
-    bool pitchGate = true;                                              // Notes: note lasts while the pad is held
+    bool pitchGate = false;                                              // Notes: note lasts while the pad is held
     int8_t pitchHeldPad = -1;                                           // pad currently sounding in Notes
     int32_t pitchRecTick = -1;                                          // raw tick the held note was recorded at
     int32_t pitchRecStart = -1;                                         // stored start of that note

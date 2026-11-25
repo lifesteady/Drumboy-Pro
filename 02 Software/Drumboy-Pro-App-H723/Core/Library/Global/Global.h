@@ -2347,7 +2347,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.88 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.89 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -2363,7 +2363,7 @@ const uint8_t kInitialSwingGrid                     = 1;
 const uint16_t kSwingPairInterval[]                 = {800, 400, 1600, 200, 800, 400};   // ticks per swung pair / triplet group
 const uint8_t kSwingGridParts[]                     = {2, 2, 2, 2, 3, 3};                // 2 = pair, 3 = triplet group
 const char kSwingGridName[][11]                     = {"       1:8", "      1:16", "       1:4", "      1:32", "      1:8T", "     1:16T"};
-const uint8_t kSwingGridOrder[]                     = {2, 0, 1, 3, 4, 5};                // knob order: 1:4 1:8 1:16 1:32 1:8T 1:16T
+const uint8_t kSwingGridOrder[]                     = {2, 0, 4, 1, 5, 3};                // knob order: 1:4 1:8 1:8T 1:16 1:16T 1:32
 const uint8_t kSwingGridCount                       = 6;
 
 // Rhythm menu now has 6 tabs (tempo, measure, bar, quantize, swing, swing grid).

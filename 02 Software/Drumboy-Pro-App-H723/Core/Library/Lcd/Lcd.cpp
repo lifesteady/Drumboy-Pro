@@ -1407,6 +1407,15 @@ void Lcd::drawText(const char text[], uint16_t textLength, uint16_t x, uint16_t 
             break;
     }
 
+    // Custom: a text that would run off the right edge wraps round into a garbled line; cut it.
+    if ((uint32_t)xPos + wText > width) {
+        const uint16_t cell = fontWidth + fontSpacing;
+        if ((xPos >= width) || (cell == 0)) return;
+        textLength = (uint16_t)((width - xPos) / cell);
+        if (textLength == 0) return;
+        wText = textLength * cell;
+    }
+
     if (isProtected(xPos, y, wText, hText)) return;  // custom: protected page area
 
     // Custom: smooth Liberation Sans. Same box as the pixel font (so layouts and overwrites are

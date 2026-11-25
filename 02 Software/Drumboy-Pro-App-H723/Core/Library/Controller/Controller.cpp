@@ -6930,7 +6930,9 @@ void Controller::main_drawLabels(uint8_t lane_) {
 
 void Controller::main_drawTransport() {
     /// @brief Row above the lanes: BAR / BEAT counter and an overview of the whole song with the visible window framed.
-    const uint32_t pos = playActive ? playInterval : mainViewStart;
+    // custom: counter = the playhead (also when stopped); while editing a hit in SEQ = that hit
+    const bool editHit = !playActive && (menu == LAYER_SONG_MENU) && (selectedLayerNum >= 0) && (selectedBeatNum >= 0);
+    const uint32_t pos = editHit ? layerLibrary[selectedLayerNum].bankLibrary[activeSongBank].beatLibrary[selectedBeatNum].getStartInterval() : playInterval;
     const uint16_t beatsPerBar = (barInterval / kMeasureInterval) ? (barInterval / kMeasureInterval) : 4;
     const uint16_t bar = (uint16_t)(pos / barInterval) + 1;
     const uint16_t beat = (uint16_t)((pos % barInterval) / kMeasureInterval) + 1;
@@ -6965,7 +6967,7 @@ void Controller::main_drawTransport() {
         lcd.setSpacing(1);
     }
     // overview strip (whole song): cached hit bits per column; full redraw only when hits/window change
-    const int32_t px = (playActive && songInterval) ? (int32_t)(((uint64_t)playInterval * kMainGridW) / songInterval) : -10;
+    const int32_t px = songInterval ? (int32_t)(((uint64_t)playInterval * kMainGridW) / songInterval) : -10;   // custom: also when stopped
     if (stripDirty) {
         for (uint16_t c = 0; c < kMainGridW; c++) stripBits[c] = 0;
         for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
@@ -7019,7 +7021,7 @@ void Controller::page_drawMain() {
     if (playActive) anchor = playInterval;
     else if ((menu == LAYER_SONG_MENU) && (selectedLayerNum >= 0) && (selectedBeatNum >= 0))
         anchor = layerLibrary[selectedLayerNum].bankLibrary[activeSongBank].beatLibrary[selectedBeatNum].getStartInterval();
-    else anchor = mainViewStart;
+    else anchor = playInterval;   // custom: stopped = where PLAY stopped it (RESET puts it back at the start)
     uint32_t viewStart = (anchor / viewLen) * viewLen;
     if (viewStart >= song) viewStart = 0;
     const int8_t expanded = ((selectedLayerNum >= 0) && (selectedLayerNum < kLayerLibrarySize) &&
@@ -7028,7 +7030,7 @@ void Controller::page_drawMain() {
 
     uint32_t key = 2166136261u;
     auto mixk = [&key](uint32_t v) { key ^= v; key *= 16777619u; };
-    mixk(viewStart); mixk(viewLen); mixk((uint32_t)(int32_t)expanded); mixk(activeSongBank); mixk(song); mixk(barInterval); mixk(rhythm.tempo);
+    mixk(viewStart); mixk(viewLen); mixk((uint32_t)(int32_t)expanded); mixk(activeSongBank); mixk(song); mixk(barInterval);   // custom: tempo removed (it redrew everything while turning the knob)
     const bool full = pageFullRedraw || (key != mainKey);
 
     if (full) {
@@ -7053,7 +7055,7 @@ void Controller::page_drawMain() {
         lcd.setBackColor(BLACK);
         lcd.clearRect(kPageX, kMainTop, kMainGridX - kPageX, kMainRuler);
         mainPlayCol = -1;
-        if (playActive && (playInterval >= mainViewStart) && (playInterval < mainViewStart + mainViewLen))
+        if ((playInterval >= mainViewStart) && (playInterval < mainViewStart + mainViewLen))   // custom: also when stopped
             mainPlayCol = (int16_t)(((uint64_t)(playInterval - mainViewStart) * kMainGridW) / mainViewLen);
         for (uint16_t c = 0; c < kMainGridW; c++) main_renderColumn(c);
         lcd.setFont(FONT_07x09);
@@ -7089,7 +7091,7 @@ void Controller::page_drawMain() {
 
     // ---- playhead
     int16_t pc = -1;
-    if (playActive && (playInterval >= mainViewStart) && (playInterval < mainViewStart + mainViewLen))
+    if ((playInterval >= mainViewStart) && (playInterval < mainViewStart + mainViewLen))   // custom: also when stopped
         pc = (int16_t)(((uint64_t)(playInterval - mainViewStart) * kMainGridW) / mainViewLen);
     if (pc != mainPlayCol) {
         const int16_t old = mainPlayCol;
@@ -7143,9 +7145,10 @@ uint8_t Controller::vel_pad() {
 }
 
 uint8_t Controller::levels_padVel(uint8_t pad_) {
-    /// @brief Custom LEVELS mode: pad 1 = SOFTEST ... pad 10 = 16 (full), evenly spread.
+    /// @brief Custom LEVELS mode: pad 1 = 16 (full) ... pad 10 = SOFTEST, evenly spread.
     const uint8_t lo = (levelsSoftest >= 1 && levelsSoftest <= 15) ? levelsSoftest : 4;
-    return (uint8_t)(lo + ((16 - lo) * pad_ + 4) / 9);
+    const uint8_t k = (pad_ < 9) ? (uint8_t)(9 - pad_) : 0;
+    return (uint8_t)(lo + ((16 - lo) * k + 4) / 9);
 }
 
 float Controller::noteRepeat_step() {
@@ -7476,7 +7479,7 @@ void Controller::page_drawLevels() {
         lcd.setFont(FONT_07x09);
         lcd.setAlignment(LEFT);
         lcd.setForeColor(kThemeHeader);
-        const char h1[] = "PADS: THE SAME DRUM, SOFT TO LOUD   NOTE REPEAT + PAD: ROLL AT THAT LEVEL   REC ON: HITS KEEP THEIR LEVEL";
+        const char h1[] = "PADS: ONE DRUM, LOUD TO SOFT   NOTE REPEAT + PAD: ROLL AT THAT LEVEL   REC: HITS KEEP THEIR LEVEL";
         lcd.drawText(h1, strlen(h1), 30, 420);
         const char h2[] = "PAD VELOCITY AND HUMANIZE ALSO APPLY TO THE NORMAL PADS";
         lcd.drawText(h2, strlen(h2), 30, 438);
