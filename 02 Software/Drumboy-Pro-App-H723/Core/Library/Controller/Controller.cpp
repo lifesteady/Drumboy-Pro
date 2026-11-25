@@ -12484,6 +12484,19 @@ void Controller::lcd_drawSdDataIntro() {
     // 2. INTRO MESSAGE DRAW
     // Render static SD analyze text.
     lcd.drawText(kFirmwareBootText, strlen(kFirmwareBootText), 480, kSdDataY);
+
+    // Custom: the version again, big and in the accent colour ("CUSTOM FIRMWARE V3.07").
+    const char* v = strstr(kFirmwareBootText, "FW V");
+    if (v) {
+        v += 3;
+        uint8_t n = 0;
+        while (v[n] && (v[n] != ' ') && (n < 12)) n++;
+        char big[32];
+        snprintf(big, sizeof(big), "CUSTOM FIRMWARE %.*s", (int)n, v);
+        lcd.setFont(FONT_14x18);
+        lcd.setForeColor(kThemeAccent);
+        lcd.drawText(big, strlen(big), 480, kSdDataY - 34);
+    }
 }
 
 void Controller::lcd_drawSdData() {
