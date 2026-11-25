@@ -5579,7 +5579,7 @@ void Controller::page_close(bool toStock_) {
     }
     if (wasSong) {   // custom: the MAIN menu's knob boxes come back
         encoder_update();
-        if (menu == GLOBAL_MENU) lcd_drawGlobalMenu();
+        if (menu == GLOBAL_MENU) { lcd_drawGlobalMenu(); lcd_drawMenuLabel(GLOBAL_MENU, -1); }
     }
     if (kMainView && !toStock_ && !wasMain) {
         page = PAGE_MAIN;            // protection stays on; just redraw the main screen
@@ -7174,6 +7174,16 @@ void Controller::main_update() {
         }
     }
     if (page == PAGE_PITCH) pitch_update();   // custom: Notes / Levels playhead + counter
+    if ((page == PAGE_SONG) && !alertFlag && ((HAL_GetTick() - songCounterTick) >= 100)) {   // custom: Song page clock
+        songCounterTick = HAL_GetTick();
+        const LcdFont f = lcd.getFont();
+        const LcdAlign a = lcd.getAlignment();
+        lcd.setProtect(false);
+        song_drawCounter(false);
+        lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
+        lcd.setFont(f);
+        lcd.setAlignment(a);
+    }
     if (!kMainView) return;
     if (alertFlag) return;
     if (page == PAGE_NONE) { page_open(PAGE_MAIN); return; }
@@ -7651,6 +7661,7 @@ void Controller::song_toggle() {
     global_select();   // the Song page uses the MAIN menu's knob boxes
     if (songCursor > songCount) songCursor = songCount;
     page_open(PAGE_SONG);
+    lcd_drawMenuLabel(GLOBAL_MENU, -1);   // top-left: SONG
 }
 
 void Controller::song_knob(uint8_t which_, int8_t step_) {
@@ -7722,6 +7733,37 @@ void Controller::song_pad(uint8_t layerNum_) {
     page_markDirty(PAGE_SONG);
 }
 
+void Controller::song_drawCounter(bool force_) {
+    /// @brief Custom: Song page clock, right of the title: time into the song / song length.
+    const uint32_t bpm = rhythm.tempo ? rhythm.tempo : 90;
+    uint32_t loops = 0, before = 0;
+    for (uint8_t k = 0; k < songCount; k++) {
+        const uint32_t r = (songSteps[k] >> 4) + 1;
+        if (k < songPlayStep) before += r;
+        loops += r;
+    }
+    uint64_t done = 0;
+    if (songMode && (songCount > 0) && (songPlayStep < songCount)) {
+        const uint32_t r = (songSteps[songPlayStep] >> 4) + 1;
+        const uint32_t doneReps = (songRepLeft >= 1 && songRepLeft <= r) ? (r - songRepLeft) : 0;
+        done = (uint64_t)(before + doneReps) * songInterval + playInterval;
+    }
+    const uint32_t elMs = (uint32_t)((done * 60000ULL) / ((uint64_t)bpm * kMeasureInterval));
+    const uint32_t toMs = (uint32_t)(((uint64_t)loops * songInterval * 60000ULL) / ((uint64_t)bpm * kMeasureInterval));
+    char text[32];
+    snprintf(text, sizeof(text), "%lu:%02lu / %lu:%02lu", (unsigned long)(elMs / 60000UL), (unsigned long)((elMs / 1000UL) % 60UL),
+             (unsigned long)(toMs / 60000UL), (unsigned long)((toMs / 1000UL) % 60UL));
+    if (!force_ && (strcmp(text, songCounterText) == 0)) return;
+    strncpy(songCounterText, text, sizeof(songCounterText) - 1);
+    char pad[24];
+    snprintf(pad, sizeof(pad), "%16s", text);
+    lcd.setFont(FONT_10x14);
+    lcd.setAlignment(RIGHT);
+    lcd.setBackColor(BLACK);
+    lcd.setForeColor(kThemeAccent);
+    lcd.drawText(pad, 16, 930, 138);
+}
+
 void Controller::lcd_drawSongKnobs() {
     const bool onStep = (songCursor < songCount);
     const char* hdr[8] = {"STEP      ", "BANK      ", "REPEATS   ", "SONG MODE ", "ADD / DEL ", "AT END    ", "          ", "          "};
@@ -7730,6 +7772,9 @@ void Controller::lcd_drawSongKnobs() {
     for (uint8_t k = 0; k < 8; k++) lcd.drawText(hdr[k], kMenuHeaderTextSize, kMenuHeaderX[k], kMenuHeaderY[k]);
     lcd_setMenuSignState(CYAN);
     for (uint8_t k = 0; k < 8; k++) lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[k], kMenuSignBoxY[k]);
+    lcd_setMenuTextState(WHITE);   // the MAIN menu's small labels (MIXER, FIL-1 ...) don't belong here
+    lcd.setAlignment(LEFT);
+    for (uint8_t k = 0; k < 8; k++) lcd.drawText("      ", 6, kMenuHeaderX[k], kMenuSignBoxY[k]);
     lcd_setMenuDataState(WHITE);
     if (onStep) snprintf(t, sizeof(t), "%4u OF %2u", songCursor + 1, songCount); else snprintf(t, sizeof(t), "%10s", "NEW");
     lcd.drawText(t, kMenuDataTextSize, kMenuDataX[0], kMenuDataY[0]);
@@ -7780,14 +7825,19 @@ void Controller::page_drawSong() {
     lcd.drawText("SONG", 4, 30, 136);
     lcd.setForeColor(songMode ? kThemeAmber : kThemeMid);
     lcd.drawText(songMode ? "MODE ON " : "MODE OFF", 8, 120, 136);
-    uint32_t bars = 0;
-    for (uint8_t k = 0; k < songCount; k++) bars += (uint32_t)((songSteps[k] >> 4) + 1) * rhythm.bar;
+    uint32_t bars = 0, loops = 0;
+    for (uint8_t k = 0; k < songCount; k++) { bars += (uint32_t)((songSteps[k] >> 4) + 1) * rhythm.bar; loops += (songSteps[k] >> 4) + 1; }
+    const uint32_t bpm = rhythm.tempo ? rhythm.tempo : 90;
+    const uint32_t totalMs = (uint32_t)(((uint64_t)loops * songInterval * 60000ULL) / ((uint64_t)bpm * kMeasureInterval));
     if (songCount == 0) snprintf(text, sizeof(text), "NO STEPS YET: PRESS PADS TO ADD THEM");
     else if (songMode && playActive)
-        snprintf(text, sizeof(text), "PLAYING STEP %u OF %u: BANK %u, %u MORE TIME%s   SONG %lu BARS, %s", songPlayStep + 1, songCount,
-                 (songSteps[songPlayStep] & 0x0F) + 1, songRepLeft, (songRepLeft == 1) ? " " : "S", (unsigned long)bars, songLoop ? "LOOPS" : "STOPS");
-    else snprintf(text, sizeof(text), "%u STEPS   %lu BARS   AT THE END IT %s", songCount, (unsigned long)bars, songLoop ? "LOOPS" : "STOPS");
+        snprintf(text, sizeof(text), "STEP %u OF %u: BANK %u, %u MORE TIME%s   %lu BARS, %lu:%02lu LONG", songPlayStep + 1, songCount,
+                 (songSteps[songPlayStep] & 0x0F) + 1, songRepLeft, (songRepLeft == 1) ? " " : "S", (unsigned long)bars,
+                 (unsigned long)(totalMs / 60000UL), (unsigned long)((totalMs / 1000UL) % 60UL));
+    else snprintf(text, sizeof(text), "%u STEPS   %lu BARS   %lu:%02lu LONG AT %lu BPM   AT THE END IT %s", songCount, (unsigned long)bars,
+                  (unsigned long)(totalMs / 60000UL), (unsigned long)((totalMs / 1000UL) % 60UL), (unsigned long)bpm, songLoop ? "LOOPS" : "STOPS");
     page_drawSummary(text);
+    song_drawCounter(true);
 
     // blocks
     const uint16_t bw = 52, gap = 4, bh = 64, x0 = 30, y0 = 192, rowGap = 14;
@@ -12601,7 +12651,7 @@ void Controller::lcd_drawMenuLabel(Menu menu_, int16_t num_) {
     const char* word = "";
     int16_t num = -1;
     switch (menu_) {
-        case GLOBAL_MENU:       word = "MAIN"; break;
+        case GLOBAL_MENU:       word = (page == PAGE_SONG) ? "SONG" : "MAIN"; break;   // custom
         case FILE_MENU:         word = "FILE"; break;
         case DRUMKIT_MENU:      word = "KIT"; break;
         case MIXER_MENU:        word = "ROUTE"; break;   // custom: Mixer key, first press

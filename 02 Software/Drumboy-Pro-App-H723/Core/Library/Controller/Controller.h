@@ -499,6 +499,9 @@ class Controller {
     void song_startFromTop();
     void page_drawSong();
     void lcd_drawSongKnobs();
+    void song_drawCounter(bool force_);
+    char songCounterText[32] = "";
+    uint32_t songCounterTick = 0;
     void pitch_buildStrip();
     void pitch_drawStripColumn(uint16_t c_);
     void pitch_drawStrip();
