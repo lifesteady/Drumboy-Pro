@@ -41,6 +41,24 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN PV */
+/* Custom: I2C3 (keypads) interrupt-storm guard. If the event interrupt fires hundreds of times
+   in one millisecond, a flag is stuck that the HAL isn't clearing and nothing else can run (the
+   unit freezes). Then mask I2C3's interrupts and let the main loop re-initialise it. */
+volatile uint8_t i2c3StormFlag = 0;
+static uint32_t i2c3StormTick = 0, i2c3StormCount = 0;
+static int i2c3_stormGuard(void)
+{
+  const uint32_t t = HAL_GetTick();
+  if (t != i2c3StormTick) { i2c3StormTick = t; i2c3StormCount = 0; }
+  if (++i2c3StormCount > 400)
+  {
+    I2C3->CR1 &= ~(I2C_CR1_TXIE | I2C_CR1_RXIE | I2C_CR1_ADDRIE | I2C_CR1_NACKIE | I2C_CR1_STOPIE | I2C_CR1_TCIE | I2C_CR1_ERRIE);
+    i2c3StormFlag = 1;
+    i2c3StormCount = 0;
+    return 1;
+  }
+  return 0;
+}
 
 /* USER CODE END PV */
 
@@ -577,6 +595,7 @@ void USART6_IRQHandler(void)
 void I2C3_EV_IRQHandler(void)
 {
   /* USER CODE BEGIN I2C3_EV_IRQn 0 */
+  if (i2c3_stormGuard()) return;
 
   /* USER CODE END I2C3_EV_IRQn 0 */
   HAL_I2C_EV_IRQHandler(&hi2c3);
@@ -591,6 +610,7 @@ void I2C3_EV_IRQHandler(void)
 void I2C3_ER_IRQHandler(void)
 {
   /* USER CODE BEGIN I2C3_ER_IRQn 0 */
+  if (i2c3_stormGuard()) return;
 
   /* USER CODE END I2C3_ER_IRQn 0 */
   HAL_I2C_ER_IRQHandler(&hi2c3);

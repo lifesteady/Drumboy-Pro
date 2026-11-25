@@ -1561,6 +1561,13 @@ void Controller::keyboard_read() {
     static uint32_t delayStart = 0;
     static uint8_t targetKeypad = 0;  // 0: Layer, 1: Left, 2: Right
 
+    // Custom: the I2C3 interrupt got stuck firing (see stm32h7xx_it.c): rebuild I2C3 and read all keypads.
+    if (i2c3StormFlag) {
+        keyboard_resetI2C();
+        currentState = STATE_IDLE;
+        keyboard.keyLayer.readFlag = keyboard.keyLeft.readFlag = keyboard.keyRight.readFlag = true;
+    }
+
     // 1. REQUEST ARBITRATION (IDLE)
     if (currentState == STATE_IDLE) {
         // Custom safety net: each expander holds its INT line LOW until its pins are read. The
@@ -3168,20 +3175,35 @@ void Controller::keyboard_downLong() {
 }
 
 void Controller::keyboard_resetI2C() {
-    /// @brief Resets I2C3 peripheral hardware to recover from keyboard bus lockups.
-    /// Used when MCP23017 transactions fail and the bus state machine stalls.
-
-    // 1. FORCE RESET ASSERT
-    // Clear internal peripheral state via RCC reset line.
+    /// @brief Custom: full I2C3 recovery. Stock only pulsed the RCC reset, which also wiped the
+    /// timing / enable registers without re-initialising them, so the keypads could stay dead.
+    /// Now: shut I2C3 + its DMA down, free the bus if an expander is holding SDA low (up to 9
+    /// clock pulses), then initialise it again exactly like at power-up.
+    HAL_I2C_DeInit(&hi2c3);
     __HAL_RCC_I2C3_FORCE_RESET();
-
-    // 2. STABILIZATION DELAY
-    // Short wait to guarantee reset propagation.
-    HAL_Delay(1);
-
-    // 3. RESET RELEASE
-    // Return peripheral to operational state for subsequent HAL transactions.
+    for (volatile uint32_t d = 0; d < 200; d++) {}
     __HAL_RCC_I2C3_RELEASE_RESET();
+
+    // bus clear: SCL (PA8) as open-drain output, SDA (PC9) as input
+    GPIO_InitTypeDef g = {0};
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+    g.Pin = GPIO_PIN_8; g.Mode = GPIO_MODE_OUTPUT_OD; g.Pull = GPIO_PULLUP; g.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET);
+    HAL_GPIO_Init(GPIOA, &g);
+    g.Pin = GPIO_PIN_9; g.Mode = GPIO_MODE_INPUT; g.Pull = GPIO_PULLUP;
+    HAL_GPIO_Init(GPIOC, &g);
+    for (uint8_t k = 0; (k < 9) && (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_9) == GPIO_PIN_RESET); k++) {
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
+        for (volatile uint32_t d = 0; d < 3000; d++) {}
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET);
+        for (volatile uint32_t d = 0; d < 3000; d++) {}
+    }
+
+    hi2c3.State = HAL_I2C_STATE_RESET;
+    MX_I2C3_Init();   // pins, DMA, interrupts, timing, filters (same as power-up)
+    hi2c3.ErrorCode = HAL_I2C_ERROR_NONE;
+    i2c3StormFlag = 0;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

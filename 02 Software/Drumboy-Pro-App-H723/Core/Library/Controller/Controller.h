@@ -30,6 +30,7 @@ extern __attribute__((section(".RAM_D3"))) uint8_t i2c4_txData[2];
 /* Sync And Midi Buffers ----------------------------------------- */
 
 extern "C" uint8_t midiRxData;
+extern "C" volatile uint8_t i2c3StormFlag;                             // custom: I2C3 interrupt storm caught
 
 /* Peripheral Handles -------------------------------------------- */
 
