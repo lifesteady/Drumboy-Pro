@@ -1333,7 +1333,13 @@ typedef enum {
     ENC_ROUTE_METRO                                 = 0x7F,
     ENC_ROUTE_LANEREV                               = 0x80,
     ENC_SONG_NOTE                                   = 0x81,  // custom: SEQ menu, selected hit's note
-    ENC_SONG_GATE                                   = 0x82   // custom: SEQ menu, selected hit's gate length
+    ENC_SONG_GATE                                   = 0x82,  // custom: SEQ menu, selected hit's gate length
+    ENC_SM_STEP                                     = 0x83,  // custom: Song page
+    ENC_SM_BANK                                     = 0x84,
+    ENC_SM_REPEAT                                   = 0x85,
+    ENC_SM_MODE                                     = 0x86,
+    ENC_SM_ADDDEL                                   = 0x87,
+    ENC_SM_END                                      = 0x88
 } EncoderFunc;
 
 const EncoderFunc encoderLocalFunction[][8] = {
@@ -1539,8 +1545,20 @@ const EncoderFuncData kEncoderFuncDataLibrary[] = {
     {ENC_ROUTE_METRO,         ENC_RES_S, "METRO TO  ", "ROUTE ", "   ", false},
     {ENC_ROUTE_LANEREV,       ENC_RES_S, "REVERB    ", "ROUTE ", "   ", false},
     {ENC_SONG_NOTE,           ENC_RES_S, "NOTE      ", "SONG  ", "   ", false},
-    {ENC_SONG_GATE,           ENC_RES_S, "GATE      ", "SONG  ", "   ", false}
+    {ENC_SONG_GATE,           ENC_RES_S, "GATE      ", "SONG  ", "   ", false},
+    {ENC_SM_STEP,             ENC_RES_S, "STEP      ", "SONG  ", "   ", false},
+    {ENC_SM_BANK,             ENC_RES_S, "BANK      ", "SONG  ", "   ", false},
+    {ENC_SM_REPEAT,           ENC_RES_S, "REPEATS   ", "SONG  ", "   ", false},
+    {ENC_SM_MODE,             ENC_RES_S, "SONG MODE ", "SONG  ", "   ", false},
+    {ENC_SM_ADDDEL,           ENC_RES_S, "ADD / DEL ", "SONG  ", "   ", false},
+    {ENC_SM_END,              ENC_RES_S, "AT END    ", "SONG  ", "   ", false}
 };
+
+// Knobs while the Song page is open.
+const EncoderFunc kSongPageFunctions[8] = {ENC_SM_STEP, ENC_SM_BANK, ENC_SM_REPEAT, ENC_SM_MODE,
+                                           ENC_SM_ADDDEL, ENC_SM_END, ENC_FNC_NONE, ENC_FNC_NONE};
+const uint8_t kSongMaxSteps = 32;
+const uint8_t kSongFileMark = 0xA5;
 
 // Knobs while the Pitch page is open (all 8 belong to Pitch mode).
 const EncoderFunc kPitchPageFunctions[8] = {ENC_PITCH_DRUM, ENC_PITCH_ROOT, ENC_PITCH_SCALE, ENC_PITCH_OCTAVE,
@@ -1551,7 +1569,7 @@ const EncoderFunc kSamplePageFunctions[8] = {ENC_INST_0_INST, ENC_INST_0_SAMPLE,
                                              ENC_INST_1_START, ENC_INST_1_END, ENC_SMP_DECAY, ENC_FNC_NONE};
 
 // The table above is indexed by EncoderFunc value, so every entry must sit at its own enum number.
-static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_SONG_GATE + 1,
+static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_SM_END + 1,
               "kEncoderFuncDataLibrary must have one entry per EncoderFunc value");
 
 typedef enum {
@@ -2295,7 +2313,8 @@ typedef enum {
     PAGE_SAMPLE                                     = 0x09,  // Layer Inst tapped alone: waveform, trim, envelope
     PAGE_MAIN                                       = 0x0A,  // custom main screen: zoomed lanes, decay hits, focus lane
     PAGE_PITCH                                      = 0x0B,  // Sync key: one drum played across the 10 pads in a scale
-    PAGE_ROUTE                                      = 0x0C   // Mixer key: signal chain and where each drum enters it
+    PAGE_ROUTE                                      = 0x0C,  // Mixer key: signal chain and where each drum enters it
+    PAGE_SONG                                       = 0x0D   // Song key tapped alone: chain the 5 song banks into a song
 } PageView;
 
 // Custom Pitch mode: scales (semitone steps from the root). Pads 1-10 climb the scale from the root.
@@ -2353,7 +2372,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.95 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.96 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;

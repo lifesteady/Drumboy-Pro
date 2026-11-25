@@ -1674,6 +1674,7 @@ void Controller::keyboard_action() {
                         } else if ((keyboard.layerSongKeyPress) && (!alertFlag)) {
                             layerSong_select(layerNum, activeSongBank);
                         } else if ((keyboard.bankKeyPress) && (!alertFlag)) {
+                            songKeyUsed = true;   // custom
                             uint8_t selectedSongBank = layerNum / 2;
                             (playActive) ? layerSong_triggerBank(selectedSongBank) : layerSong_selectBank(selectedSongBank);
                             ledLayerPlayMode = false;
@@ -1687,6 +1688,8 @@ void Controller::keyboard_action() {
                             } else {
                                 pitch_pad(layerNum);   // custom: pads play one drum in a scale
                             }
+                        } else if ((page == PAGE_SONG) && (!alertFlag)) {
+                            song_pad(layerNum);   // custom: Song page, pad pair = bank for this step
                         } else if ((page == PAGE_ROUTE) && (menu == MIXER_MENU) && (!alertFlag)) {
                             route_pad(layerNum);   // custom: Routing page, pad = pick drum (and hear it)
                         } else if ((page == PAGE_GROOVE) && (menu == RHYTHM_MENU) && (!alertFlag)) {
@@ -2793,6 +2796,7 @@ void Controller::keyboard_action() {
 
                             case KEY_SONG:
                                 keyboard.bankKeyPress = true;
+                                songKeyUsed = false;   // custom
                                 ledLayerPlayMode = false;
                                 ledLayerSelectFlag = true;
                                 ledLayerSelectData = 0x03 << (activeSongBank * 2);
@@ -2826,6 +2830,7 @@ void Controller::keyboard_action() {
 
                             case KEY_SONG:
                                 keyboard.bankKeyPress = false;
+                                if (!songKeyUsed && !alertFlag) song_toggle();   // custom: tap alone = Song page
                                 switch (menu) {
                                     case LFO_MENU:
                                         ledLayerPlayMode = false;
@@ -3441,6 +3446,7 @@ void Controller::encoder_update() {
                 enc.function = kSamplePageFunctions[i];   // custom
             if ((page == PAGE_PITCH) && (menuSafe == IO_MENU)) enc.function = kPitchPageFunctions[i];   // custom
         }
+        if (page == PAGE_SONG) { enc.mode = ENC_MODE_LOCAL; enc.function = kSongPageFunctions[i]; }   // custom: Song page
 
         // 2. COUNTER STATE RESET
         // Refresh resolution and clear per-encoder step accumulators.
@@ -4103,6 +4109,12 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
         case ENC_ROUTE_LANEREV: route_knob(7, 1); break;
         case ENC_SONG_NOTE: layerSong_noteKnob(1); break;
         case ENC_SONG_GATE: layerSong_gateKnob(1); break;
+        case ENC_SM_STEP: song_knob(0, 1); break;
+        case ENC_SM_BANK: song_knob(1, 1); break;
+        case ENC_SM_REPEAT: song_knob(2, 1); break;
+        case ENC_SM_MODE: song_knob(3, 1); break;
+        case ENC_SM_ADDDEL: song_knob(4, 1); break;
+        case ENC_SM_END: song_knob(5, 1); break;
 
         case ENC_SMP_HOLD:
             sample_setEnv(1, (int16_t)layerLibrary[selectedLayerNum].envHold + 1);
@@ -4715,6 +4727,12 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
         case ENC_ROUTE_LANEREV: route_knob(7, -1); break;
         case ENC_SONG_NOTE: layerSong_noteKnob(-1); break;
         case ENC_SONG_GATE: layerSong_gateKnob(-1); break;
+        case ENC_SM_STEP: song_knob(0, -1); break;
+        case ENC_SM_BANK: song_knob(1, -1); break;
+        case ENC_SM_REPEAT: song_knob(2, -1); break;
+        case ENC_SM_MODE: song_knob(3, -1); break;
+        case ENC_SM_ADDDEL: song_knob(4, -1); break;
+        case ENC_SM_END: song_knob(5, -1); break;
 
         case ENC_SMP_HOLD:
             sample_setEnv(1, (int16_t)layerLibrary[selectedLayerNum].envHold - 1);
@@ -5485,7 +5503,7 @@ void Controller::page_open(PageView page_) {
     pageFullRedraw = true;
     if (!fromStock) {   // custom: switching between pages (incl. the main screen): just redraw
         lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
-        if ((page_ == PAGE_SAMPLE) || (page_ == PAGE_PITCH)) encoder_update();
+        if ((page_ == PAGE_SAMPLE) || (page_ == PAGE_PITCH) || (page_ == PAGE_SONG)) encoder_update();
         page_draw();
         return;
     }
@@ -5505,7 +5523,7 @@ void Controller::page_open(PageView page_) {
     }
 
     lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
-    if ((page_ == PAGE_SAMPLE) || (page_ == PAGE_PITCH)) encoder_update();   // custom: page knob layouts
+    if ((page_ == PAGE_SAMPLE) || (page_ == PAGE_PITCH) || (page_ == PAGE_SONG)) encoder_update();   // custom: page knob layouts
     page_draw();
 }
 
@@ -5517,6 +5535,7 @@ void Controller::page_close(bool toStock_) {
     if (page == PAGE_NONE) return;
     const bool wasSample = (page == PAGE_SAMPLE);
     const bool wasPitch = (page == PAGE_PITCH);
+    const bool wasSong = (page == PAGE_SONG);
     const bool wasMain = (page == PAGE_MAIN);
     page = PAGE_NONE;
     if (wasSample) {
@@ -5531,6 +5550,10 @@ void Controller::page_close(bool toStock_) {
             for (uint8_t k = 4; k < 8; k++) lcd_clearMenuTab(k);
             lcd_drawIoMenu();
         }
+    }
+    if (wasSong) {   // custom: the MAIN menu's knob boxes come back
+        encoder_update();
+        if (menu == GLOBAL_MENU) lcd_drawGlobalMenu();
     }
     if (kMainView && !toStock_ && !wasMain) {
         page = PAGE_MAIN;            // protection stays on; just redraw the main screen
@@ -7591,6 +7614,212 @@ void Controller::pitch_update() {
     lcd.setAlignment(align);
 }
 
+////////////////////////////////////////////////////////////////////////////////
+/* Custom: Song mode (Song key tapped alone) ---------------------------------*/
+////////////////////////////////////////////////////////////////////////////////
+// A song = up to 32 steps, each one of the 5 song banks played 1-16 times. With SONG MODE on,
+// PLAY from the top runs the steps in order; at the end it loops or stops.
+
+void Controller::song_toggle() {
+    if (page == PAGE_SONG) { page_close(); return; }
+    global_select();   // the Song page uses the MAIN menu's knob boxes
+    if (songCursor > songCount) songCursor = songCount;
+    page_open(PAGE_SONG);
+}
+
+void Controller::song_knob(uint8_t which_, int8_t step_) {
+    if (page != PAGE_SONG) return;
+    const bool onStep = (songCursor < songCount);
+    switch (which_) {
+        case 0: {   // STEP: 1 .. count (+1 = the empty slot after the last step)
+            int16_t c = (int16_t)songCursor + step_;
+            if (c < 0) c = 0;
+            const int16_t maxC = (songCount < kSongMaxSteps) ? songCount : (kSongMaxSteps - 1);
+            if (c > maxC) c = maxC;
+            songCursor = (uint8_t)c;
+        } break;
+        case 1: {   // BANK: on the empty slot this adds a step
+            if (!onStep) {
+                if (songCount >= kSongMaxSteps) break;
+                songSteps[songCount] = activeSongBank & 0x0F;
+                songCount++;
+                break;
+            }
+            int16_t b = (int16_t)(songSteps[songCursor] & 0x0F) + step_;
+            if (b < kMinSongBank) b = kMinSongBank;
+            if (b > kMaxSongBank) b = kMaxSongBank;
+            songSteps[songCursor] = (uint8_t)((songSteps[songCursor] & 0xF0) | b);
+        } break;
+        case 2: {   // REPEATS 1..16
+            if (!onStep) break;
+            int16_t r = (int16_t)(songSteps[songCursor] >> 4) + step_;
+            if (r < 0) r = 0;
+            if (r > 15) r = 15;
+            songSteps[songCursor] = (uint8_t)((songSteps[songCursor] & 0x0F) | (r << 4));
+        } break;
+        case 3: songMode = (step_ > 0); break;
+        case 4:     // ADD (right): copy of this step right after it / DEL (left): remove this step
+            if (step_ > 0) {
+                if (songCount >= kSongMaxSteps) break;
+                const uint8_t src = onStep ? songSteps[songCursor] : (uint8_t)(activeSongBank & 0x0F);
+                const uint8_t at = onStep ? (uint8_t)(songCursor + 1) : songCount;
+                for (int16_t k = songCount; k > at; k--) songSteps[k] = songSteps[k - 1];
+                songSteps[at] = src;
+                songCount++;
+                songCursor = at;
+            } else if (onStep) {
+                for (uint8_t k = songCursor; k + 1 < songCount; k++) songSteps[k] = songSteps[k + 1];
+                songCount--;
+                songSteps[songCount] = 0;
+                if (songCursor > songCount) songCursor = songCount;
+                if (songPlayStep >= songCount) songPlayStep = 0;
+            }
+            break;
+        case 5: songLoop = (step_ < 0) ? true : false; break;   // left = LOOP, right = STOP
+        default: break;
+    }
+    page_markDirty(PAGE_SONG);
+}
+
+void Controller::song_pad(uint8_t layerNum_) {
+    /// @brief Song page pads: pads 1-2 = bank 1, 3-4 = bank 2 ... 9-10 = bank 5 (like Song + pad).
+    /// Sets the bank of the step under the cursor (or adds a step) and moves to the next one.
+    const uint8_t b = layerNum_ / 2;
+    if (songCursor < songCount) {
+        songSteps[songCursor] = (uint8_t)((songSteps[songCursor] & 0xF0) | b);
+    } else if (songCount < kSongMaxSteps) {
+        songSteps[songCount] = b;
+        songCount++;
+    }
+    if (songCursor < kSongMaxSteps - 1) songCursor++;
+    if (songCursor > songCount) songCursor = songCount;
+    page_markDirty(PAGE_SONG);
+}
+
+void Controller::lcd_drawSongKnobs() {
+    const bool onStep = (songCursor < songCount);
+    const char* hdr[8] = {"STEP      ", "BANK      ", "REPEATS   ", "SONG MODE ", "ADD / DEL ", "AT END    ", "          ", "          "};
+    char t[16];
+    lcd_setMenuHeaderState(CYAN);
+    for (uint8_t k = 0; k < 8; k++) lcd.drawText(hdr[k], kMenuHeaderTextSize, kMenuHeaderX[k], kMenuHeaderY[k]);
+    lcd_setMenuSignState(CYAN);
+    for (uint8_t k = 0; k < 8; k++) lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[k], kMenuSignBoxY[k]);
+    lcd_setMenuDataState(WHITE);
+    if (onStep) snprintf(t, sizeof(t), "%4u OF %2u", songCursor + 1, songCount); else snprintf(t, sizeof(t), "%10s", "NEW");
+    lcd.drawText(t, kMenuDataTextSize, kMenuDataX[0], kMenuDataY[0]);
+    if (onStep) snprintf(t, sizeof(t), "%10u", (songSteps[songCursor] & 0x0F) + 1); else snprintf(t, sizeof(t), "%10s", "TURN: ADD");
+    lcd.drawText(t, kMenuDataTextSize, kMenuDataX[1], kMenuDataY[1]);
+    if (onStep) snprintf(t, sizeof(t), "%9ux", (songSteps[songCursor] >> 4) + 1); else snprintf(t, sizeof(t), "%10s", "-");
+    lcd.drawText(t, kMenuDataTextSize, kMenuDataX[2], kMenuDataY[2]);
+    snprintf(t, sizeof(t), "%10s", songMode ? "ON" : "OFF");
+    lcd.drawText(t, kMenuDataTextSize, kMenuDataX[3], kMenuDataY[3]);
+    snprintf(t, sizeof(t), "%10s", "<DEL  ADD>");
+    lcd.drawText(t, kMenuDataTextSize, kMenuDataX[4], kMenuDataY[4]);
+    snprintf(t, sizeof(t), "%10s", songLoop ? "LOOP" : "STOP");
+    lcd.drawText(t, kMenuDataTextSize, kMenuDataX[5], kMenuDataY[5]);
+    snprintf(t, sizeof(t), "%10s", "");
+    lcd.drawText(t, kMenuDataTextSize, kMenuDataX[6], kMenuDataY[6]);
+    lcd.drawText(t, kMenuDataTextSize, kMenuDataX[7], kMenuDataY[7]);
+}
+
+void Controller::page_drawSong() {
+    /// @brief Song page: the steps as blocks (2 rows of 16), the cursor, and the step playing now.
+    auto rgb = [](uint8_t r, uint8_t g, uint8_t b) -> RGB16Color { return (RGB16Color)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)); };
+    const RGB16Color bankCol[5] = {kThemeAccent, rgb(0x5F, 0xA8, 0xE8), kThemeGood, rgb(0xB4, 0x8C, 0xE0), kThemeAmber};
+    char text[96];
+    if (pageFullRedraw) {
+        lcd.setBackColor(BLACK);
+        lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
+        lcd.setForeColor(kThemeLine);
+        lcd.drawHLine(30, 177, 900);
+        lcd.setFont(FONT_07x09);
+        lcd.setAlignment(LEFT);
+        lcd.setForeColor(kThemeHeader);
+        const char h1[] = "PADS: BANK FOR THIS STEP (PADS 1-2 = BANK 1 ... 9-10 = BANK 5), THEN ON TO THE NEXT STEP";
+        lcd.drawText(h1, strlen(h1), 30, 420);
+        const char h2[] = "SONG MODE ON: PLAY FROM THE TOP PLAYS THE STEPS IN ORDER";
+        lcd.drawText(h2, strlen(h2), 30, 438);
+        lcd.setAlignment(RIGHT);
+        const char h3[] = "SONG KEY: BACK";
+        lcd.drawText(h3, strlen(h3), 930, 438);
+        pageFullRedraw = false;
+    }
+    lcd_drawSongKnobs();
+
+    // title + summary
+    lcd.setFont(FONT_14x18);
+    lcd.setAlignment(LEFT);
+    lcd.setBackColor(BLACK);
+    lcd.setForeColor(kThemeAccent);
+    lcd.drawText("SONG", 4, 30, 136);
+    lcd.setForeColor(songMode ? kThemeAmber : kThemeMid);
+    lcd.drawText(songMode ? "MODE ON " : "MODE OFF", 8, 120, 136);
+    uint32_t bars = 0;
+    for (uint8_t k = 0; k < songCount; k++) bars += (uint32_t)((songSteps[k] >> 4) + 1) * rhythm.bar;
+    if (songCount == 0) snprintf(text, sizeof(text), "NO STEPS YET: PRESS PADS TO ADD THEM");
+    else if (songMode && playActive)
+        snprintf(text, sizeof(text), "PLAYING STEP %u OF %u: BANK %u, %u MORE TIME%s   SONG %lu BARS, %s", songPlayStep + 1, songCount,
+                 (songSteps[songPlayStep] & 0x0F) + 1, songRepLeft, (songRepLeft == 1) ? " " : "S", (unsigned long)bars, songLoop ? "LOOPS" : "STOPS");
+    else snprintf(text, sizeof(text), "%u STEPS   %lu BARS   AT THE END IT %s", songCount, (unsigned long)bars, songLoop ? "LOOPS" : "STOPS");
+    page_drawSummary(text);
+
+    // blocks
+    const uint16_t bw = 52, gap = 4, bh = 64, x0 = 30, y0 = 192, rowGap = 14;
+    for (uint8_t k = 0; k < kSongMaxSteps; k++) {
+        const uint16_t x = x0 + (k % 16) * (bw + gap);
+        const uint16_t y = y0 + (k / 16) * (bh + rowGap);
+        const bool cur = (k == songCursor);
+        const bool playing = songMode && playActive && (k == songPlayStep) && (k < songCount);
+        lcd.setBackColor(BLACK);
+        if (k >= songCount) {   // empty slot (the first one is where a new step goes)
+            lcd.setForeColor(BLACK);
+            lcd.fillRect(x, y, bw, bh);
+            lcd.setForeColor(cur ? kThemeAccent : page_mix(BLACK, kThemeLine, 0.5f));
+            lcd.drawRect(x, y, bw, bh);
+            if (k == songCount) {
+                lcd.setFont(FONT_14x18);
+                lcd.setAlignment(CENTER);
+                lcd.setForeColor(cur ? kThemeAccent : kThemeLine);
+                lcd.drawText("+", 1, x + bw / 2, y + 22);
+            }
+            continue;
+        }
+        const uint8_t b = songSteps[k] & 0x0F;
+        const uint8_t reps = (songSteps[k] >> 4) + 1;
+        const RGB16Color c = bankCol[(b <= 4) ? b : 0];
+        const RGB16Color fill = page_mix(BLACK, c, playing ? 0.55f : 0.22f);
+        lcd.setForeColor(fill);
+        lcd.fillRect(x + 1, y + 1, bw - 2, bh - 2);
+        lcd.setForeColor(cur ? kThemeInk : page_mix(BLACK, c, 0.8f));
+        lcd.drawRect(x, y, bw, bh);
+        if (cur) lcd.drawRect(x + 1, y + 1, bw - 2, bh - 2);
+        lcd.setBackColor(fill);
+        lcd.setFont(FONT_07x09);
+        lcd.setAlignment(LEFT);
+        lcd.setForeColor(kThemeHeader);
+        snprintf(text, sizeof(text), "%u", k + 1);
+        lcd.drawText(text, strlen(text), x + 4, y + 4);
+        lcd.setFont(FONT_14x18);
+        lcd.setAlignment(CENTER);
+        lcd.setForeColor(kThemeInk);
+        snprintf(text, sizeof(text), "%u", b + 1);
+        lcd.drawText(text, strlen(text), x + bw / 2, y + 18);
+        lcd.setFont(FONT_07x09);
+        lcd.setForeColor(kThemeAmber);
+        snprintf(text, sizeof(text), "X%u", reps);
+        lcd.drawText(text, strlen(text), x + bw / 2, y + 44);
+        if (playing) {   // progress: one segment per repeat, done ones filled
+            const uint8_t done = (uint8_t)(reps - songRepLeft);
+            for (uint8_t r = 0; r < reps; r++) {
+                const uint16_t sx = x + 3 + (r * (bw - 6)) / reps, sw = ((bw - 6) / reps > 2) ? ((bw - 6) / reps - 1) : 1;
+                lcd.setForeColor((r <= done) ? kThemeAccent : page_mix(BLACK, kThemeAccent, 0.3f));
+                lcd.fillRect(sx, y + bh - 6, sw, 3);
+            }
+        }
+        lcd.setBackColor(BLACK);
+    }
+}
+
 void Controller::page_drawLevels() {
     /// @brief Custom LEVELS page (Sync key twice): one drum on all 10 pads, softest to full.
     char text[96];
@@ -8063,6 +8292,9 @@ void Controller::page_draw() {
             break;
         case PAGE_ROUTE:
             page_drawRoute();
+            break;
+        case PAGE_SONG:
+            page_drawSong();
             break;
         default:
             break;
@@ -9751,6 +9983,21 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
                     // custom: routing layout (older files: CHAIN). Drums are recalculated as they load.
                     routeMode = ((data[179] & 0xF0) == kRouteModeFileMark) ? ((data[179] & 0x01) ? ROUTE_LANES : ROUTE_CHAIN) : ROUTE_CHAIN;
                     routeLaneRev = ((data[179] & 0xF0) == kRouteModeFileMark) ? ((data[179] >> 2) & 0x03) : 0;
+                    {   // custom: Song mode
+                        auto at = [](uint8_t k_) -> uint16_t { return (uint16_t)(500 + 100 * (1 + k_ / 13) + 87 + (k_ % 13)); };
+                        if (data[at(0)] == kSongFileMark) {
+                            songCount = data[at(1)] & 0x3F;
+                            if (songCount > kSongMaxSteps) songCount = kSongMaxSteps;
+                            songLoop = (data[at(1)] & 0x40) != 0;
+                            songMode = (data[at(1)] & 0x80) != 0;
+                            for (uint8_t q = 0; q < kSongMaxSteps; q++) songSteps[q] = data[at(2 + q)];
+                        } else {
+                            songCount = 0; songMode = false; songLoop = true;
+                            memset(songSteps, 0, sizeof(songSteps));
+                        }
+                        songCursor = 0;
+                        songPlayStep = 0;
+                    }
                     if ((data[500 + kMetroRouteFileOffset] & 0xF0) == kMetroRouteFileMark) {
                         const uint8_t mr = data[500 + kMetroRouteFileOffset] & 0x0F;
                         metronome.mixerInMode = (MixerInMode)((mr <= MIXER_IN_SEND) ? mr : MIXER_IN_REVERB);
@@ -10140,6 +10387,12 @@ void Controller::sd_encodeProject(uint8_t* data) {
     data[167] = reverb.active;
     data[178] = kReverbTypeFileMark | reverb.type;   // custom: reverb type
     data[179] = kRouteModeFileMark | (uint8_t)((routeLaneRev & 0x03) << 2) | (routeMode & 0x01);   // custom: layout + lane reverb
+    {   // custom: Song mode (34 bytes in unused bytes 87-99 of drums 2-4's asset blocks)
+        auto at = [](uint8_t k_) -> uint16_t { return (uint16_t)(500 + 100 * (1 + k_ / 13) + 87 + (k_ % 13)); };
+        data[at(0)] = kSongFileMark;
+        data[at(1)] = (uint8_t)((songCount & 0x3F) | (songLoop ? 0x40 : 0) | (songMode ? 0x80 : 0));
+        for (uint8_t k = 0; k < kSongMaxSteps; k++) data[at(2 + k)] = songSteps[k];
+    }
     data[500 + kMetroRouteFileOffset] = kMetroRouteFileMark | ((uint8_t)metronome.mixerInMode & 0x0F);   // custom: where the metronome goes
     data[168] = reverb.size;
     data[169] = reverb.decay;
@@ -18058,6 +18311,8 @@ void Controller::mixer_select() {
 
 void Controller::mixer_reset() {
     route_setMode(ROUTE_CHAIN);   // custom
+    songCount = 0; songMode = false; songLoop = true; songCursor = 0; songPlayStep = 0;   // custom: Song mode
+    memset(songSteps, 0, sizeof(songSteps));
     routeLaneRev = 0;
     /// @brief Restores mixer mute, level, routing, and dynamics parameters to default values.
 
@@ -26215,7 +26470,20 @@ void Controller::record() {
     }
 }
 
+void Controller::song_startFromTop() {
+    /// @brief Custom: Song mode starting from the top: first step's bank, its repeat count.
+    if (!songMode || (songCount == 0)) return;
+    songPlayStep = 0;
+    songRepLeft = (uint8_t)((songSteps[0] >> 4) + 1);
+    bankShiftFlag = false;
+    const uint8_t b = songSteps[0] & 0x0F;
+    if ((b <= kMaxSongBank) && (b != activeSongBank)) layerSong_selectBank(b);
+    page_markDirty(PAGE_SONG);
+}
+
 void Controller::play() {
+    if (playInterval == 0) song_startFromTop();   // custom: Song mode from the top
+
     /// @brief Starts playback transport and refreshes related transport visuals/state.
 
     // 1. MIDI START TRANSMISSION
@@ -26323,6 +26591,8 @@ void Controller::stop() {
 }
 
 void Controller::reset() {
+    songPlayStep = 0;   // custom: Song mode starts again from step 1
+
     /// @brief Resets transport to loop start and normalizes related runtime states.
 
     // 1. MIDI RESET TRANSMISSION
@@ -28455,6 +28725,25 @@ void Controller::interruptPlay() {
                     bankActionFlag = true;
                 }
 
+                // Custom Song mode: count the repeats, then move to the next step's bank.
+                bool songEnded = false;
+                if (songMode && (songCount > 0)) {
+                    if (songRepLeft > 1) {
+                        songRepLeft--;
+                    } else {
+                        uint8_t next = songPlayStep + 1;
+                        if (next >= songCount) {
+                            next = 0;
+                            if (!songLoop) songEnded = true;
+                        }
+                        songPlayStep = next;
+                        songRepLeft = (uint8_t)((songSteps[next] >> 4) + 1);
+                        const uint8_t b = songSteps[next] & 0x0F;
+                        if ((b <= kMaxSongBank) && (b != activeSongBank)) { activeSongBank = b; bankActionFlag = true; }
+                    }
+                    page_markDirty(PAGE_SONG);
+                }
+
                 // Reset all layer playback pointers for the new loop
                 for (uint8_t i = 0; i < kLayerLibrarySize; i++) {
                     Layer& layer = layerLibrary[i];
@@ -28468,6 +28757,7 @@ void Controller::interruptPlay() {
                     }
                 }
                 lcd_restartPlay();
+                if (songEnded) stop();   // custom: Song mode, AT END = STOP (back at the top)
             }
         }
     }

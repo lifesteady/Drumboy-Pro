@@ -493,6 +493,12 @@ class Controller {
     float noteRepeat_step();
     void noteRepeat_tick();
     void noteRepeat_stopped();
+    void song_knob(uint8_t which_, int8_t step_);
+    void song_pad(uint8_t layerNum_);
+    void song_toggle();
+    void song_startFromTop();
+    void page_drawSong();
+    void lcd_drawSongKnobs();
     void pitch_buildStrip();
     void pitch_drawStripColumn(uint16_t c_);
     void pitch_drawStrip();
@@ -654,6 +660,14 @@ class Controller {
     uint8_t previewLayer = 0;
     uint32_t previewTick = 0;
     uint8_t lfoTargetParam = 1;                                         // LFO page: selected target row (0 LEVEL .. 7 PROBABILITY)
+    bool songKeyUsed = false;                                           // Song key was combined with a pad
+    uint8_t songSteps[kSongMaxSteps] = {0};                             // Song mode: [3:0] bank 0-4, [7:4] repeats - 1
+    uint8_t songCount = 0;                                              // steps in the song
+    bool songMode = false;                                              // play the song instead of one bank
+    bool songLoop = true;                                               // at the end: loop (true) or stop
+    uint8_t songCursor = 0;                                             // Song page: step being edited
+    volatile uint8_t songPlayStep = 0;                                  // step playing now
+    volatile uint8_t songRepLeft = 0;                                   // repeats left of that step (incl. this one)
     bool lfoKeyUsed = false;                                            // LFO key was combined with a pad
     void sd_getLibraries();
     SdResult sd_getFileLibrary();
