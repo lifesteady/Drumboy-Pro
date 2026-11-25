@@ -493,6 +493,11 @@ class Controller {
     float noteRepeat_step();
     void noteRepeat_tick();
     void noteRepeat_stopped();
+    void pitch_buildStrip();
+    void pitch_drawStripColumn(uint16_t c_);
+    void pitch_drawStrip();
+    void pitch_drawCounter();
+    void pitch_update();
     void layerSong_noteKnob(int8_t step_);
     void layerSong_gateKnob(int8_t step_);
     void lcd_drawLayerSong_NoteGateData(uint8_t layerNum_);
@@ -620,6 +625,11 @@ class Controller {
     EqFilter laneEqF[4][6];                                             // 2 LANES: EQ state per path (A, B, REVERB, DRY)
     uint32_t routeCpuTick = 0;
     volatile int8_t noteRepeatPitchPad = -1;                            // Notes: pad the roll plays
+    int16_t pitchStripPlay = -1;                                        // Notes / Levels strip: playhead column
+    uint32_t pitchStripKey = 0;                                         // hits fingerprint the strip was built from
+    uint32_t pitchStripTick = 0;
+    char pitchCounter[24] = "";
+    int8_t pitchStripLo = 0, pitchStripHi = 0;                          // note range shown in the strip
     uint8_t padVelocity = 16;                                           // velocity of pad hits (1..16)
     uint8_t humanize = 0;                                               // random +- levels on pad hits
     uint8_t levelsSoftest = 4;                                          // LEVELS mode: velocity of pad 1

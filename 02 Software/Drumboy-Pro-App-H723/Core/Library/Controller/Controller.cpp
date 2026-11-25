@@ -7124,6 +7124,7 @@ void Controller::main_update() {
             lcd.setAlignment(align);
         }
     }
+    if (page == PAGE_PITCH) pitch_update();   // custom: Notes / Levels playhead + counter
     if (!kMainView) return;
     if (alertFlag) return;
     if (page == PAGE_NONE) { page_open(PAGE_MAIN); return; }
@@ -7478,6 +7479,118 @@ void Controller::lcd_drawIo_PitchData() {
     lcd.drawText(pitchGate ? "  PAD HELD" : "  RING OUT", kMenuDataTextSize, kMenuDataX[7], kMenuDataY[7]);
 }
 
+// Custom: Notes / Levels song strip. The whole song of the Notes drum, left to right: a mark per
+// hit (Levels: height = velocity, Notes: height = pitch), bar lines, and the moving playhead.
+static const uint16_t kStripX = 30, kStripW = 900, kStripY = 186, kStripH = 38;
+
+void Controller::pitch_buildStrip() {
+    int8_t* const nt = (int8_t*)(RAM_PITCH_STRIP_ADDRESS);
+    uint8_t* const vl = (uint8_t*)(RAM_PITCH_STRIP_ADDRESS + kStripW);
+    memset(nt, 0, kStripW);
+    memset(vl, 0, kStripW);
+    const Bank& bank = layerLibrary[pitchLayer].bankLibrary[activeSongBank];
+    const uint32_t song = songInterval ? songInterval : 1;
+    int8_t lo = 127, hi = -127;
+    for (int16_t j = 0; j <= bank.lastActiveBeatNum; j++) {
+        const Beat& b = bank.beatLibrary[j];
+        if (!b.getActive()) continue;
+        const uint32_t c = ((uint32_t)b.getStartInterval() * kStripW) / song;
+        if (c >= kStripW) continue;
+        if (b.getVel() >= vl[c]) { vl[c] = b.getVel(); nt[c] = b.note; }
+        if (b.note < lo) lo = b.note;
+        if (b.note > hi) hi = b.note;
+    }
+    if (lo > hi) { lo = 0; hi = 0; }
+    pitchStripLo = lo;
+    pitchStripHi = hi;
+    pitchStripKey = main_laneKey(pitchLayer) ^ (levelsMode ? 0x55u : 0u);
+}
+
+void Controller::pitch_drawStripColumn(uint16_t c_) {
+    if (c_ >= kStripW) return;
+    const int8_t* const nt = (const int8_t*)(RAM_PITCH_STRIP_ADDRESS);
+    const uint8_t* const vl = (const uint8_t*)(RAM_PITCH_STRIP_ADDRESS + kStripW);
+    static RGB16Color col[kStripH];
+    const uint32_t song = songInterval ? songInterval : 1;
+    // grid: bar lines and beat dots
+    const uint32_t t0 = ((uint32_t)c_ * song) / kStripW, t1 = ((uint32_t)(c_ + 1) * song) / kStripW;
+    bool barLine = false, beatLine = false;
+    for (uint32_t t = ((t0 + kMeasureInterval - 1) / kMeasureInterval) * kMeasureInterval; t < t1; t += kMeasureInterval) {
+        if (barInterval && ((t % barInterval) == 0)) barLine = true; else beatLine = true;
+    }
+    for (uint16_t r = 0; r < kStripH; r++) {
+        RGB16Color k = (r == kStripH - 1) ? kThemeLine : BLACK;
+        if (barLine) k = page_mix(BLACK, kThemeLine, 0.9f);
+        else if (beatLine && (r % 4 == 0)) k = page_mix(BLACK, kThemeLine, 0.6f);
+        col[r] = k;
+    }
+    if (vl[c_]) {
+        if (levelsMode || (pitchStripLo == pitchStripHi)) {   // bar: taller = louder
+            const uint16_t hgt = (uint16_t)(((kStripH - 4) * vl[c_]) / 16);
+            for (uint16_t r = kStripH - 1 - hgt; r < kStripH - 1; r++) col[r] = kThemeAmber;
+        } else {                                               // dash: higher = higher note
+            const int16_t span = pitchStripHi - pitchStripLo;
+            const int16_t yy = (int16_t)(kStripH - 6) - (int16_t)(((int32_t)(nt[c_] - pitchStripLo) * (kStripH - 10)) / (span ? span : 1));
+            for (int16_t r = yy - 2; r <= yy + 2; r++) if ((r >= 0) && (r < kStripH - 1)) col[r] = kThemeAmber;
+        }
+    }
+    if ((int16_t)c_ == pitchStripPlay) for (uint16_t r = 0; r < kStripH; r++) col[r] = kThemeAccent;
+    lcd.drawColumn(kStripX + c_, kStripY, kStripH, col);
+}
+
+void Controller::pitch_drawStrip() {
+    pitch_buildStrip();
+    pitchStripPlay = songInterval ? (int16_t)(((uint64_t)playInterval * kStripW) / songInterval) : -1;
+    for (uint16_t c = 0; c < kStripW; c++) pitch_drawStripColumn(c);
+}
+
+void Controller::pitch_drawCounter() {
+    /// @brief BAR.BEAT.16TH and song time, right of the page title (same numbers as the main screen).
+    const uint32_t pos = playInterval;
+    const uint32_t bi = barInterval ? barInterval : 3200;
+    const uint16_t bar = (uint16_t)(pos / bi) + 1;
+    const uint16_t beat = (uint16_t)((pos % bi) / kMeasureInterval) + 1;
+    const uint16_t six = (uint16_t)((pos % kMeasureInterval) / (kMeasureInterval / 4)) + 1;
+    const uint32_t bpm = rhythm.tempo ? rhythm.tempo : 90;
+    const uint32_t ms = (uint32_t)(((uint64_t)pos * 60000ULL) / ((uint64_t)bpm * kMeasureInterval));
+    char text[24];
+    snprintf(text, sizeof(text), "%2u.%u.%u  %lu:%02lu.%03lu", bar, beat, six, (unsigned long)(ms / 60000UL),
+             (unsigned long)((ms / 1000UL) % 60UL), (unsigned long)(ms % 1000UL));
+    if (strcmp(text, pitchCounter) == 0) return;
+    strncpy(pitchCounter, text, sizeof(pitchCounter) - 1);
+    lcd.setFont(FONT_10x14);
+    lcd.setAlignment(RIGHT);
+    lcd.setBackColor(BLACK);
+    lcd.setForeColor(kThemeAccent);
+    lcd.drawText(text, strlen(text), 930, 138);
+}
+
+void Controller::pitch_update() {
+    /// @brief Main loop, Notes / Levels page open: move the playhead, refresh the counter, and
+    /// rebuild the strip when hits were added (recording) or changed. About 30 times a second.
+    if (alertFlag) return;
+    if ((HAL_GetTick() - pitchStripTick) < 33) return;
+    pitchStripTick = HAL_GetTick();
+    const LcdFont font = lcd.getFont();
+    const LcdAlign align = lcd.getAlignment();
+    lcd.setProtect(false);
+    if ((main_laneKey(pitchLayer) ^ (levelsMode ? 0x55u : 0u)) != pitchStripKey) {
+        pitch_drawStrip();
+    } else {
+        const int16_t pc = songInterval ? (int16_t)(((uint64_t)playInterval * kStripW) / songInterval) : -1;
+        if (pc != pitchStripPlay) {
+            const int16_t old = pitchStripPlay;
+            pitchStripPlay = pc;
+            if (old >= 0) pitch_drawStripColumn((uint16_t)old);
+            if (pc >= 0) pitch_drawStripColumn((uint16_t)pc);
+        }
+    }
+    pitch_drawCounter();
+    lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
+    lcd.setFont(font);
+    lcd.setAlignment(align);
+}
+
 void Controller::page_drawLevels() {
     /// @brief Custom LEVELS page (Sync key twice): one drum on all 10 pads, softest to full.
     char text[96];
@@ -7515,7 +7628,7 @@ void Controller::page_drawLevels() {
     page_drawSummary(text);
 
     // one column per pad: a bar as tall as the level (16 = full height)
-    const uint16_t colW = 90, x0 = 30, top = 200, h = 170, bw = 50;
+    const uint16_t colW = 90, x0 = 30, top = 236, h = 136, bw = 50;   // custom: song strip above
     for (uint8_t p = 0; p < kLayerLibrarySize; p++) {
         const uint8_t v = levels_padVel(p);
         const uint16_t cx = x0 + p * colW + colW / 2;
@@ -7536,6 +7649,9 @@ void Controller::page_drawLevels() {
         snprintf(text, sizeof(text), " %2u ", v);
         lcd.drawText(text, strlen(text), cx, top + h + 22);
     }
+    pitch_drawStrip();   // custom: song strip + playhead
+    pitchCounter[0] = 0;
+    pitch_drawCounter();
 }
 
 void Controller::page_drawPitch() {
@@ -7576,7 +7692,7 @@ void Controller::page_drawPitch() {
     page_drawSummary(text);
 
     // one box per pad: note name big, semitones small
-    const uint16_t colW = 90, x0 = 30, boxTop = 200, boxH = 150, boxW = 76;
+    const uint16_t colW = 90, x0 = 30, boxTop = 236, boxH = 130, boxW = 76;   // custom: song strip above
     for (uint8_t p = 0; p < kLayerLibrarySize; p++) {
         const uint16_t bx = x0 + p * colW + (colW - boxW) / 2;
         const bool hit = ((int8_t)p == pitchLastPad);
@@ -7599,13 +7715,16 @@ void Controller::page_drawPitch() {
         lcd.setFont(FONT_14x18);
         lcd.setForeColor(hit ? kThemeAccent : kThemeInk);
         snprintf(text, sizeof(text), "%s%d", kPitchNoteName[pc], oct);
-        lcd.drawText(text, strlen(text), bx + boxW / 2, boxTop + 62);
+        lcd.drawText(text, strlen(text), bx + boxW / 2, boxTop + 52);
         lcd.setFont(FONT_07x09);
         lcd.setForeColor(isRoot ? kThemeAmber : kThemeMid);
         snprintf(text, sizeof(text), "%+d", n);
-        lcd.drawText(text, strlen(text), bx + boxW / 2, boxTop + 120);
+        lcd.drawText(text, strlen(text), bx + boxW / 2, boxTop + 104);
         lcd.setBackColor(BLACK);
     }
+    pitch_drawStrip();   // custom: song strip + playhead
+    pitchCounter[0] = 0;
+    pitch_drawCounter();
 }
 
 void Controller::pitch_saveNotes(uint8_t fileNum_) {
