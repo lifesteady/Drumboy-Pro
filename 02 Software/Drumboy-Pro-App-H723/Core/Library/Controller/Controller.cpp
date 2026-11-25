@@ -6295,13 +6295,13 @@ void Controller::groove_timingCorrect(uint8_t layerNum_) {
     /// line by grooveCorrect %. 100 % = fully on the grid. One undo step.
     if (layerNum_ >= kLayerLibrarySize) return;
     if (rhythm.quantize == kQuantizeOff) {
-        snprintf(grooveMessage, sizeof(grooveMessage), "SET QUANTIZE TO A GRID FIRST (NOW OFF)");
+        snprintf(grooveMessage, sizeof(grooveMessage), "QUANTIZE IS OFF: SET IT TO A GRID FIRST");
         page_markDirty(PAGE_GROOVE);
         return;
     }
     Bank& bank = layerLibrary[layerNum_].bankLibrary[activeSongBank];
     if (bank.lastActiveBeatNum == -1) {
-        snprintf(grooveMessage, sizeof(grooveMessage), "DRUM %02u HAS NO HITS IN THIS SONG", layerNum_ + 1);
+        snprintf(grooveMessage, sizeof(grooveMessage), "DRUM %02u HAS NO HITS IN THIS SEQUENCE", layerNum_ + 1);
         page_markDirty(PAGE_GROOVE);
         return;
     }
@@ -6341,7 +6341,7 @@ void Controller::groove_shift(uint8_t layerNum_, bool later_, bool big_) {
     if (layerNum_ >= kLayerLibrarySize) return;
     Bank& bank = layerLibrary[layerNum_].bankLibrary[activeSongBank];
     if (bank.lastActiveBeatNum == -1) {
-        snprintf(grooveMessage, sizeof(grooveMessage), "DRUM %02u HAS NO HITS IN THIS SONG", layerNum_ + 1);
+        snprintf(grooveMessage, sizeof(grooveMessage), "DRUM %02u HAS NO HITS IN THIS SEQUENCE", layerNum_ + 1);
         page_markDirty(PAGE_GROOVE);
         return;
     }
@@ -6401,7 +6401,7 @@ void Controller::page_drawGroove() {
         lcd.setForeColor(label);
         const char h1[] = "PAD: PICK DRUM    BOTTOM KNOB 3: DRUM SWING    BOTTOM KNOB 4: CORRECT %";
         lcd.drawText(h1, strlen(h1), 30, 420);
-        const char h2[] = "ADD + PAD: TIMING CORRECT    LEFT / RIGHT: SHIFT DRUM EARLIER / LATER (ADD = BIG)";
+        const char h2[] = "ADD + PAD: TIMING CORRECT    LEFT / RIGHT: SHIFT DRUM EARLIER / LATER, ADD + LEFT / RIGHT: BIG STEPS";
         lcd.drawText(h2, strlen(h2), 30, 438);
         lcd.setAlignment(RIGHT);
         const char h3[] = "RHYTHM: BACK";
@@ -6655,7 +6655,7 @@ void Controller::page_drawSample() {
         lcd.setFont(FONT_07x09);
         lcd.setAlignment(LEFT);
         lcd.setForeColor(kThemeHeader);
-        const char h1[] = "TOP KNOBS 3-4: ATTACK / HOLD    BOTTOM KNOBS 1-3: START / END / DECAY    (HOLD FULL = NO DECAY)";
+        const char h1[] = "TOP KNOBS 3-4: ATTACK / HOLD    BOTTOM KNOBS 1-3: START / END / DECAY    HOLD AT FULL: NO DECAY";
         lcd.drawText(h1, strlen(h1), 30, 422);
         lcd.setAlignment(RIGHT);
         const char h2[] = "TAP LAYER INST: BACK";
@@ -8552,7 +8552,7 @@ void Controller::page_drawReverb() {
         for (uint8_t q = 0; q <= 4; q++) lcd.drawText(ticks[q], strlen(ticks[q]), gx + (gw * q) / 4, base + hh + 8);
         lcd.setAlignment(LEFT);
         lcd.setForeColor(kThemeLine);
-        const char hint[] = "PRESS REVERB AGAIN: BACK TO SONG";
+        const char hint[] = "PRESS REVERB AGAIN: BACK TO MAIN SCREEN";
         lcd.drawText(hint, strlen(hint), 30, 436);
         lcd.setAlignment(RIGHT);
         const char hint2[] = "KNOBS: BOXES ABOVE / BELOW";
@@ -8750,7 +8750,7 @@ void Controller::page_drawFilter(uint8_t filterNum_) {
         for (uint8_t i = 0; i < 5; i++) lcd.drawText(hzl[i], strlen(hzl[i]), (i == 4) ? gx + gw : freqToX(hzv[i]), gBot + 8);
         lcd.setAlignment(LEFT);
         lcd.setForeColor(kThemeLine);
-        const char hint[] = "PRESS FILTER AGAIN: BACK TO SONG";
+        const char hint[] = "PRESS FILTER AGAIN: BACK TO MAIN SCREEN";
         lcd.drawText(hint, strlen(hint), 30, 436);
         lcd.setAlignment(RIGHT);
         const char hint2[] = "KNOBS: BOXES ABOVE / BELOW";
@@ -9327,7 +9327,7 @@ void Controller::page_drawEffect(uint8_t effectNum_) {
         lcd.drawHLine(30, 177, 900);
         lcd.setFont(FONT_07x09);
         lcd.setAlignment(LEFT);
-        const char hint[] = "PRESS EFFECT AGAIN: BACK TO SONG";
+        const char hint[] = "PRESS EFFECT AGAIN: BACK TO MAIN SCREEN";
         lcd.drawText(hint, strlen(hint), 30, 436);
         lcd.setAlignment(RIGHT);
         const char hint2[] = "KNOBS: BOXES ABOVE / BELOW";
@@ -9419,7 +9419,7 @@ void Controller::page_drawLfo() {
         const char hint[] = "TOP KNOB 3: ROW    TOP KNOB 4: LFO 1-10    PAD: ADD / REMOVE";
         lcd.drawText(hint, strlen(hint), 30, 438);
         lcd.setAlignment(RIGHT);
-        const char hint2[] = "TAP LFO ALONE: BACK TO SONG";
+        const char hint2[] = "TAP LFO ALONE: BACK TO MAIN SCREEN";
         lcd.drawText(hint2, strlen(hint2), 930, 438);
         lcd.setForeColor(label);
         lcd.drawText("+", 1, gx - 8, gTop);

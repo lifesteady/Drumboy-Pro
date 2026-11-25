@@ -720,6 +720,7 @@ typedef enum {
 
 // Custom: draw all text in smooth Liberation Sans (false = the stock pixel fonts).
 const bool kSansText                                = true;
+const bool kSansMixedCase                           = true;   // custom: smooth text in normal capitals, not all caps
 
 // Custom: velocity levels 1..16 -> gain. 16 = full, each step -2 dB (level 1 = -30 dB), like MPC 16 levels.
 const float kVelGain[17] = {0.0f, 0.03162f, 0.03981f, 0.05012f, 0.06310f, 0.07943f, 0.10000f, 0.12589f, 0.15849f, 0.19953f, 0.25119f, 0.31623f, 0.39811f, 0.50119f, 0.63096f, 0.79433f, 1.00000f};
@@ -2373,7 +2374,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.09 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.10 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;

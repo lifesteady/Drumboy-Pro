@@ -1435,8 +1435,15 @@ void Lcd::drawText(const char text[], uint16_t textLength, uint16_t x, uint16_t 
         }
         static sans::Layout lay;
         static uint8_t alpha[960];
+        static char mixed[sans::kMaxChars];
         if (wText > sizeof(alpha)) wText = sizeof(alpha);
-        sans::layout(*sf, text, textLength, wText, (uint8_t)fontAlignment, lay);
+        const char* src = text;
+        if (kSansMixedCase) {   // custom: normal capitals ("Filter 1", "12 dB")
+            const uint16_t n = (textLength < sans::kMaxChars) ? textLength : sans::kMaxChars;
+            sans::mixedCase(text, n, mixed);
+            src = mixed;
+        }
+        sans::layout(*sf, src, textLength, wText, (uint8_t)fontAlignment, lay);
         // descenders: a few rows under the box, only when the text has letters that need them
         // Remember boxes that drew descender rows, so a later text without descenders in the
         // same box still paints over them (no leftover tails).

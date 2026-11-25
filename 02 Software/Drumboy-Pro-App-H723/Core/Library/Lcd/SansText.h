@@ -97,6 +97,53 @@ static inline void row(const Layout& L_, int16_t row_, uint16_t boxW_, uint8_t* 
     }
 }
 
+// Custom: the firmware's strings are all capitals (the pixel font has no lowercase). For the
+// smooth font, turn them into normal capitals: "FILTER 1  HIGHPASS  SLOPE 12 DB" ->
+// "Filter 1  Highpass  Slope 12 dB". Kept as capitals: short words with no vowel (BD, SD, HH,
+// FX, BPM), a few acronyms (EQ, CPU, LFO, MIDI ...) and single letters (note names, Q, V3).
+// Units get their usual spelling: DB -> dB, HZ -> Hz, KHZ -> kHz, MS -> ms, and a lone K or S
+// right after a number -> k / s ("1.2K" -> "1.2k", "2.5 S" -> "2.5 s").
+static inline bool isUp(char c_) { return (c_ >= 'A') && (c_ <= 'Z'); }
+static inline bool isLow(char c_) { return (c_ >= 'a') && (c_ <= 'z'); }
+static inline bool isDig(char c_) { return (c_ >= '0') && (c_ <= '9'); }
+
+static inline void mixedCase(const char* in_, uint16_t n_, char* out_) {
+    static const char* const keep[] = {"EQ", "CPU", "LFO", "MIDI", "ADSR", "MPC", "USB", "OK", "RAM", "PPQ",
+                                       "WAV", "DJ", "II", "III", "IV", "VI", "VII", "XL", "AI", "ID", "SD"};
+    memcpy(out_, in_, n_);
+    uint16_t i = 0;
+    while (i < n_) {
+        if (!isUp(in_[i]) && !isLow(in_[i])) { i++; continue; }
+        uint16_t j = i;
+        bool hasLow = false, vowel = false;
+        while ((j < n_) && (isUp(in_[j]) || isLow(in_[j]))) {
+            if (isLow(in_[j])) hasLow = true;
+            const char u = (char)(in_[j] & ~0x20);
+            if ((u == 'A') || (u == 'E') || (u == 'I') || (u == 'O') || (u == 'U') || (u == 'Y')) vowel = true;
+            j++;
+        }
+        const uint16_t len = j - i;
+        if (hasLow) { i = j; continue; }   // already written in mixed case: leave it
+        // previous non-space character (for units after a number)
+        int16_t k = (int16_t)i - 1;
+        if ((k >= 0) && (in_[k] == ' ')) k--;
+        const bool afterNum = (k >= 0) && isDig(in_[k]);
+        auto is = [&](const char* w_) { return (strlen(w_) == len) && (memcmp(in_ + i, w_, len) == 0); };
+        if (is("DB")) { out_[i] = 'd'; }
+        else if (is("HZ")) { out_[i + 1] = 'z'; }
+        else if (is("KHZ")) { out_[i] = 'k'; out_[i + 2] = 'z'; }
+        else if (is("MS")) { out_[i] = 'm'; out_[i + 1] = 's'; }
+        else if (len == 1) { if (afterNum && ((in_[i] == 'K') || (in_[i] == 'S'))) out_[i] = (char)(in_[i] | 0x20); }
+        else {
+            bool kept = !vowel && (len <= 3);
+            for (uint8_t q = 0; !kept && (q < sizeof(keep) / sizeof(keep[0])); q++) kept = is(keep[q]);
+            if (!kept)
+                for (uint16_t m = i + 1; m < j; m++) out_[m] = (char)(in_[m] | 0x20);
+        }
+        i = j;
+    }
+}
+
 // RGB565 blend table: 16 steps from back colour to fore colour.
 static inline void blendTable(uint16_t fg_, uint16_t bg_, uint16_t* lut_) {
     const int fr = (fg_ >> 11) & 0x1F, fgc = (fg_ >> 5) & 0x3F, fb = fg_ & 0x1F;
