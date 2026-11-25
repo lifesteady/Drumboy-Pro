@@ -8017,6 +8017,11 @@ void Controller::page_drawLevels() {
         const bool hit = ((int8_t)p == pitchLastPad);
         const uint16_t bh = (uint16_t)((h * v) / 16);
         const uint16_t bx = cx - bw / 2;
+        static int16_t drawn[kLayerLibrarySize];   // custom: repaint only the bars that changed
+        const int16_t sig = (int16_t)(v * 2 + (hit ? 1 : 0));
+        if (fullStrip) drawn[p] = -1;
+        if (drawn[p] == sig) continue;
+        drawn[p] = sig;
         lcd.setForeColor(BLACK);
         if (h > bh) lcd.fillRect(bx, top, bw, h - bh);
         lcd.setForeColor(hit ? kThemeAccent : page_mix(BLACK, kThemeAccent, 0.25f + 0.5f * v / 16.0f));
@@ -8084,6 +8089,11 @@ void Controller::page_drawPitch() {
         const uint8_t pc = (uint8_t)(abs % 12);
         const int16_t oct = abs / 12 - 1;
         const bool isRoot = (pc == (pitchRoot % 12));
+        static int16_t drawn[kLayerLibrarySize];   // custom: repaint only the boxes that changed
+        const int16_t sig = (int16_t)((n + 64) * 4 + (hit ? 2 : 0) + (isRoot ? 1 : 0));
+        if (fullStrip) drawn[p] = -1;
+        if (drawn[p] == sig) continue;
+        drawn[p] = sig;
         const RGB16Color fill = hit ? page_mix(BLACK, kThemeAccent, 0.35f) : (isRoot ? kMainSelectBgPitch : BLACK);
         lcd.setForeColor(fill);
         lcd.fillRect(bx, boxTop, boxW, boxH);
