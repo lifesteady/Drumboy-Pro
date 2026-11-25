@@ -1556,6 +1556,19 @@ void Controller::keyboard_read() {
 
     // 1. REQUEST ARBITRATION (IDLE)
     if (currentState == STATE_IDLE) {
+        // Custom safety net: each expander holds its INT line LOW until its pins are read. The
+        // edge interrupt can be missed (a change during a read, a failed I2C read), and then the
+        // line stays low, no new edge ever comes and those keys go dead (a fast pad glissando did
+        // this). So: if a line is low with no read pending, read that keypad anyway.
+        {
+            static uint32_t pollTick = 0;
+            if ((HAL_GetTick() - pollTick) >= 2) {
+                pollTick = HAL_GetTick();
+                if (HAL_GPIO_ReadPin(MX_X_INT_GPIO_Port, MX_X_INT_Pin) == GPIO_PIN_RESET) keyboard.keyLayer.readFlag = true;
+                if (HAL_GPIO_ReadPin(MX_A_INT_GPIO_Port, MX_A_INT_Pin) == GPIO_PIN_RESET) keyboard.keyLeft.readFlag = true;
+                if (HAL_GPIO_ReadPin(MX_B_INT_GPIO_Port, MX_B_INT_Pin) == GPIO_PIN_RESET) keyboard.keyRight.readFlag = true;
+            }
+        }
         // Layer keypad has priority over Left and Right keypads.
         if (keyboard.keyLayer.readFlag) {
             targetKeypad = 0;
@@ -1605,6 +1618,14 @@ void Controller::keyboard_read() {
             Keypad* kp = (targetKeypad == 0) ? &keyboard.keyLayer : (targetKeypad == 1) ? &keyboard.keyLeft
                                                                                         : &keyboard.keyRight;
 
+            // Custom: a failed read gives stale data and leaves INT low: read again instead.
+            if (hi2c3.ErrorCode != HAL_I2C_ERROR_NONE) {
+                hi2c3.ErrorCode = HAL_I2C_ERROR_NONE;
+                kp->readFlag = true;
+                currentState = STATE_IDLE;
+                return;
+            }
+
             // Reconstruct 16-bit GPIO state from port A/B bytes.
             uint16_t newState = (i2c3_rxData[1] << 8) | i2c3_rxData[0];
 
@@ -1627,11 +1648,16 @@ void Controller::keyboard_read() {
                         }
                     }
                     kp->read = true;  // Notify keyboard_action() that new key events are ready.
-                }
 
-                // STATE UPDATE
-                kp->previousState = newState;
-                kp->previousMillis = kp->currentMillis;
+                    // STATE UPDATE
+                    kp->previousState = newState;
+                    kp->previousMillis = kp->currentMillis;
+                } else {
+                    // Custom: the last events haven't been handled yet. Stock updated the state anyway
+                    // and the presses / releases in between were lost (a pad could stay "held" for
+                    // ever). Keep the old state and read again once those events are handled.
+                    kp->readFlag = true;
+                }
             }
 
             // RESOURCE CLEANUP: cycle complete, return to IDLE.
