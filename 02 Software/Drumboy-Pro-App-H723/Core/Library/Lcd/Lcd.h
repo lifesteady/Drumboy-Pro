@@ -151,6 +151,11 @@ class Lcd {
         protectX0 = x_; protectY0 = y_; protectX1 = x_ + w_ - 1; protectY1 = y_ + h_ - 1;
     }
     bool getProtect() const { return protectActive; }
+    /// Custom: colour the first chars_ characters of the NEXT drawText (smooth font only), so a
+    /// summary line can lead with a highlighted word laid out exactly like the rest of the line.
+    void setAccentPrefix(uint8_t chars_, RGB16Color color_) { accentChars = chars_; accentColor = color_; }
+    uint8_t accentChars = 0;
+    RGB16Color accentColor = 0;
     bool isProtected(int32_t x_, int32_t y_, int32_t w_, int32_t h_) const {
         if (!protectActive || (w_ <= 0) || (h_ <= 0)) return false;
         return !((x_ + w_ - 1 < protectX0) || (x_ > protectX1) || (y_ + h_ - 1 < protectY0) || (y_ > protectY1));

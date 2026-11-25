@@ -5555,7 +5555,7 @@ static RGB16Color page_mix(RGB16Color a_, RGB16Color b_, float f_) {
     return (RGB16Color)((r << 11) | (g << 5) | b);
 }
 
-void Controller::page_drawSummary(const char* text_) {
+void Controller::page_drawSummary(const char* text_, uint8_t accentChars_, RGB16Color accent_) {
     /// @brief Draws a page's summary line on its own row under the title: 10x14 font, left
     /// aligned, padded to the full row so a shorter line never leaves old characters behind.
     char row[kPageSummaryChars + 1];
@@ -5564,6 +5564,7 @@ void Controller::page_drawSummary(const char* text_) {
     lcd.setAlignment(LEFT);
     lcd.setBackColor(BLACK);
     lcd.setForeColor(kThemeHeader);
+    if (accentChars_) lcd.setAccentPrefix(accentChars_, accent_);   // custom: leading word highlighted
     lcd.drawText(row, kPageSummaryChars, 30, 158);
 }
 
@@ -8578,12 +8579,7 @@ void Controller::page_drawReverb() {
     else
         snprintf(info, sizeof(info), "%-8s  TAIL %2u.%u S  HIGHS %2u.%u S  PRE-DELAY %3u MS  WET %3u", tn, tailT / 10, tailT % 10,
                  hfT / 10, hfT % 10, (unsigned)(preSec * 1000.0f + 0.5f), reverb.wet);
-    page_drawSummary(info);
-    lcd.setFont(FONT_10x14);
-    lcd.setAlignment(LEFT);
-    lcd.setBackColor(BLACK);
-    lcd.setForeColor(on ? kThemeAmber : kThemeMid);
-    lcd.drawText(tn, strlen(tn), 30, 158);
+    page_drawSummary(info, (uint8_t)strlen(tn), on ? kThemeAmber : kThemeMid);   // type in yellow
     page_drawCpu(930, 136);
 
     // ---- 5. columns: each pixel of the graph written once per redraw (black, fill, edge)
@@ -8781,14 +8777,9 @@ void Controller::page_drawFilter(uint8_t filterNum_) {
     else
         snprintf(info, sizeof(info), "%s  SLOPE %2u DB  CUTOFF %5s HZ  RESONANCE %u.%02u  DRIVE %3u", typeName[(f.type <= 6) ? f.type : 0],
                  f.slope ? 12 : 6, cut, (unsigned)Q, (unsigned)(Q * 100) % 100, f.drive);
-    page_drawSummary(info);
     {   // custom: the filter type (first word of the summary) in yellow so it stands out
         const char* tn = vintage ? "VINTAGE" : typeName[(f.type <= 6) ? f.type : 0];
-        lcd.setFont(FONT_10x14);
-        lcd.setAlignment(LEFT);
-        lcd.setBackColor(BLACK);
-        lcd.setForeColor(kThemeAmber);
-        lcd.drawText(tn, strlen(tn), 30, 158);
+        page_drawSummary(info, (uint8_t)strlen(tn));
     }
 
     // ---- 5. response, column by column (no full clear => no flicker)
@@ -8934,12 +8925,7 @@ void Controller::page_drawEq() {
     char info[72];
     snprintf(info, sizeof(info), "%-8s   Q %u   LOW SHELF %+3d DB   HIGH SHELF %+3d DB", presetName, (unsigned)kEqQDataLibrary[eq.q].data,
              (int)kEqGainDataLibrary[eq.gainLowShelf].data, (int)kEqGainDataLibrary[eq.gainHighShelf].data);
-    page_drawSummary(info);
-    lcd.setFont(FONT_10x14);
-    lcd.setAlignment(LEFT);
-    lcd.setBackColor(BLACK);
-    lcd.setForeColor(kThemeAmber);
-    lcd.drawText(presetName, strlen(presetName), 30, 158);
+    page_drawSummary(info, (uint8_t)strlen(presetName));   // preset name in yellow
 
     // ---- combined response, column by column
     const EqFilter* bands[6] = {&eq.filterLowShelf, &eq.filterPeak[0], &eq.filterPeak[1],

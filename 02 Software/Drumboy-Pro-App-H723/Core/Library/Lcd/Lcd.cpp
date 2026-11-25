@@ -1382,6 +1382,9 @@ void Lcd::fillTriangle(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint1
 void Lcd::drawText(const char text[], uint16_t textLength, uint16_t x, uint16_t y) {
     /// @brief Renders text at the specified position using current font settings.
 
+    const uint8_t accentN = accentChars;   // custom: one-shot highlighted prefix
+    accentChars = 0;
+
     // 1. TEXT METRICS CALCULATION
     // Compute text block size and initial position.
     uint16_t wText = textLength * (fontWidth + fontSpacing);
@@ -1455,6 +1458,12 @@ void Lcd::drawText(const char text[], uint16_t textLength, uint16_t x, uint16_t 
         }
         uint16_t lut[16];
         sans::blendTable(foreColor, backColor, lut);
+        uint16_t lutA[16];
+        uint16_t accentX = 0;
+        if (accentN) {
+            sans::blendTable(accentColor, backColor, lutA);
+            accentX = (accentN < lay.n) ? (uint16_t)lay.penX[accentN] : wText;
+        }
         setAddressWindow(xPos, y, xPos + wText - 1, y + rows - 1);
         LCD_CS_LOW;
         LCD_RS_DATA;
@@ -1465,7 +1474,7 @@ void Lcd::drawText(const char text[], uint16_t textLength, uint16_t x, uint16_t 
         for (uint16_t r = 0; r < rows; r++) {
             sans::row(lay, (int16_t)r, wText, alpha);
             for (uint16_t c = 0; c < wText; c++) {
-                *dReg = lut[alpha[c]];
+                *dReg = (c < accentX) ? lutA[alpha[c]] : lut[alpha[c]];
                 *wReg = wReset;
                 *wReg = wSet;
             }
