@@ -617,6 +617,13 @@ class Controller {
     bool slicerOn(uint8_t l_) const { return (layerLibrary[l_].sliceCount > 0) && !layerLibrary[l_].sliceOff; }
     uint8_t wav_readCues(const char* path_, const WavData& wav_, uint32_t* out_, uint8_t max_, uint32_t limit_);
     void chop_pasteLoop();
+    void chop_stretch();
+    uint8_t chop_beats(uint32_t len_);                                  // beats a loop of len_ samples most likely is at the current tempo
+    uint8_t slice_beats(uint8_t l_);                                    // slicer drum's loop length in beats
+    volatile bool chopPlay = false;                                     // the take is playing (REC on the Chop page)
+    volatile uint32_t chopPlayPos = 0;
+    bool chopTap = false;                                               // pads drop slice starts while it plays
+    uint32_t chopPlayTick = 0;
     void chop_ensureStem();
     volatile int16_t pendingStep[kLayerLibrarySize] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1};   // sequencer step of the hit being triggered
     volatile uint8_t sampState = 0;                                     // 0 idle, 1 armed, 2 recording, 3 done (to save), 4 saving

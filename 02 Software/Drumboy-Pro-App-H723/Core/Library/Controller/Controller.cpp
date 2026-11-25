@@ -5607,7 +5607,7 @@ void Controller::page_drawSummary(const char* text_, uint8_t accentChars_, RGB16
 void Controller::page_open(PageView page_) {
     /// @brief Shows a full-screen page over the song grid and protects it from background drawing.
     if (page_ == PAGE_NONE) return;
-    if ((page == PAGE_CHOP) && (page_ != PAGE_CHOP)) chopActive = false;   // custom: leaving Chop frees the undo region
+    if ((page == PAGE_CHOP) && (page_ != PAGE_CHOP)) { chopActive = false; chopPlay = false; }   // custom: leaving Chop frees the undo region
     const bool fromStock = (page == PAGE_NONE);
     page = page_;
     pageFullRedraw = true;
@@ -5648,7 +5648,7 @@ void Controller::page_close(bool toStock_) {
     const bool wasSong = (page == PAGE_SONG);
     const bool wasMain = (page == PAGE_MAIN);
     const bool wasChop = (page == PAGE_CHOP);
-    if (wasChop) chopActive = false;   // custom: leaving Chop frees the undo region
+    if (wasChop) { chopActive = false; chopPlay = false; }   // custom: leaving Chop frees the undo region
     page = PAGE_NONE;
     if (wasChop) {
         encoder_update();
@@ -6339,6 +6339,14 @@ void Controller::sampling_key() {
 
 void Controller::sampling_update() {
     /// @brief Main loop: live meter about 30 times a second, and saving once a take is done.
+    if (page == PAGE_CHOP) {   // custom: Chop page playhead while the take plays
+        static bool wasPlaying = false;
+        if ((chopPlay || wasPlaying) && ((HAL_GetTick() - chopPlayTick) >= 90)) {
+            chopPlayTick = HAL_GetTick();
+            page_markDirty(PAGE_CHOP);
+            wasPlaying = chopPlay;
+        }
+    }
     if (sampState == 0) return;
     if ((page != PAGE_SAMPLE) && (sampState == 1)) { sampState = 0; return; }   // left the page while armed
     if (sampState == 3) {
@@ -6802,6 +6810,7 @@ bool Controller::chop_key(uint8_t key_) {
         case KEY_UP: if (chopZoom < 10) chopZoom++; break;
         case KEY_DOWN: if (chopZoom > 0) chopZoom--; break;
         case KEY_CENTER: {   // split the selected slice in the middle
+            if (keyboard.shiftKeyPress) { chop_stretch(); break; }   // ADD + CENTER: stretch to the tempo
             if (chopN >= kChopMaxSlices) { undo_showText("FULL "); return true; }
             const uint32_t s = chopMark[chopSel], e = chop_sliceEnd(chopSel);
             if (e - s < 512) return true;
@@ -6823,8 +6832,19 @@ bool Controller::chop_key(uint8_t key_) {
             if (chopSel > 0) chopSel--;
         } break;
         case KEY_PASTE: if (keyboard.shiftKeyPress) chop_pasteLoop(); else chop_paste(); return true;   // ADD + PASTE: slicer drum
-        case KEY_COPY:
-        case KEY_REC: return true;
+        case KEY_REC:   // play the take; REC: from slice 1 and pads drop new slice starts (tap to chop), ADD + REC: just listen
+            if (chopPlay) { chopPlay = false; chopTap = false; break; }
+            chopTap = !keyboard.shiftKeyPress;
+            if (chopTap) {
+                chopN = 1;
+                for (uint8_t k = 1; k < kChopMaxSlices; k++) { chopPadOf[k] = -1; chopSavedIdx[k] = -1; }
+                chopSel = 0;
+                chopZoom = 0;
+            }
+            chopPlayPos = chopMark[0];
+            chopPlay = true;
+            break;
+        case KEY_COPY: return true;
         default: return false;
     }
     page_markDirty(PAGE_CHOP);
@@ -6833,7 +6853,21 @@ bool Controller::chop_key(uint8_t key_) {
 
 void Controller::chop_pad(uint8_t pad_) {
     /// @brief Pad on the Chop page: hear that slice (first 3 s). ADD + pad: put the SELECTED
-    /// slice on this pad.
+    /// slice on this pad. While tapping (REC), any pad drops a slice start where the take is.
+    if (chopPlay && chopTap) {
+        const uint32_t lag = 220;   // about 5 ms: a finger lands a little after the hit
+        uint32_t at = chopPlayPos;
+        at = (at > lag) ? (at - lag) : 0;
+        if ((chopN < kChopMaxSlices) && (at > chopMark[chopN - 1] + 64) && (at + 64 < chopEnd)) {
+            chopMark[chopN] = at;
+            chopPadOf[chopN] = -1;
+            chopSavedIdx[chopN] = -1;
+            chopSel = chopN;
+            chopN++;
+        }
+        page_markDirty(PAGE_CHOP);
+        return;
+    }
     if (keyboard.shiftKeyPress) {
         if (chop_putSlice(chopSel, pad_)) undo_showText("DONE ");
         page_markDirty(PAGE_CHOP);
@@ -6990,6 +7024,7 @@ void Controller::chop_truncate() {
     /// @brief ADD + CLEAR: throw away everything before slice 1 and after TAKE END. If the take is
     /// our own recording its file is rewritten (and reloaded on its drum); a library sample is only
     /// cut here in memory (the original file is left alone).
+    chopPlay = false;
     const uint32_t m0 = chopMark[0];
     if ((m0 == 0) && (chopEnd >= chopLen)) { undo_showText("NONE "); return; }
     const uint32_t n = chopEnd - m0;
@@ -7012,6 +7047,85 @@ void Controller::chop_truncate() {
         if (!ok) { undo_showText("ERROR"); return; }
     }
     undo_showText("CUT  ");
+}
+
+uint8_t Controller::chop_beats(uint32_t len_) {
+    /// @brief Custom: the beat count (1, 2, 3, 4, 6, 8, 12, 16, 24 or 32) a loop of len_ samples is
+    /// closest to at the current tempo.
+    static const uint8_t bc[10] = {1, 2, 3, 4, 6, 8, 12, 16, 24, 32};
+    const float sec = (float)len_ / 44100.0f;
+    const float raw = sec * (float)(rhythm.tempo ? rhythm.tempo : 90) / 60.0f;
+    uint8_t beats = 1;
+    float best = 1e9f;
+    for (uint8_t q = 0; q < 10; q++) { const float d = fabsf(logf((float)bc[q] / (raw > 0.01f ? raw : 0.01f))); if (d < best) { best = d; beats = bc[q]; } }
+    return beats;
+}
+
+uint8_t Controller::slice_beats(uint8_t l_) {
+    return chop_beats(layerLibrary[l_].sampleLoadedData.sampleSize);
+}
+
+void Controller::chop_stretch() {
+    /// @brief ADD + CENTER: time stretch. The loop (slice 1 to TAKE END) is made exactly its BEATS
+    /// long at the current tempo, without changing its pitch (overlap-add with a small search for
+    /// the best fit, so drums stay tight). Slice starts move with it; what was before slice 1 and
+    /// after TAKE END is dropped. Up to 6 s of result.
+    const uint32_t s0 = chopMark[0];
+    const uint32_t inLen = chopEnd - s0;
+    if (inLen < 4096) return;
+    const uint8_t beats = chop_beats(inLen);
+    const uint32_t target = (uint32_t)((float)beats * 60.0f * 44100.0f / (float)(rhythm.tempo ? rhythm.tempo : 90) + 0.5f);
+    const uint32_t cap = kPreviewMaxSamples * 2 - 8192;   // the audition buffer as 16-bit (its last 16 KB: window + sums)
+    if (target > cap) { undo_showText("LONG "); return; }
+    const float r = (float)target / (float)inLen;
+    if (fabsf(r - 1.0f) < 0.002f) { undo_showText("NONE "); return; }
+    chopPlay = false;
+    preview_stopVoices();
+    const int16_t* in = sampBuf() + s0;
+    int16_t* out = (int16_t*)RAM_PREVIEW_ADDRESS;
+    const uint16_t N = 1024, Hs = 512, SEEK = 192;
+    float* win = (float*)(RAM_PREVIEW_ADDRESS + kPreviewMaxSamples * 4 - 8192);
+    float* acc = win + 1024;
+    for (uint16_t k = 0; k < N; k++) win[k] = 0.5f - 0.5f * cosf(2.0f * 3.14159265f * (float)k / (float)N);
+    memset(acc, 0, 1024 * sizeof(float));
+    const float Ha = (float)Hs / r;
+    int32_t prev = 0;   // input position of the previous frame
+    uint32_t written = 0;
+    for (uint32_t m = 0; written < target; m++) {
+        const int32_t nominal = (int32_t)((float)m * Ha);
+        int32_t best = nominal;
+        if (m > 0) {   // find the offset that continues the previous frame best
+            const int32_t want = prev + Hs;
+            float bestC = -1e30f;
+            for (int32_t d = -SEEK; d <= SEEK; d += 4) {
+                const int32_t p = nominal + d;
+                if ((p < 0) || ((uint32_t)(p + N) > inLen) || ((uint32_t)(want + N / 2) > inLen)) continue;
+                float c = 0.0f;
+                for (uint16_t k = 0; k < N / 2; k += 4) c += (float)in[p + k] * (float)in[want + k];
+                if (c > bestC) { bestC = c; best = p; }
+            }
+        }
+        if (best < 0) best = 0;
+        if ((uint32_t)(best + N) > inLen) best = (int32_t)inLen - N;
+        prev = best;
+        for (uint16_t k = 0; k < N; k++) acc[k] += win[k] * (float)in[best + k];
+        for (uint16_t k = 0; (k < Hs) && (written < target); k++) {   // the first half is finished
+            float v = acc[k];
+            if (v > 32767.0f) v = 32767.0f;
+            if (v < -32767.0f) v = -32767.0f;
+            out[written++] = (int16_t)v;
+        }
+        memmove(acc, acc + Hs, (N - Hs) * sizeof(float));
+        memset(acc + (N - Hs), 0, Hs * sizeof(float));
+    }
+    int16_t* b = sampBuf();
+    memcpy(b, out, target * sizeof(int16_t));
+    for (uint8_t k = 0; k < chopN; k++) { chopMark[k] = (uint32_t)((float)(chopMark[k] - s0) * r); chopSavedIdx[k] = -1; }
+    chopMark[0] = 0;
+    chopLen = target;
+    chopEnd = target;
+    chopZoom = 0;
+    undo_showText("FIT  ");
 }
 
 void Controller::chop_ensureStem() {
@@ -7081,6 +7195,7 @@ void Controller::chop_pasteLoop() {
     layerInst_setStart(pad, kInitialLayerStart);
     layerLibrary[pad].sliceOff = false;
     layerLibrary[pad].muteGroup = 0;
+    layerLibrary[pad].sliceBeats = chop_beats(n);
     undo_showText("LOOP ");
     page_markDirty(PAGE_CHOP);
 }
@@ -7216,13 +7331,13 @@ void Controller::page_drawChop() {
         lcd.setFont(FONT_07x09);
         lcd.setAlignment(LEFT);
         lcd.setForeColor(kThemeHeader);
-        const char h1[] = "PADS: HEAR   ADD + PAD: PUT THE SLICE THERE   LEFT / RIGHT: SLICE   UP / DOWN: ZOOM";
+        const char h1[] = "PADS: HEAR   ADD + PAD: PUT THE SLICE THERE   REC: PLAY AND TAP PADS TO CHOP   LEFT / RIGHT: SLICE";
         lcd.drawText(h1, strlen(h1), 30, 420);
-        const char h2[] = "CENTER: SPLIT  CLEAR: REMOVE  ADD + CLEAR: TRUNCATE  PASTE: SLICES ON PADS  ADD + PASTE: LOOP ON ONE PAD";
+        const char h2[] = "CENTER: SPLIT  CLEAR: REMOVE  ADD + CLEAR: TRUNCATE  ADD + CENTER: FIT TEMPO  PASTE: PADS  ADD + PASTE: LOOP";
         lcd.drawText(h2, strlen(h2), 30, 438);
         lcd.setAlignment(RIGHT);
-        const char h3[] = "TAP LAYER INST: BACK";
-        lcd.drawText(h3, strlen(h3), 930, 420);
+        const char h3[] = "UP / DOWN: ZOOM   LAYER INST: BACK";
+        lcd.drawText(h3, strlen(h3), 930, 140);
         pageFullRedraw = false;
     }
     lcd_drawChopKnobs();
@@ -7280,6 +7395,7 @@ void Controller::page_drawChop() {
         if (yMin > yMax) lcd.drawVLine(x, yMax, yMin - yMax + 1); else lcd.drawPixel(x, mid);
         if (cut) { lcd.setForeColor(kThemeAccent); lcd.drawVLine(x, gTop, gBot - gTop + 1); }
         else if (endCut) { lcd.setForeColor(kThemeAmber); lcd.drawVLine(x, gTop, gBot - gTop + 1); }
+        if (chopPlay && (chopPlayPos >= a0) && (chopPlayPos < a1)) { lcd.setForeColor(kThemeInk); lcd.drawVLine(x, gTop, gBot - gTop + 1); }   // playhead
     }
     // number tags on the cut lines (selected = amber), skipped where they would overlap
     lcd.setFont(FONT_07x09);
@@ -7305,12 +7421,7 @@ void Controller::page_drawChop() {
     // ---- slices / beats / tempo line, and the overview while zoomed
     const uint32_t loop = (chopEnd > chopMark[0]) ? (chopEnd - chopMark[0]) : 1;
     const float loopSec = (float)loop / 44100.0f;
-    const float bpmNow = (float)(rhythm.tempo ? rhythm.tempo : 90);
-    static const uint8_t beatChoices[10] = {1, 2, 3, 4, 6, 8, 12, 16, 24, 32};
-    const float raw = loopSec * bpmNow / 60.0f;
-    uint8_t beats = 1;
-    float best = 1e9f;
-    for (uint8_t q = 0; q < 10; q++) { const float d = fabsf(logf((float)beatChoices[q] / (raw > 0.01f ? raw : 0.01f))); if (d < best) { best = d; beats = beatChoices[q]; } }
+    const uint8_t beats = chop_beats(loop);
     const unsigned bpm10 = (unsigned)((float)beats * 600.0f / loopSec + 0.5f);
     const unsigned totMs = (unsigned)(((uint64_t)chopLen * 1000) / 44100);
     unsigned placed = 0;
@@ -8579,10 +8690,32 @@ void Controller::pitch_knob(uint8_t which_, int8_t step_) {
         case 6: { int16_t v = (int16_t)L.pitch + step_; if (v < kMinLayerPitch) v = kMinLayerPitch; if (v > kMaxLayerPitch) v = kMaxLayerPitch; layerInst_setPitch(pitchLayer, (uint8_t)v); } break;
         case 0: pitchLayer = (uint8_t)((pitchLayer + kLayerLibrarySize + step_) % kLayerLibrarySize); break;
         case 1:
-            if (L.sliceCount > 0) { L.sliceOff = (step_ < 0); break; }   // custom: drums with slices: SLICES ON / OFF
+            if (L.sliceCount > 0) {   // custom: drums with slices: OFF / STEP / SYNC
+                int8_t m = L.sliceOff ? 0 : (L.sliceSync ? 2 : 1);
+                m = (int8_t)(m + ((step_ > 0) ? 1 : -1));
+                if (m < 0) m = 0;
+                if (m > 2) m = 2;
+                L.sliceOff = (m == 0);
+                L.sliceSync = (m == 2);
+                if (L.sliceSync && (L.sliceBeats == 0)) L.sliceBeats = slice_beats(pitchLayer);
+                break;
+            }
             pitchRoot = (uint8_t)((pitchRoot + 12 + step_) % 12);
             break;
-        case 2: pitchScale = (uint8_t)((pitchScale + kPitchScaleCount + step_) % kPitchScaleCount); break;
+        case 2:
+            if (L.sliceCount > 0) {   // custom: slicer drum - BEATS the loop lasts (SYNC)
+                static const uint8_t bc[10] = {1, 2, 3, 4, 6, 8, 12, 16, 24, 32};
+                uint8_t cur = L.sliceBeats ? L.sliceBeats : slice_beats(pitchLayer);
+                int8_t q = 0;
+                for (uint8_t z = 0; z < 10; z++) if (bc[z] <= cur) q = (int8_t)z;
+                q = (int8_t)(q + step_);
+                if (q < 0) q = 0;
+                if (q > 9) q = 9;
+                L.sliceBeats = bc[q];
+                break;
+            }
+            pitchScale = (uint8_t)((pitchScale + kPitchScaleCount + step_) % kPitchScaleCount);
+            break;
         case 3: {
             int8_t o = pitchOctave + step_;   // half-octave steps (6 semitones), +-2 octaves
             if (o < -4) o = -4;
@@ -8718,7 +8851,7 @@ void Controller::lcd_drawIo_PitchData() {
         lcd.drawText(kLayerPitchDataLibrary[LL.pitch].nameLongR, kMenuDataTextSize, kMenuDataX[6], kMenuDataY[6]);
         return;
     }
-    const char* hdr[8] = {"PITCH-DRUM", (L.sliceCount > 0) ? "SLICES    " : "ROOT      ", "SCALE     ", "OCTAVE    ", "ROOT-PAD  ", "LEVEL     ", "TUNE      ", "GATE      "};
+    const char* hdr[8] = {"PITCH-DRUM", (L.sliceCount > 0) ? "SLICES    " : "ROOT      ", (L.sliceCount > 0) ? "BEATS     " : "SCALE     ", "OCTAVE    ", "ROOT-PAD  ", "LEVEL     ", "TUNE      ", "GATE      "};
     lcd_setMenuHeaderState(CYAN);
     for (uint8_t k = 0; k < 8; k++) lcd.drawText(hdr[k], kMenuHeaderTextSize, kMenuHeaderX[k], kMenuHeaderY[k]);
     lcd_setMenuSignState(CYAN);
@@ -8731,12 +8864,13 @@ void Controller::lcd_drawIo_PitchData() {
     snprintf(text, sizeof(text), "%02u %7.7s", pitchLayer + 1, (*nm) ? nm : "-");
     lcd.drawText(text, kMenuDataTextSize, kMenuDataX[0], kMenuDataY[0]);
     if (L.sliceCount > 0) {   // custom: slicer drum - SLICES ON / OFF
-        if (L.sliceOff) snprintf(text, sizeof(text), "%10s", "OFF"); else snprintf(text, sizeof(text), "%7u ON", L.sliceCount);
+        if (L.sliceOff) snprintf(text, sizeof(text), "%10s", "OFF"); else snprintf(text, sizeof(text), "%10s", L.sliceSync ? "SYNC" : "STEP");
     } else {
         snprintf(text, sizeof(text), "%10s", kPitchNoteName[pitchRoot % 12]);
     }
     lcd.drawText(text, kMenuDataTextSize, kMenuDataX[1], kMenuDataY[1]);
-    snprintf(text, sizeof(text), "%10.10s", kPitchScaleName[pitchScale % kPitchScaleCount]);
+    if (L.sliceCount > 0) snprintf(text, sizeof(text), "%10u", L.sliceBeats ? L.sliceBeats : slice_beats(pitchLayer));   // custom
+    else snprintf(text, sizeof(text), "%10.10s", kPitchScaleName[pitchScale % kPitchScaleCount]);
     lcd.drawText(text, kMenuDataTextSize, kMenuDataX[2], kMenuDataY[2]);
     {   // shown in octaves with halves: -2, -1.5 ... +1.5, +2 (no float printf)
         char o[8];
@@ -11320,6 +11454,9 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
                             layerLibrary[l].revSend = ((v & 0x0F) <= 10) ? (v & 0x0F) : 0;
                             layerLibrary[l].muteGroup = (((v >> 4) & 0x07) <= 4) ? ((v >> 4) & 0x07) : 0;   // custom: mute group
                             layerLibrary[l].sliceOff = (v & 0x80) != 0;                                  // custom: slices off
+                            const uint8_t w = (data[kSliceFileAddr + kLayerLibrarySize] == kSliceFileMark) ? data[kSliceFileAddr + l] : 0;
+                            layerLibrary[l].sliceSync = (w & 0x80) != 0;                                 // custom: slicer SYNC + BEATS
+                            layerLibrary[l].sliceBeats = ((w & 0x3F) <= 32) ? (w & 0x3F) : 0;
                         }
                     }
                     {   // custom: Song mode
@@ -11734,6 +11871,8 @@ void Controller::sd_encodeProject(uint8_t* data) {
     data[178] = kReverbTypeFileMark | reverb.type;   // custom: reverb type
     data[179] = kRouteModeFileMark | (uint8_t)((routeLaneRev & 0x03) << 2) | (routeMode & 0x01);   // custom: layout + lane reverb
     for (uint8_t l = 0; l < kLayerLibrarySize; l++) data[kRevSendFileAddr + l] = (uint8_t)((layerLibrary[l].revSend & 0x0F) | ((layerLibrary[l].muteGroup & 0x07) << 4) | (layerLibrary[l].sliceOff ? 0x80 : 0));   // custom: reverb send + mute group + slices off
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) data[kSliceFileAddr + l] = (uint8_t)((layerLibrary[l].sliceBeats & 0x3F) | (layerLibrary[l].sliceSync ? 0x80 : 0));   // custom: slicer SYNC + BEATS
+    data[kSliceFileAddr + kLayerLibrarySize] = kSliceFileMark;
     data[kRevSendFileAddr + kLayerLibrarySize] = kRevSendFileMark;
     {   // custom: Song mode (34 bytes in unused bytes 87-99 of drums 2-4's asset blocks)
         auto at = [](uint8_t k_) -> uint16_t { return (uint16_t)(500 + 100 * (1 + k_ / 13) + 87 + (k_ % 13)); };
@@ -12231,6 +12370,9 @@ SdResult Controller::sd_loadDrumkit(uint8_t kitNum_) {
                             layerLibrary[l].revSend = ((v & 0x0F) <= 10) ? (v & 0x0F) : 0;
                             layerLibrary[l].muteGroup = (((v >> 4) & 0x07) <= 4) ? ((v >> 4) & 0x07) : 0;   // custom: mute group
                             layerLibrary[l].sliceOff = (v & 0x80) != 0;                                  // custom: slices off
+                            const uint8_t w = (data[kSliceFileAddr + kLayerLibrarySize] == kSliceFileMark) ? data[kSliceFileAddr + l] : 0;
+                            layerLibrary[l].sliceSync = (w & 0x80) != 0;                                 // custom: slicer SYNC + BEATS
+                            layerLibrary[l].sliceBeats = ((w & 0x3F) <= 32) ? (w & 0x3F) : 0;
                         }
                     }
                     if ((data[500 + kMetroRouteFileOffset] & 0xF0) == kMetroRouteFileMark) {
@@ -12562,6 +12704,8 @@ SdResult Controller::sd_saveDrumkit(uint8_t kitNum_) {
     data[178] = kReverbTypeFileMark | reverb.type;   // custom: reverb type
     data[179] = kRouteModeFileMark | (uint8_t)((routeLaneRev & 0x03) << 2) | (routeMode & 0x01);   // custom: layout + lane reverb
     for (uint8_t l = 0; l < kLayerLibrarySize; l++) data[kRevSendFileAddr + l] = (uint8_t)((layerLibrary[l].revSend & 0x0F) | ((layerLibrary[l].muteGroup & 0x07) << 4) | (layerLibrary[l].sliceOff ? 0x80 : 0));   // custom: reverb send + mute group + slices off
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) data[kSliceFileAddr + l] = (uint8_t)((layerLibrary[l].sliceBeats & 0x3F) | (layerLibrary[l].sliceSync ? 0x80 : 0));   // custom: slicer SYNC + BEATS
+    data[kSliceFileAddr + kLayerLibrarySize] = kSliceFileMark;
     data[kRevSendFileAddr + kLayerLibrarySize] = kRevSendFileMark;
     data[500 + kMetroRouteFileOffset] = kMetroRouteFileMark | ((uint8_t)metronome.mixerInMode & 0x0F);   // custom: where the metronome goes
     data[168] = reverb.size;
@@ -19692,7 +19836,7 @@ void Controller::mixer_reset() {
     padVelocity = 16; humanize = 0; levelsSoftest = 4;   // custom: velocity settings
     memset(songSteps, 0, sizeof(songSteps));
     routeLaneRev = 0;
-    for (uint8_t l = 0; l < kLayerLibrarySize; l++) { layerLibrary[l].revSend = 0; layerLibrary[l].muteGroup = 0; }   // custom
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) { layerLibrary[l].revSend = 0; layerLibrary[l].muteGroup = 0; layerLibrary[l].sliceSync = false; layerLibrary[l].sliceBeats = 0; }   // custom
     /// @brief Restores mixer mute, level, routing, and dynamics parameters to default values.
 
     // 1. MUTE STATE RESET
@@ -29078,6 +29222,20 @@ void Controller::processAudioSend(uint32_t* outputBuffer) {
         }
     }
 
+    // Custom: the Chop page playing its take (REC), straight to the output
+    if (chopPlay) {
+        const int16_t* src = (const int16_t*)(RAM_UNDO_ADDRESS);
+        const float g = kLayerVolumeCoef * mixer.masterVolumeFloat * chopGain / 32768.0f;
+        uint32_t p = chopPlayPos;
+        for (uint16_t i = 0; i < I2S_BLOCK_SIZE; i++) {
+            if (p >= chopEnd) { chopPlay = false; break; }
+            const float v = (float)src[p++] * g;
+            audioSend_L[i] += v;
+            audioSend_R[i] += v;
+        }
+        chopPlayPos = p;
+    }
+
     // Accumulate all active layer signals
     for (uint8_t i = 0; i < kLayerLibrarySize; i++) {
         if (layerPlayData[i].activeBeatPlayData.mixerInMode == MIXER_IN_SEND) {
@@ -30055,6 +30213,24 @@ void Controller::interruptPlay() {
             // Iterate through all layers and trigger simple/complex beat events.
             for (uint8_t i = 0; i < kLayerLibrarySize; i++) {
                 Layer& layer = layerLibrary[i];
+                // Custom: slicer drum in SYNC - the loop plays itself, each slice at its own place
+                // in BEATS, whatever the tempo (slices keep their speed; the gaps move).
+                if (layer.sliceSync && slicerOn(i) && !layer.mute && layer.samplePlay && (layer.sliceBeats > 0)) {
+                    const uint32_t L = (uint32_t)layer.sliceBeats * kMeasureInterval;
+                    const uint32_t len = layer.sampleLoadedData.sampleSize;
+                    const uint32_t pos = playInterval % L;
+                    if (len > 0) {
+                        for (uint8_t k = 0; k < layer.sliceCount; k++) {
+                            const uint32_t at = (uint32_t)(((uint64_t)(layer.slicePos[k] - layer.slicePos[0]) * L) / len);
+                            if (at == pos) {
+                                pendingNote[i] = (int8_t)(k + 1);
+                                layer_playBeat(layer.number, 1.0f);
+                                pendingNote[i] = 0;
+                                break;
+                            }
+                        }
+                    }
+                }
                 Bank& bank = layer.bankLibrary[activeSongBank];
                 int8_t playBeatNum = bank.playBeatNum;
                 int8_t playBeatMicroNum = bank.playBeatMicroNum;

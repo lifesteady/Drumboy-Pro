@@ -2063,6 +2063,8 @@ const uint8_t kLaneFileMark                         = 0xD0;   // drum byte 24 = 
 const uint8_t kMetroRouteFileMark                   = 0xE0;   // byte 500 + 88 = 0xE0 | metronome route
 const uint16_t kRevSendFileAddr                     = 1087;   // custom: 10 reverb sends at 1087-1096, marker at 1097 (drum 6 asset block, unused bytes)
 const uint8_t kRevSendFileMark                      = 0xA7;
+const uint16_t kSliceFileAddr                       = 1187;   // custom: slicer SYNC + BEATS per drum at 1187-1196 (drum 7 asset block), marker at 1197
+const uint8_t kSliceFileMark                        = 0xA9;
 const uint16_t kMetroRouteFileOffset                = 88;     // inside drum 1's asset block (unused bytes)
 
 const MixerInMode kInitialMixerLiMixerInMode        = MIXER_IN_EQ;
@@ -2406,7 +2408,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.20 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.21 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -7671,6 +7673,8 @@ struct Layer {
     uint8_t sliceCount                              = 0;                // custom: slicer drum - cue markers in its sample (0: none)
     uint32_t slicePos[16]                           = {0};              // custom: slice starts (samples)
     bool sliceOff                                   = false;            // custom: slices switched off on the Notes page
+    bool sliceSync                                  = false;            // custom: SYNC - the loop plays itself on the clock
+    uint8_t sliceBeats                              = 0;                // custom: beats the loop lasts (0: worked out when needed)
     uint8_t envAttack                               = kInitialEnvAttack;   // custom envelope (0-100)
     uint8_t envHold                                 = kInitialEnvHold;
     uint8_t envDecay                                = kInitialEnvDecay;
