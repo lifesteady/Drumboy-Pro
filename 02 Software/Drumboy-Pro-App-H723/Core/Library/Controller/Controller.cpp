@@ -6566,6 +6566,10 @@ bool Controller::sampling_save() {
     char base[16];
     snprintf(base, sizeof(base), "REC_%03u", num);
     chop_begin(base, sampLayer);
+    chopFromTake = true;
+    strncpy(chopTakePath, path, sizeof(chopTakePath) - 1);
+    chopTakePath[sizeof(chopTakePath) - 1] = 0;
+    chopTakeLayer = sampLayer;
     undo_showText("SAVED");
     return true;
 }
@@ -6591,6 +6595,7 @@ void Controller::chop_begin(const char* base_, uint8_t firstPad_) {
     chopAutoSens = 0;
     chopEqualIdx = 0;
     chopGroup = 0;
+    chopFromTake = false;
     for (uint8_t k = 0; k < kChopMaxSlices; k++) { chopPadOf[k] = -1; chopSavedIdx[k] = -1; }
     chopFirstPad = (firstPad_ < kLayerLibrarySize) ? firstPad_ : 0;
     chopActive = true;
@@ -6743,6 +6748,7 @@ bool Controller::chop_key(uint8_t key_) {
             chopSel++;
         } break;
         case KEY_CLEAR: {   // remove the selected slice (it joins the one before it)
+            if (keyboard.shiftKeyPress) { chop_truncate(); break; }   // ADD + CLEAR: truncate
             if (chopN <= 1) return true;
             const uint8_t r = (chopSel == 0) ? 1 : chopSel;   // removing slice 1 keeps its start
             for (uint8_t k = r; k + 1 < chopN; k++) { chopMark[k] = chopMark[k + 1]; chopPadOf[k] = chopPadOf[k + 1]; chopSavedIdx[k] = chopSavedIdx[k + 1]; }
@@ -6915,6 +6921,34 @@ void Controller::chop_auto() {
     chopSel = 0;
 }
 
+void Controller::chop_truncate() {
+    /// @brief ADD + CLEAR: throw away everything before slice 1 and after TAKE END. If the take is
+    /// our own recording its file is rewritten (and reloaded on its drum); a library sample is only
+    /// cut here in memory (the original file is left alone).
+    const uint32_t m0 = chopMark[0];
+    if ((m0 == 0) && (chopEnd >= chopLen)) { undo_showText("NONE "); return; }
+    const uint32_t n = chopEnd - m0;
+    int16_t* b = sampBuf();
+    memmove(b, b + m0, n * sizeof(int16_t));
+    for (uint8_t k = 0; k < chopN; k++) chopMark[k] -= m0;
+    chopLen = n;
+    chopEnd = n;
+    chopZoom = 0;
+    if (chopFromTake) {
+        keyboard_disable();
+        const bool ok = sampling_writeWav(chopTakePath, b, n, 1.0f);
+        keyboard_enable();
+        Layer& layer = layerLibrary[chopTakeLayer];
+        if (ok && (strcmp(layer.sampleLoadedData.fileName, chopTakePath) == 0) && (layer.instSelected == layer.instLoaded) && (layer.sampleLoaded >= 0)) {
+            layerInst_setSampleSelected(chopTakeLayer, layer.sampleLoaded);   // reads the new length
+            memset(layer.sampleLoadedData.fileName, 0, sizeof(layer.sampleLoadedData.fileName));
+            layerInst_setSampleLoaded(chopTakeLayer);
+        }
+        if (!ok) { undo_showText("ERROR"); return; }
+    }
+    undo_showText("CUT  ");
+}
+
 bool Controller::chop_putSlice(uint8_t i_, uint8_t pad_) {
     /// @brief One slice -> Sample/RECORDED/<name>_nn.wav (written again if it changed) and loaded
     /// onto a pad, in this take's mute group. Longer than a pad: cut to 5.4 s.
@@ -7054,7 +7088,7 @@ void Controller::page_drawChop() {
         lcd.setForeColor(kThemeHeader);
         const char h1[] = "PADS: HEAR A SLICE   ADD + PAD: PUT THIS SLICE THERE   LEFT / RIGHT: SLICE   UP / DOWN: ZOOM";
         lcd.drawText(h1, strlen(h1), 30, 420);
-        const char h2[] = "CENTER: SPLIT   CLEAR: REMOVE   PASTE: ALL SLICES FROM FIRST PAD";
+        const char h2[] = "CENTER: SPLIT   CLEAR: REMOVE   ADD + CLEAR: TRUNCATE   PASTE: ALL SLICES FROM FIRST PAD";
         lcd.drawText(h2, strlen(h2), 30, 438);
         lcd.setAlignment(RIGHT);
         const char h3[] = "TAP LAYER INST: BACK";

@@ -608,6 +608,10 @@ class Controller {
     int16_t chopSavedIdx[kChopMaxSlices];                               // its entry in the RECORDED list (-1: not saved)
     uint8_t chopGroup = 0;                                              // mute group the slices of this take share
     bool chop_putSlice(uint8_t i_, uint8_t pad_);
+    void chop_truncate();
+    bool chopFromTake = false;                                          // the take is our own recording (its file may be rewritten)
+    char chopTakePath[64] = "";
+    uint8_t chopTakeLayer = 0;
     void choke(uint8_t layerNum_);                                      // custom: mute groups
     volatile uint8_t sampState = 0;                                     // 0 idle, 1 armed, 2 recording, 3 done (to save), 4 saving
     uint8_t sampLayer = 0;
