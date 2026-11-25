@@ -1894,6 +1894,8 @@ void Controller::keyboard_action() {
                                         keyboard.upKeyFlag = true;
                                         startUpKeyTimer();
                                     }
+                                    // custom: Song page: + / - = this step's sequence (ADD held: its repeats)
+                                    if (page == PAGE_SONG) { song_knob(keyboard.shiftKeyPress ? 2 : 1, 1); break; }
                                     switch (menu) {
                                         case FILE_MENU:
                                             file_menuUp();
@@ -1965,6 +1967,7 @@ void Controller::keyboard_action() {
                                         keyboard.downKeyFlag = true;
                                         startDownKeyTimer();
                                     }
+                                    if (page == PAGE_SONG) { song_knob(keyboard.shiftKeyPress ? 2 : 1, -1); break; }   // custom
                                     switch (menu) {
                                         case FILE_MENU:
                                             file_menuDown();
@@ -2030,6 +2033,7 @@ void Controller::keyboard_action() {
                                 break;
 
                             case KEY_LEFT:
+                                if (!alertFlag && (page == PAGE_SONG)) { song_knob(0, -1); break; }   // custom: Song page, previous step
                                 if (!alertFlag) {
                                     switch (menu) {
                                         case FILE_MENU:
@@ -2098,6 +2102,7 @@ void Controller::keyboard_action() {
                                 break;
 
                             case KEY_RIGHT:
+                                if (!alertFlag && (page == PAGE_SONG)) { song_knob(0, 1); break; }   // custom: Song page, next step
                                 if (!alertFlag) {
                                     switch (menu) {
                                         case FILE_MENU:
@@ -3012,6 +3017,7 @@ void Controller::keyboard_disable() {
 void Controller::keyboard_upLong() {
     /// @brief Handles long-press UP navigation with menu-specific guard conditions.
     /// Skips non-scrollable tabs and dispatches to the active menu handler.
+    if (page == PAGE_SONG) { song_knob(keyboard.shiftKeyPress ? 2 : 1, 1); return; }   // custom
 
     // 1. MENU DISPATCH
     switch (menu) {
@@ -3089,6 +3095,7 @@ void Controller::keyboard_downLong() {
     /// Skips non-scrollable tabs and dispatches to the active menu handler.
 
     // 1. MENU DISPATCH
+    if (page == PAGE_SONG) { song_knob(keyboard.shiftKeyPress ? 2 : 1, -1); return; }   // custom
     switch (menu) {
         case FILE_MENU:
             file_menuDown();
@@ -7870,9 +7877,9 @@ void Controller::page_drawSong() {
         lcd.setFont(FONT_07x09);
         lcd.setAlignment(LEFT);
         lcd.setForeColor(kThemeHeader);
-        const char h1[] = "PADS: SEQUENCE FOR THIS STEP (PADS 1-2 = 1, 3-4 = 2 ... 9-10 = 5), THEN ON TO THE NEXT STEP";
+        const char h1[] = "PADS: SEQUENCE FOR THIS STEP   PADS 1-2: 1, 3-4: 2 ... 9-10: 5   THEN ON TO THE NEXT STEP";
         lcd.drawText(h1, strlen(h1), 30, 420);
-        const char h2[] = "SONG MODE ON: PLAY FROM THE TOP PLAYS THE STEPS IN ORDER";
+        const char h2[] = "LEFT / RIGHT: STEP   + / -: SEQUENCE   HOLD ADD WITH + / -: REPEATS";
         lcd.drawText(h2, strlen(h2), 30, 438);
         lcd.setAlignment(RIGHT);
         const char h3[] = "SONG KEY: BACK";
