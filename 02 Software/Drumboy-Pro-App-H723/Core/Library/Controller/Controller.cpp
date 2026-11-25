@@ -14178,7 +14178,7 @@ void Controller::lcd_drawEncoderBankTab() {
 
     // Custom: this corner shows the PAD BANK now (the KNOB key is the BANK key): a square in the
     // bank's colour (A orange, B yellow, C green, D purple) with BANK and the letter in white.
-    const RGB16Color k = kBankColor[liveBank % kPadBankCount];
+    const RGB16Color k = kBankSquare[liveBank % kPadBankCount];
     lcd.setForeColor(k);
     lcd.fillRect(30, 454, 92, 54);
     lcd.setBackColor(k);
