@@ -512,6 +512,7 @@ class Controller {
     void pitch_update();
     void layerSong_noteKnob(int8_t step_);
     void layerSong_gateKnob(int8_t step_);
+    void layerSong_bankKnob(int8_t step_);   // custom: pad bank of the selected hit
     void lcd_drawLayerSong_NoteGateData(uint8_t layerNum_);
     uint8_t vel_pad();
     float vel_gain(uint8_t v_) const { return kVelGain[(v_ >= 1 && v_ <= 16) ? v_ : 16]; }

@@ -4211,6 +4211,7 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
         case ENC_ROUTE_LANEREV: route_knob(7, 1); break;
         case ENC_SONG_NOTE: layerSong_noteKnob(1); break;
         case ENC_SONG_GATE: layerSong_gateKnob(1); break;
+        case ENC_SONG_BANK: layerSong_bankKnob(1); break;   // custom
         case ENC_SM_STEP: song_knob(0, 1); break;
         case ENC_SM_BANK: song_knob(1, 1); break;
         case ENC_SM_REPEAT: song_knob(2, 1); break;
@@ -4841,6 +4842,7 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
         case ENC_ROUTE_LANEREV: route_knob(7, -1); break;
         case ENC_SONG_NOTE: layerSong_noteKnob(-1); break;
         case ENC_SONG_GATE: layerSong_gateKnob(-1); break;
+        case ENC_SONG_BANK: layerSong_bankKnob(-1); break;   // custom
         case ENC_SM_STEP: song_knob(0, -1); break;
         case ENC_SM_BANK: song_knob(1, -1); break;
         case ENC_SM_REPEAT: song_knob(2, -1); break;
@@ -8116,6 +8118,8 @@ void Controller::page_drawSample() {
 typedef uint8_t MainLaneRow[kMainGridW];
 static MainLaneRow* const mainAtt = (MainLaneRow*)(RAM_MAIN_ADDRESS);                                        // attack height 0-255
 static MainLaneRow* const mainTail = (MainLaneRow*)(RAM_MAIN_ADDRESS + kLayerLibrarySize * kMainGridW);      // decay tail height 0-255
+static MainLaneRow* const mainBk = (MainLaneRow*)(RAM_MAIN_ADDRESS + 0x3C000);   // custom: pad bank per column (high nibble attack, low nibble tail)
+static_assert(RAM_SEQ_CLIP_ADDRESS + kLayerLibrarySize * sizeof(Bank) <= RAM_MAIN_ADDRESS + 0x3C000, "sequence clipboard overlaps the main-screen bank table");
 static int16_t mainSelCol = -1;                            // selected hit column (SEQ menu), drawn violet
 static uint16_t* const stripBits = (uint16_t*)(RAM_MAIN_ADDRESS + 2 * kLayerLibrarySize * kMainGridW + 8);   // overview strip lane bits
 static bool stripDirty = true;
@@ -8157,6 +8161,7 @@ void Controller::main_buildLane(uint8_t lane_) {
     /// @brief Turns one drum's hits in the visible window into attack / tail heights per column.
     memset(mainAtt[lane_], 0, kMainGridW);
     memset(mainTail[lane_], 0, kMainGridW);
+    memset(mainBk[lane_], 0, kMainGridW);
     if ((int8_t)lane_ == mainExpanded) mainSelCol = -1;
     const Layer& L = layerLibrary[lane_];
     const Bank& bank = L.bankLibrary[activeSongBank];
@@ -8181,11 +8186,13 @@ void Controller::main_buildLane(uint8_t lane_) {
     static uint8_t hV[kBeatLibrarySize * 4];
     static int8_t hBeat[kBeatLibrarySize * 4];
     static uint16_t hG[kBeatLibrarySize * 4];
+    static uint8_t hB[kBeatLibrarySize * 4];   // custom: pad bank of the hit
     memset(hG, 0, sizeof(hG));
     uint16_t n = 0;
     for (int16_t j = 0; (j <= bank.lastActiveBeatNum) && (n < kBeatLibrarySize * 4 - 1); j++) {
         const Beat& b = bank.beatLibrary[j];
         if (!b.getActive()) continue;
+        const uint16_t n0 = n;
         if ((b.getFillType() == 0) && (b.getFillPattern() <= 2) && (b.getFillTarget() == NULL_FILL_TARGET)) {
             const uint8_t p = b.getFillPattern();
             hT[n] = b.getStartInterval(); hV[n] = (uint8_t)((((p == 0) ? 255 : ((p == 1) ? 128 : 40)) * (uint32_t)b.getVel()) / 16); hBeat[n] = (int8_t)j; hG[n] = b.getGate(); n++;
@@ -8199,6 +8206,7 @@ void Controller::main_buildLane(uint8_t lane_) {
         } else {
             hT[n] = b.getStartInterval(); hV[n] = 255; hBeat[n] = (int8_t)j; n++;
         }
+        for (uint16_t k = n0; k < n; k++) hB[k] = b.getBank();
     }
     for (uint16_t i = 0; i < n; i++) {
         const uint32_t t = hT[i];
@@ -8215,11 +8223,11 @@ void Controller::main_buildLane(uint8_t lane_) {
         for (int32_t c = (c0 < 0 ? 0 : c0); (c <= c1) && (c < kMainGridW); c++) {
             const float f = 1.0f - (float)(c - c0) / (float)len;
             const uint8_t th = (uint8_t)(hV[i] * f * f);
-            if (th > mainTail[lane_][c]) mainTail[lane_][c] = th;
+            if (th > mainTail[lane_][c]) { mainTail[lane_][c] = th; mainBk[lane_][c] = (uint8_t)((mainBk[lane_][c] & 0xF0) | hB[i]); }
         }
         if ((c0 >= 0) && (c0 < kMainGridW)) {
-            if (hV[i] > mainAtt[lane_][c0]) mainAtt[lane_][c0] = hV[i];
-            if ((c0 + 1 < kMainGridW) && (hV[i] > mainAtt[lane_][c0 + 1])) mainAtt[lane_][c0 + 1] = hV[i];
+            if (hV[i] > mainAtt[lane_][c0]) { mainAtt[lane_][c0] = hV[i]; mainBk[lane_][c0] = (uint8_t)((mainBk[lane_][c0] & 0x0F) | (hB[i] << 4)); }
+            if ((c0 + 1 < kMainGridW) && (hV[i] > mainAtt[lane_][c0 + 1])) { mainAtt[lane_][c0 + 1] = hV[i]; mainBk[lane_][c0 + 1] = (uint8_t)((mainBk[lane_][c0 + 1] & 0x0F) | (hB[i] << 4)); }
             if (((int8_t)lane_ == mainExpanded) && (menu == LAYER_SONG_MENU) && (hBeat[i] >= 0) && (hBeat[i] == selectedBeatNum)) mainSelCol = (int16_t)c0;
         }
     }
@@ -8256,6 +8264,10 @@ void Controller::main_renderColumn(uint16_t col_, uint16_t row0_, uint16_t rows_
         const bool sel = ((int8_t)l == mainExpanded);
         const Layer& L = layerLibrary[l];
         const RGB16Color base = sel ? cAcc : (L.mute ? cMid : cInk);
+        // custom: hits from pad banks B-D are tinted in their bank colour (A keeps the lane colour)
+        static const RGB16Color kBankTint[kPadBankCount] = {0, kThemeAmber, CYAN, RGB16Color(0xB45F)};
+        const uint8_t bkv = mainBk[l][col_];
+        auto bankBase = [&](uint8_t b_) -> RGB16Color { return b_ ? (L.mute ? mix565(cMid, kBankTint[b_], 0.4f) : kBankTint[b_]) : base; };
         const RGB16Color bg = pastEnd ? cBlack : (sel ? cSelBg : (shadeBar ? cShade : cBlack));
         for (uint16_t r = 0; r < h; r++) {
             RGB16Color c = bg;
@@ -8272,13 +8284,13 @@ void Controller::main_renderColumn(uint16_t col_, uint16_t row0_, uint16_t rows_
         const uint8_t tv = mainTail[l][col_];
         if (tv) {
             const uint16_t th = (uint16_t)((uint32_t)room * tv / 255);
-            const RGB16Color tc = mix565(cBlack, base, 0.15f + 0.30f * (tv / 255.0f));
+            const RGB16Color tc = mix565(cBlack, bankBase(bkv & 0x03), 0.15f + 0.30f * (tv / 255.0f));
             for (uint16_t r = 0; r <= th; r++) buf[floor - r] = tc;
         }
         const uint8_t av = mainAtt[l][col_];
         if (av) {
             const uint16_t ah = (uint16_t)((uint32_t)room * av / 255);
-            RGB16Color ac = mix565(cBlack, base, 0.6f + 0.4f * (av / 255.0f));
+            RGB16Color ac = mix565(cBlack, bankBase((bkv >> 4) & 0x03), 0.6f + 0.4f * (av / 255.0f));
             if (sel && (mainSelCol >= 0) && ((col_ == (uint16_t)mainSelCol) || (col_ == (uint16_t)mainSelCol + 1))) ac = kThemeSelect;
             for (uint16_t r = 0; r <= ah; r++) buf[floor - r] = ac;
         }
@@ -18154,6 +18166,7 @@ void Controller::lcd_drawLayerSongMenu(uint8_t layerNum_) {
     lcd.drawText(kHeaderVelocity, kMenuHeaderTextSize, kMenuHeaderX[5], kMenuHeaderY[5]);
     lcd.drawText("NOTE      ", kMenuHeaderTextSize, kMenuHeaderX[6], kMenuHeaderY[6]);   // custom
     lcd.drawText("GATE      ", kMenuHeaderTextSize, kMenuHeaderX[7], kMenuHeaderY[7]);   // custom
+    lcd.drawText("BANK      ", kMenuHeaderTextSize, kMenuHeaderX[2], kMenuHeaderY[2]);   // custom: pad bank of the hit
 
     // 4. DATA DRAW
     // Draw beat-fill values and graph.
@@ -18168,6 +18181,7 @@ void Controller::lcd_drawLayerSongMenu(uint8_t layerNum_) {
     lcd_setMenuSignState(CYAN);
     lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[0], kMenuSignBoxY[0]);
     lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[1], kMenuSignBoxY[1]);
+    lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[2], kMenuSignBoxY[2]);   // custom: BANK
     lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[4], kMenuSignBoxY[4]);
     lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[5], kMenuSignBoxY[5]);
     lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[6], kMenuSignBoxY[6]);
@@ -27992,7 +28006,18 @@ void Controller::lcd_drawLayerSong_NoteGateData(uint8_t layerNum_) {
         if (g == 0) snprintf(t, sizeof(t), "%10s", "RING OUT");
         else snprintf(t, sizeof(t), "%7u/32", (unsigned)((g + 50) / 100));
         lcd.drawText(t, kMenuDataTextSize, kMenuDataX[7], kMenuDataY[7]);
+        // custom: the hit's pad bank, in the bank's colour; EMPTY when that bank has no sound on this pad
+        static const RGB16Color kBankCol[kPadBankCount] = {kThemeAccent, kThemeAmber, CYAN, RGB16Color(0xB45F)};
+        const uint8_t bk = b.getBank();
+        const bool has = bank_samplePlay(layerNum_, bk);
+        char bt[10];
+        snprintf(bt, sizeof(bt), has ? "%c" : "%c EMPTY", (char)('A' + bk));
+        snprintf(t, sizeof(t), "%10s", bt);
+        lcd_setMenuDataState(has ? kBankCol[bk] : kThemeMid);
+        lcd.drawText(t, kMenuDataTextSize, kMenuDataX[2], kMenuDataY[2]);
+        lcd_setMenuDataState(WHITE);
     } else {
+        lcd.drawText(kDataDashR, kMenuDataTextSize, kMenuDataX[2], kMenuDataY[2]);   // custom
         lcd.drawText(kDataDashR, kMenuDataTextSize, kMenuDataX[6], kMenuDataY[6]);
         lcd.drawText(kDataDashR, kMenuDataTextSize, kMenuDataX[7], kMenuDataY[7]);
     }
@@ -28030,6 +28055,30 @@ void Controller::layerSong_gateKnob(int8_t step_) {
     if (g < 0) g = 0;
     if (g > 40) g = 40;
     b.setGate((uint16_t)(g * 100));
+    lcd_drawLayerSong_NoteGateData(selectedLayerNum);
+}
+
+void Controller::layerSong_bankKnob(int8_t step_) {
+    /// @brief Custom: moves the selected hit to another pad bank (A-D) and plays it from there.
+    Bank& bank = layerLibrary[selectedLayerNum].bankLibrary[activeSongBank];
+    if ((selectedBeatNum < 0) || (selectedBeatNum > bank.lastActiveBeatNum)) return;
+    Beat& b = bank.beatLibrary[selectedBeatNum];
+    int8_t nb = (int8_t)b.getBank() + step_;
+    if (nb < 0) nb = 0;
+    if (nb > (int8_t)(kPadBankCount - 1)) nb = kPadBankCount - 1;
+    if (nb == (int8_t)b.getBank()) return;
+    undo_checkpoint(UNDO_FILL);
+    b.setBank((uint8_t)nb);
+    Layer& layer = layerLibrary[selectedLayerNum];
+    if (!playActive && !layer.mute) {
+        pendingNote[selectedLayerNum] = b.note;
+        pendingStep[selectedLayerNum] = (int16_t)(b.getStartInterval() / (kMeasureInterval / 4));
+        __disable_irq();   // the hit borrows the Layer for a moment: keep the sequencer out
+        layer_playBank(selectedLayerNum, vel_gain(b.getVel()), (uint8_t)nb);
+        __enable_irq();
+        pendingNote[selectedLayerNum] = 0;
+        pendingStep[selectedLayerNum] = -1;
+    }
     lcd_drawLayerSong_NoteGateData(selectedLayerNum);
 }
 

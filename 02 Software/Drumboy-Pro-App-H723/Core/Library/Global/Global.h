@@ -1367,7 +1367,8 @@ typedef enum {
     ENC_CH_EQUAL                                    = 0x8E,
     ENC_CH_PAD                                      = 0x8F,
     ENC_CH_END                                      = 0x90,
-    ENC_SMP_GROUP                                   = 0x91   // custom: Sample page, mute group (choke)
+    ENC_SMP_GROUP                                   = 0x91,  // custom: Sample page, mute group (choke)
+    ENC_SONG_BANK                                   = 0x92   // custom: SEQ menu, selected hit's pad bank
 } EncoderFunc;
 
 const EncoderFunc encoderLocalFunction[][8] = {
@@ -1410,7 +1411,7 @@ const EncoderFunc encoderLocalFunction[][8] = {
     // LAYER_INST_2_MENU = 0x11
     {ENC_INST_2_INST, ENC_INST_2_SAMPLE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_INST_2_EQ, ENC_INST_2_FILTER, ENC_INST_2_EFFECT, ENC_INST_2_REVERB},
     // LAYER_SONG_MENU = 0x12
-    {ENC_SONG_FILL, ENC_SONG_PATTERN, ENC_FNC_NONE, ENC_FNC_NONE, ENC_SONG_TIMING, ENC_SONG_VELOCITY, ENC_SONG_NOTE, ENC_SONG_GATE},
+    {ENC_SONG_FILL, ENC_SONG_PATTERN, ENC_SONG_BANK, ENC_FNC_NONE, ENC_SONG_TIMING, ENC_SONG_VELOCITY, ENC_SONG_NOTE, ENC_SONG_GATE},
     // TEST_MENU = 0x13
     {ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE}};
 
@@ -1588,7 +1589,8 @@ const EncoderFuncData kEncoderFuncDataLibrary[] = {
     {ENC_CH_EQUAL,            ENC_RES_S, "EQUAL     ", "CHOP  ", "   ", false},
     {ENC_CH_PAD,              ENC_RES_S, "FIRST PAD ", "CHOP  ", "   ", false},
     {ENC_CH_END,              ENC_RES_F, "TAKE END  ", "CHOP  ", "   ", false},
-    {ENC_SMP_GROUP,           ENC_RES_S, "MUTE GROUP", "LAYER ", "   ", false}
+    {ENC_SMP_GROUP,           ENC_RES_S, "MUTE GROUP", "LAYER ", "   ", false},
+    {ENC_SONG_BANK,           ENC_RES_S, "BANK      ", "SONG  ", "   ", false}
 };
 
 // Knobs while the Song page is open.
@@ -1611,7 +1613,7 @@ const EncoderFunc kSamplePageFunctions[8] = {ENC_INST_0_INST, ENC_INST_0_SAMPLE,
                                              ENC_INST_1_START, ENC_INST_1_END, ENC_SMP_DECAY, ENC_SMP_GROUP};
 
 // The table above is indexed by EncoderFunc value, so every entry must sit at its own enum number.
-static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_SMP_GROUP + 1,
+static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_SONG_BANK + 1,
               "kEncoderFuncDataLibrary must have one entry per EncoderFunc value");
 
 typedef enum {
@@ -2421,7 +2423,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.34 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.35 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
