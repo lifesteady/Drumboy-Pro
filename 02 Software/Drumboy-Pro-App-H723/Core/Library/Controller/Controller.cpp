@@ -2725,9 +2725,8 @@ void Controller::keyboard_action() {
                                 break;
 
                             case KEY_KNOB:
-                                if (padBankKeyPress) {   // custom: tapped alone = next bank
+                                if (padBankKeyPress) {   // custom: banks change only with KNOB held + pad 1-4 (a tap does nothing)
                                     padBankKeyPress = false;
-                                    if (!padBankKeyUsed && !alertFlag) bank_set((uint8_t)((liveBank + 1) % kPadBankCount));
                                     break;
                                 }
                                 keyboard.encKeyPress = false;
