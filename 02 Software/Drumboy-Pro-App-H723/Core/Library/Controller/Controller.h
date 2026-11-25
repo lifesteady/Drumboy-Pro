@@ -595,7 +595,11 @@ class Controller {
     void chop_view(uint32_t& start_, uint32_t& len_);
     uint32_t chop_sliceEnd(uint8_t i_);
     void page_drawChop();
-    void lcd_drawChopKnobs();
+    void lcd_drawChopKnobs(bool full_);
+    void chop_drawColumn(uint16_t c_, uint32_t vs_, uint32_t vl_);
+    void chop_drawTags(uint32_t vs_, uint32_t vl_);
+    void chop_updateHead();
+    int16_t chopHeadCol = -1;
     bool chopActive = false;
     uint32_t chopLen = 0;                                               // samples in the take
     uint32_t chopEnd = 0;                                               // end of the last slice

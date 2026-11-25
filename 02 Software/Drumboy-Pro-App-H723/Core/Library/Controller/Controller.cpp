@@ -6339,12 +6339,10 @@ void Controller::sampling_key() {
 
 void Controller::sampling_update() {
     /// @brief Main loop: live meter about 30 times a second, and saving once a take is done.
-    if (page == PAGE_CHOP) {   // custom: Chop page playhead while the take plays
-        static bool wasPlaying = false;
-        if ((chopPlay || wasPlaying) && ((HAL_GetTick() - chopPlayTick) >= 90)) {
+    if (page == PAGE_CHOP) {   // custom: Chop page playhead while the take plays (two columns at a time)
+        if ((chopPlay || (chopHeadCol >= 0)) && ((HAL_GetTick() - chopPlayTick) >= 25)) {
             chopPlayTick = HAL_GetTick();
-            page_markDirty(PAGE_CHOP);
-            wasPlaying = chopPlay;
+            chop_updateHead();
         }
     }
     if (sampState == 0) return;
@@ -7298,7 +7296,17 @@ void Controller::chop_paste() {
     page_markDirty(PAGE_CHOP);
 }
 
-void Controller::lcd_drawChopKnobs() {
+void Controller::lcd_drawChopKnobs(bool full_) {
+    if (full_) {   // the INST menu's small waveform (slots 3-4) and its small labels go
+        lcd.setBackColor(BLACK);
+        lcd.clearRect(kMenuLineX[2] + 2, kMenuLineY[2], (kMenuDataX[3] + 20) - (kMenuLineX[2] + 2), kMenuLineHeight);
+        lcd.setForeColor(kThemeLine);
+        lcd.drawVLine(kMenuLineX[3], kMenuLineY[3], kMenuLineHeight);
+        for (uint8_t k = 0; k < 8; k++) {
+            const uint16_t y0 = kMenuHeaderY[k] + kMenuHeaderHeight + 1;
+            lcd.clearRect(kMenuLineX[k] + 2, y0, 170, kMenuDataY[k] - 1 - y0);
+        }
+    }
     const char* hdr[8] = {"SLICE     ", "MOVE      ", "FINE      ", "PITCH     ", "AUTO CHOP ", "EQUAL     ", "FIRST PAD ", "TAKE END  "};
     static const uint8_t counts[7] = {1, 2, 3, 4, 6, 8, 10};
     char t[16];
@@ -7332,6 +7340,85 @@ void Controller::lcd_drawChopKnobs() {
     lcd.drawText(t, kMenuDataTextSize, kMenuDataX[7], kMenuDataY[7]);
 }
 
+void Controller::chop_drawColumn(uint16_t c_, uint32_t vs_, uint32_t vl_) {
+    /// @brief One column of the Chop waveform, built in memory and sent in one go.
+    const uint16_t gx = 30, gw = 900, gTop = 190, gBot = 386, h = gBot - gTop + 1;
+    const int16_t mid = (gTop + gBot) / 2 - gTop;
+    const float half = (gBot - gTop) / 2.0f - 3.0f;
+    static RGB16Color col[200];
+    const uint32_t a0 = vs_ + (uint32_t)(((uint64_t)vl_ * c_) / gw);
+    uint32_t a1 = vs_ + (uint32_t)(((uint64_t)vl_ * (c_ + 1)) / gw);
+    if (a1 <= a0) a1 = a0 + 1;
+    int8_t sl = -1;
+    for (uint8_t k = 0; k < chopN; k++) if (chopMark[k] < a1) sl = (int8_t)k;
+    const bool cut = (sl >= 0) && (chopMark[sl] >= a0);
+    const bool inTake = (sl >= 0) && (a0 < chopEnd);
+    const bool endCut = (chopEnd >= a0) && (chopEnd < a1);
+    const bool sel = inTake && (sl == (int8_t)chopSel);
+    const bool head = chopPlay && (chopPlayPos >= a0) && (chopPlayPos < a1);
+    const int16_t* b = sampBuf();
+    int16_t mx = -32767, mn = 32767;
+    const uint32_t stepK = ((a1 - a0) > 48) ? ((a1 - a0) / 48) : 1;   // sampled: it's a picture
+    for (uint32_t k = a0; (k < a1) && (k < chopLen); k += stepK) { const int16_t v = b[k]; if (v > mx) mx = v; if (v < mn) mn = v; }
+    if (mx < mn) { mx = 0; mn = 0; }
+    const float sc = 1.0f / (chopPeak * 32767.0f + 1.0f);
+    int16_t yMax = (int16_t)(mid - (float)mx * sc * half);
+    int16_t yMin = (int16_t)(mid - (float)mn * sc * half);
+    if (yMax < 1) yMax = 1;
+    if (yMin > (int16_t)h - 2) yMin = (int16_t)h - 2;
+    const RGB16Color bg = sel ? page_mix(BLACK, kThemeAccent, 0.14f) : BLACK;
+    const RGB16Color wave = !inTake ? page_mix(BLACK, kThemeLine, 0.6f) : (sel ? kThemeInk : page_mix(BLACK, kThemeInk, 0.55f));
+    for (uint16_t r = 0; r < h; r++) col[r] = bg;
+    if ((c_ % 3) == 0) col[mid] = kThemeLine;
+    if (yMin > yMax) { for (int16_t r = yMax; r <= yMin; r++) col[r] = wave; } else col[mid] = wave;
+    if (cut || endCut) { const RGB16Color k = (endCut && !cut) ? kThemeAmber : kThemeAccent; for (uint16_t r = 0; r < h; r++) col[r] = k; }
+    if (head) for (uint16_t r = 0; r < h; r++) col[r] = kThemeInk;
+    lcd.drawColumn(gx + c_, gTop, h, col);
+}
+
+void Controller::chop_drawTags(uint32_t vs_, uint32_t vl_) {
+    /// @brief Number tags on the cut lines (selected = amber), skipped where they would overlap.
+    const uint16_t gx = 30, gw = 900, gTop = 190;
+    char text[4];
+    lcd.setFont(FONT_07x09);
+    lcd.setAlignment(CENTER);
+    int16_t lastTag = -100;
+    for (uint8_t k = 0; k < chopN; k++) {
+        if ((chopMark[k] < vs_) || (chopMark[k] >= vs_ + vl_)) continue;
+        const int16_t x = (int16_t)(gx + (((uint64_t)(chopMark[k] - vs_) * gw) / vl_));
+        if ((x - lastTag < 20) && (k != chopSel)) continue;
+        lastTag = x;
+        const RGB16Color tag = (k == chopSel) ? kThemeAmber : kThemeAccent;
+        const int16_t tx = (x + 18 > gx + gw) ? (int16_t)(gx + gw - 18) : x;
+        lcd.setForeColor(tag);
+        lcd.fillRect(tx, gTop, 18, 13);
+        lcd.setBackColor(tag);
+        lcd.setForeColor(BLACK);
+        snprintf(text, sizeof(text), "%u", k + 1);
+        lcd.drawText(text, strlen(text), tx + 9, gTop + 3);
+    }
+    lcd.setBackColor(BLACK);
+}
+
+void Controller::chop_updateHead() {
+    /// @brief While the take plays: redraw only the two columns the playhead left and entered.
+    uint32_t vs, vl;
+    chop_view(vs, vl);
+    const int16_t now = (chopPlay && (chopPlayPos >= vs) && (chopPlayPos < vs + vl)) ? (int16_t)(((uint64_t)(chopPlayPos - vs) * 900) / vl) : -1;
+    if (now == chopHeadCol) return;
+    const int16_t old = chopHeadCol;
+    chopHeadCol = now;
+    const LcdFont f = lcd.getFont();
+    const LcdAlign al = lcd.getAlignment();
+    lcd.setProtect(false);
+    if (old >= 0) chop_drawColumn((uint16_t)old, vs, vl);
+    if (now >= 0) chop_drawColumn((uint16_t)now, vs, vl);
+    if ((old >= 0) || (now >= 0)) chop_drawTags(vs, vl);
+    lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
+    lcd.setFont(f);
+    lcd.setAlignment(al);
+}
+
 void Controller::page_drawChop() {
     /// @brief Chop page, in the house style: the take filling the page, a thin accent line at
     /// each cut with its number in a small tag, the selected slice lit, the slice / beat / tempo
@@ -7356,8 +7443,10 @@ void Controller::page_drawChop() {
         const char h3[] = "LAYER INST: BACK";
         lcd.drawText(h3, strlen(h3), 930, 137);
         pageFullRedraw = false;
+        lcd_drawChopKnobs(true);
+    } else {
+        lcd_drawChopKnobs(false);
     }
-    lcd_drawChopKnobs();
 
     // ---- title + summary
     lcd.setFont(FONT_14x18);
@@ -7377,63 +7466,12 @@ void Controller::page_drawChop() {
              ((e - s) > kSampleSize - 64) ? "  CUT TO 5.4 S" : "");
     page_drawSummary(text, (uint8_t)strlen(slice));
 
-    // ---- waveform: black, the selected slice lit in a faint accent, a 1-px accent line per cut
+    // ---- waveform: every column built in memory and sent once (no flashing), then the tags
     uint32_t vs, vl;
     chop_view(vs, vl);
-    const int16_t* b = sampBuf();
-    const float sc = 1.0f / (chopPeak * 32767.0f + 1.0f);
-    const RGB16Color selBg = page_mix(BLACK, kThemeAccent, 0.14f);
-    const RGB16Color waveOn = kThemeInk, waveDim = page_mix(BLACK, kThemeInk, 0.55f), waveOut = page_mix(BLACK, kThemeLine, 0.6f);
-    int8_t sl = -1;   // slice of the current column (walks left to right)
-    for (uint8_t k = 0; k < chopN; k++) if (chopMark[k] <= vs) sl = (int8_t)k;
-    for (uint16_t c = 0; c < gw; c++) {
-        const uint32_t a0 = vs + (uint32_t)(((uint64_t)vl * c) / gw);
-        uint32_t a1 = vs + (uint32_t)(((uint64_t)vl * (c + 1)) / gw);
-        if (a1 <= a0) a1 = a0 + 1;
-        bool cut = false;
-        while (((uint8_t)(sl + 1) < chopN) && (chopMark[sl + 1] < a1)) { sl++; cut = true; }
-        if ((sl >= 0) && (chopMark[sl] >= a0) && (chopMark[sl] < a1)) cut = true;
-        const bool inTake = (sl >= 0) && (a0 < chopEnd);
-        const bool endCut = (chopEnd >= a0) && (chopEnd < a1);
-        const bool sel = inTake && (sl == (int8_t)chopSel);
-        int16_t mx = -32767, mn = 32767;
-        const uint32_t stepK = ((a1 - a0) > 48) ? ((a1 - a0) / 48) : 1;   // sampled: it's a picture
-        for (uint32_t k = a0; (k < a1) && (k < chopLen); k += stepK) { const int16_t v = b[k]; if (v > mx) mx = v; if (v < mn) mn = v; }
-        if (mx < mn) { mx = 0; mn = 0; }
-        const uint16_t x = gx + c;
-        lcd.setForeColor(sel ? selBg : BLACK);
-        lcd.drawVLine(x, gTop, gBot - gTop + 1);
-        if ((c % 3) == 0) { lcd.setForeColor(kThemeLine); lcd.drawPixel(x, mid); }
-        int16_t yMax = (int16_t)(mid - (float)mx * sc * half);
-        int16_t yMin = (int16_t)(mid - (float)mn * sc * half);
-        if (yMax < gTop + 1) yMax = gTop + 1;
-        if (yMin > gBot - 1) yMin = gBot - 1;
-        lcd.setForeColor(!inTake ? waveOut : (sel ? waveOn : waveDim));
-        if (yMin > yMax) lcd.drawVLine(x, yMax, yMin - yMax + 1); else lcd.drawPixel(x, mid);
-        if (cut) { lcd.setForeColor(kThemeAccent); lcd.drawVLine(x, gTop, gBot - gTop + 1); }
-        else if (endCut) { lcd.setForeColor(kThemeAmber); lcd.drawVLine(x, gTop, gBot - gTop + 1); }
-        if (chopPlay && (chopPlayPos >= a0) && (chopPlayPos < a1)) { lcd.setForeColor(kThemeInk); lcd.drawVLine(x, gTop, gBot - gTop + 1); }   // playhead
-    }
-    // number tags on the cut lines (selected = amber), skipped where they would overlap
-    lcd.setFont(FONT_07x09);
-    lcd.setAlignment(CENTER);
-    int16_t lastTag = -100;
-    for (uint8_t k = 0; k < chopN; k++) {
-        if ((chopMark[k] < vs) || (chopMark[k] >= vs + vl)) continue;
-        const int16_t x = (int16_t)(gx + (((uint64_t)(chopMark[k] - vs) * gw) / vl));
-        if ((x - lastTag < 20) && (k != chopSel)) continue;
-        lastTag = x;
-        const bool sel = (k == chopSel);
-        const RGB16Color tag = sel ? kThemeAmber : kThemeAccent;
-        const int16_t tx = (x + 18 > gx + gw) ? (int16_t)(gx + gw - 18) : x;
-        lcd.setForeColor(tag);
-        lcd.fillRect(tx, gTop, 18, 13);
-        lcd.setBackColor(tag);
-        lcd.setForeColor(BLACK);
-        snprintf(text, sizeof(text), "%u", k + 1);
-        lcd.drawText(text, strlen(text), tx + 9, gTop + 3);
-    }
-    lcd.setBackColor(BLACK);
+    for (uint16_t c = 0; c < 900; c++) chop_drawColumn(c, vs, vl);
+    chop_drawTags(vs, vl);
+    chopHeadCol = chopPlay ? (int16_t)((chopPlayPos >= vs && chopPlayPos < vs + vl) ? (((uint64_t)(chopPlayPos - vs) * 900) / vl) : -1) : -1;
 
     // ---- slices / beats / tempo line, and the overview while zoomed
     const uint32_t loop = (chopEnd > chopMark[0]) ? (chopEnd - chopMark[0]) : 1;
