@@ -19832,7 +19832,7 @@ void Controller::drumkit_newSelect() {
 }
 
 void Controller::drumkit_newAction() {
-    bank_clearOthers();   // custom: banks B-D emptied too, back to bank A
+    if (liveBank == 0) bank_clearOthers();   // custom: in bank A the whole kit empties; in B / C / D just that bank
     /// @brief Executes New Drumkit flow by resetting transport, layers, LFOs, and DSP modules.
 
     // 1. ALERT CLEANUP
@@ -19897,7 +19897,10 @@ void Controller::drumkit_loadAction() {
 
     // 3. SD LOAD EXECUTION & RESULT MAPPING
     // Execute SD load and map result code to alert outcome.
-    bank_clearOthers();   // custom
+    // custom: in bank A a kit loads whole (its banks B-D too); in B / C / D its sounds go into
+    // that bank only and the other banks stay as they are
+    const bool wholeKit = (liveBank == 0);
+    if (wholeKit) bank_clearOthers();
     switch (sd_loadDrumkit(drumkitMenuCounter)) {
         case SD_OK:
 
@@ -19921,7 +19924,7 @@ void Controller::drumkit_loadAction() {
     // 4. TRANSACTION FLAG RESTORE
     // Release load-in-progress flag after SD transaction completes.
     loadAction = false;
-    if (alertType != ALERT_LOADERROR) bank_loadSidecar(true, drumkitMenuCounter);   // custom: banks B-D
+    if (wholeKit && (alertType != ALERT_LOADERROR)) bank_loadSidecar(true, drumkitMenuCounter);   // custom: banks B-D
 
     // 5. RESULT ALERT PRESENTATION
     // Display result alert and keep it visible for user acknowledgment.
