@@ -619,6 +619,25 @@ class Controller {
     void choke(uint8_t layerNum_);                                      // custom: mute groups
     uint32_t sectorAddr(uint8_t s_) const { return RAM_SAMPLE_ADDRESS + (uint32_t)sampleSectorLibrary[s_].startBlock * kSampleBlockBytes; }   // custom: sample pool
     int8_t sample_allocSlot(uint32_t samples_);                         // custom: a free slot + enough free blocks, or -1
+    // custom: pad banks A-D
+    uint8_t liveBank = 0;                                               // bank the pads play (and the screens edit)
+    uint8_t layerLive[kLayerLibrarySize] = {0};                         // bank whose sound is in each Layer right now
+    bool padBankKeyPress = false, padBankKeyUsed = false;
+    Sound* bank_sound(uint8_t l_, uint8_t b_) const { return reinterpret_cast<Sound*>(RAM_BANKSOUND_ADDRESS) + (l_ * kPadBankCount) + b_; }
+    void sound_fromLayer(const Layer& L_, Sound& S_);
+    void sound_toLayer(const Sound& S_, Layer& L_);
+    void bank_swapLayer(uint8_t l_, uint8_t b_);
+    void bank_set(uint8_t b_);
+    void bank_initAll();
+    void bank_freeSound(uint8_t l_, uint8_t b_);
+    void bank_clearOthers();
+    void layer_playBank(uint8_t l_, float gain_, uint8_t b_);
+    bool bank_samplePlay(uint8_t l_, uint8_t b_);
+    void lcd_drawBank();
+    void bank_sidecarName(char* out_, size_t n_, bool kit_, uint8_t num_);
+    void bank_saveSidecar(bool kit_, uint8_t num_);
+    void bank_loadSidecar(bool kit_, uint8_t num_);
+    bool bank_loadByName(uint8_t l_, const char* inst_, const char* sample_);
     // custom: slicer drums (a sample with cue markers: each hit plays one slice)
     bool slicerOn(uint8_t l_) const { return (layerLibrary[l_].sliceCount > 0) && !layerLibrary[l_].sliceOff; }
     uint8_t wav_readCues(const char* path_, const WavData& wav_, uint32_t* out_, uint8_t max_, uint32_t limit_);

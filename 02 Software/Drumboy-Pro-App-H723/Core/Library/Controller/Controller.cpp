@@ -213,6 +213,7 @@ void Controller::initialize() {
     effect[1].initialize();
     reverb.initialize();
     new (&verbPlus) rvp::Engine();   // custom: extra reverb engines (object + tank in DTCM, reflections in SDRAM)
+    bank_initAll();                  // custom: pad banks B-D empty
     verbPlus.setup((float*)RAM_VERB_FAST_ADDRESS, (float*)RAM_VERB_ADDRESS);
     verbPlus.clear();
     reverb_configurePlus();
@@ -1756,6 +1757,10 @@ void Controller::keyboard_action() {
                             lfo_toggleTarget(layerNum);
                             Layer& layer = layerLibrary[layerNum];
                             if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(layerNum, 1.0f);
+                        } else if (padBankKeyPress && !alertFlag) {
+                            // custom: KNOB + pad 1-4 = bank A-D
+                            padBankKeyUsed = true;
+                            if (layerNum < kPadBankCount) bank_set(layerNum);
                         } else if ((keyboard.encKeyPress) && (!alertFlag)) {
                             uint8_t selectedEncoderBank = layerNum / 2;
                             encoder_selectBank(selectedEncoderBank);
@@ -2568,7 +2573,12 @@ void Controller::keyboard_action() {
                                 break;
 
                             case KEY_KNOB:
-                                keyboard.encKeyPress = true;
+                                if (!keyboard.shiftKeyPress) {   // custom: the KNOB key is the pad BANK key now
+                                    padBankKeyPress = true;
+                                    padBankKeyUsed = false;
+                                    break;
+                                }
+                                keyboard.encKeyPress = true;   // ADD + KNOB: knob banks (stock KNOB key)
                                 ledLayerPlayMode = false;
                                 ledLayerSelectFlag = true;
                                 // Guard against corrupted bank index before bit-shift operation.
@@ -2715,6 +2725,11 @@ void Controller::keyboard_action() {
                                 break;
 
                             case KEY_KNOB:
+                                if (padBankKeyPress) {   // custom: tapped alone = next bank
+                                    padBankKeyPress = false;
+                                    if (!padBankKeyUsed && !alertFlag) bank_set((uint8_t)((liveBank + 1) % kPadBankCount));
+                                    break;
+                                }
                                 keyboard.encKeyPress = false;
                                 switch (menu) {
                                     case LFO_MENU:
@@ -8691,6 +8706,8 @@ void Controller::noteRepeat_stopped() {
 
 static_assert(RAM_VERB_ADDRESS + rvp::slowFloats() * 4 <= RAM_SEQ_CLIP_ADDRESS, "reverb RAM overlaps the sequence clipboard");
 static_assert(RAM_SEQ_CLIP_ADDRESS + kLayerLibrarySize * sizeof(Bank) <= 0xC0FB9640, "sequence clipboard overlaps image RAM");
+static_assert(RAM_SEQ_CLIP_ADDRESS + kLayerLibrarySize * sizeof(Bank) <= RAM_BANKSOUND_ADDRESS, "sequence clipboard overlaps the pad banks");
+static_assert(RAM_BANKSOUND_ADDRESS + kLayerLibrarySize * kPadBankCount * sizeof(Sound) <= 0xC0FB9640, "pad banks overlap image RAM");
 static_assert(RAM_VERB_FAST_ADDRESS + rvp::fastFloats() * 4 <= 0x20020000, "reverb tank does not fit DTCM");
 static_assert(RAM_VERB_ENGINE_ADDRESS + sizeof(rvp::Engine) <= RAM_VERB_FAST_ADDRESS, "reverb engine object overlaps its tank");
 static_assert(Reverb::kSharedFloats <= rvp::fastFloats(), "STANDARD reverb buffers must fit inside the shared DTCM block");
@@ -9574,6 +9591,7 @@ void Controller::pitch_loadNotes(uint8_t fileNum_) {
             if (found >= 0) {
                 bank.beatLibrary[found].note = (int8_t)e[4];
                 if (esz >= 7) bank.beatLibrary[found].gate = ((uint16_t)e[5] << 8) | e[6];
+                if (esz == 9) bank.beatLibrary[found].setBank((uint8_t)((e[8] >> 6) & 0x03));   // custom: pad bank
             }
         }
         rhythm.quantize = quantizeWas;
@@ -11826,6 +11844,12 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
                                 uint8_t startInterval1 = data[offsetBeat + 3];
                                 uint16_t startInterval = ((uint16_t)startInterval0 << 8) + startInterval1;
                                 layerSong_setBeat(i, j, startInterval, fillType, fillPattern, fillTime, fillLevel, true);
+                                const uint8_t hb = (uint8_t)((dataBeat & Beat::BANK_MASK) >> 6);   // custom: pad bank
+                                if (hb) {
+                                    Bank& bk = layer.bankLibrary[j];
+                                    for (int16_t q = 0; q <= bk.lastActiveBeatNum; q++)
+                                        if (bk.beatLibrary[q].getActive() && (bk.beatLibrary[q].startInterval == startInterval)) { bk.beatLibrary[q].setBank(hb); break; }
+                                }
                             }
                         }
 
@@ -18709,6 +18733,8 @@ void Controller::lcd_drawIcon() {
         lcd.drawRGB16Image(indexPtr, dataPtr, 64, kIconRecordX, kIconPlayY, kIconPlayWidth, kIconPlayHeight);
         recordIcon.flag = false;
     }
+    lcd_drawBank();   // custom: pad bank badge
+
 }
 
 void Controller::lcd_drawCopyPaste() {
@@ -19448,6 +19474,7 @@ void Controller::file_loadAction() {
 
     // 3. SD LOAD EXECUTION & RESULT MAPPING
     // Execute SD load and map result code to alert outcome.
+    bank_clearOthers();   // custom: banks B-D come from the file (if it has them)
     switch (sd_loadFile(fileMenuCounter)) {
         case SD_OK:
 
@@ -19471,7 +19498,7 @@ void Controller::file_loadAction() {
     // 4. TRANSACTION FLAG RESTORE
     // Release load-in-progress flag after SD transaction completes.
     loadAction = false;
-    if (alertType != ALERT_LOADERROR) { currentFileNum = fileMenuCounter; pitch_loadNotes(fileMenuCounter); }   // custom
+    if (alertType != ALERT_LOADERROR) { currentFileNum = fileMenuCounter; pitch_loadNotes(fileMenuCounter); bank_loadSidecar(false, fileMenuCounter); }   // custom
     project_markSaved();
 
     // 5. RESULT ALERT PRESENTATION
@@ -19513,8 +19540,11 @@ void Controller::file_saveAction() {
 
     // 3. SD SAVE EXECUTION & RESULT MAPPING
     // Execute SD save and map operation result to alert type.
+    const uint8_t bankWas = liveBank;   // custom: the file's own drums are bank A
+    bank_set(0);
     (sd_saveFile(fileMenuCounter) == SD_OK) ? alertType = ALERT_SAVESUCCESS : alertType = ALERT_SAVEERROR;
-    if (alertType == ALERT_SAVESUCCESS) { currentFileNum = fileMenuCounter; pitch_saveNotes(fileMenuCounter); project_markSaved(); }   // custom: saved as this file
+    if (alertType == ALERT_SAVESUCCESS) { currentFileNum = fileMenuCounter; pitch_saveNotes(fileMenuCounter); bank_saveSidecar(false, fileMenuCounter); project_markSaved(); }   // custom: saved as this file
+    bank_set(bankWas);
     lcd_drawProjectName();
 
     // 4. TRANSACTION FLAG RESTORE
@@ -19799,6 +19829,7 @@ void Controller::drumkit_newSelect() {
 }
 
 void Controller::drumkit_newAction() {
+    bank_clearOthers();   // custom: banks B-D emptied too, back to bank A
     /// @brief Executes New Drumkit flow by resetting transport, layers, LFOs, and DSP modules.
 
     // 1. ALERT CLEANUP
@@ -19863,6 +19894,7 @@ void Controller::drumkit_loadAction() {
 
     // 3. SD LOAD EXECUTION & RESULT MAPPING
     // Execute SD load and map result code to alert outcome.
+    bank_clearOthers();   // custom
     switch (sd_loadDrumkit(drumkitMenuCounter)) {
         case SD_OK:
 
@@ -19886,6 +19918,7 @@ void Controller::drumkit_loadAction() {
     // 4. TRANSACTION FLAG RESTORE
     // Release load-in-progress flag after SD transaction completes.
     loadAction = false;
+    if (alertType != ALERT_LOADERROR) bank_loadSidecar(true, drumkitMenuCounter);   // custom: banks B-D
 
     // 5. RESULT ALERT PRESENTATION
     // Display result alert and keep it visible for user acknowledgment.
@@ -19926,7 +19959,11 @@ void Controller::drumkit_saveAction() {
 
     // 3. SD SAVE EXECUTION & RESULT MAPPING
     // Execute SD save and map operation result to alert type.
+    const uint8_t bankWas = liveBank;   // custom: the kit's own drums are bank A
+    bank_set(0);
     (sd_saveDrumkit(drumkitMenuCounter) == SD_OK) ? alertType = ALERT_SAVESUCCESS : alertType = ALERT_SAVEERROR;
+    if (alertType == ALERT_SAVESUCCESS) bank_saveSidecar(true, drumkitMenuCounter);   // custom: banks B-D
+    bank_set(bankWas);
 
     // 4. TRANSACTION FLAG RESTORE
     // Release save-in-progress flag after SD transaction completes.
@@ -25123,6 +25160,275 @@ void Controller::lfo_paste() {
 /* Layer Functions -----------------------------------------------------------*/
 ////////////////////////////////////////////////////////////////////////////////
 
+////////////////////////////////////////////////////////////////////////////////
+/* Custom: Pad banks ---------------------------------------------------------*/
+////////////////////////////////////////////////////////////////////////////////
+
+static Sound bankTmp;   // scratch for one Sound at a time (main loop only)
+
+void Controller::sound_fromLayer(const Layer& L_, Sound& S_) {
+    S_.instSelected = L_.instSelected; S_.instLoaded = L_.instLoaded; S_.sampleSelected = L_.sampleSelected; S_.sampleLoaded = L_.sampleLoaded;
+    S_.level = L_.level; S_.pitch = L_.pitch; S_.direction = L_.direction; S_.resolution = L_.resolution;
+    S_.start = L_.start; S_.end = L_.end; S_.normalize = L_.normalize;
+    S_.envAttack = L_.envAttack; S_.envHold = L_.envHold; S_.envDecay = L_.envDecay;
+    S_.sliceCount = L_.sliceCount; memcpy(S_.slicePos, L_.slicePos, sizeof(S_.slicePos));
+    S_.sliceOff = L_.sliceOff; S_.sliceSync = L_.sliceSync; S_.sliceBeats = L_.sliceBeats;
+    S_.sampleSelectedReadError = L_.sampleSelectedReadError; S_.sampleSelectedTypeError = L_.sampleSelectedTypeError;
+    S_.instSelectedData = L_.instSelectedData; S_.sampleSelectedData = L_.sampleSelectedData; S_.wavSelectedData = L_.wavSelectedData;
+    S_.instLoadedData = L_.instLoadedData; S_.sampleLoadedData = L_.sampleLoadedData; S_.wavLoadedData = L_.wavLoadedData;
+    S_.playSampleSector = L_.playSampleSector; S_.writeSampleSector = L_.writeSampleSector; S_.samplePlay = L_.samplePlay;
+}
+
+void Controller::sound_toLayer(const Sound& S_, Layer& L_) {
+    L_.instSelected = S_.instSelected; L_.instLoaded = S_.instLoaded; L_.sampleSelected = S_.sampleSelected; L_.sampleLoaded = S_.sampleLoaded;
+    L_.level = S_.level; L_.pitch = S_.pitch; L_.direction = S_.direction; L_.resolution = S_.resolution;
+    L_.start = S_.start; L_.end = S_.end; L_.normalize = S_.normalize;
+    L_.envAttack = S_.envAttack; L_.envHold = S_.envHold; L_.envDecay = S_.envDecay;
+    L_.sliceCount = S_.sliceCount; memcpy(L_.slicePos, S_.slicePos, sizeof(L_.slicePos));
+    L_.sliceOff = S_.sliceOff; L_.sliceSync = S_.sliceSync; L_.sliceBeats = S_.sliceBeats;
+    L_.sampleSelectedReadError = S_.sampleSelectedReadError; L_.sampleSelectedTypeError = S_.sampleSelectedTypeError;
+    L_.instSelectedData = S_.instSelectedData; L_.sampleSelectedData = S_.sampleSelectedData; L_.wavSelectedData = S_.wavSelectedData;
+    L_.instLoadedData = S_.instLoadedData; L_.sampleLoadedData = S_.sampleLoadedData; L_.wavLoadedData = S_.wavLoadedData;
+    L_.playSampleSector = S_.playSampleSector; L_.writeSampleSector = S_.writeSampleSector; L_.samplePlay = S_.samplePlay;
+}
+
+void Controller::bank_initAll() {
+    /// @brief Boot: every waiting sound empty, bank A playing.
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
+        for (uint8_t b = 0; b < kPadBankCount; b++) new (bank_sound(l, b)) Sound();
+        layerLive[l] = 0;
+    }
+    liveBank = 0;
+}
+
+void Controller::bank_swapLayer(uint8_t l_, uint8_t b_) {
+    /// @brief The pad's sound in the Layer goes back to its bank; bank b_'s sound comes in.
+    if ((l_ >= kLayerLibrarySize) || (b_ >= kPadBankCount) || (layerLive[l_] == b_)) return;
+    Layer& L = layerLibrary[l_];
+    Sound& tmp = bankTmp;
+    sound_fromLayer(L, tmp);
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    memcpy((void*)bank_sound(l_, layerLive[l_]), &tmp, sizeof(Sound));
+    memcpy(&tmp, (const void*)bank_sound(l_, b_), sizeof(Sound));
+    sound_toLayer(tmp, L);
+    layerLive[l_] = b_;
+    __set_PRIMASK(primask);
+}
+
+void Controller::bank_set(uint8_t b_) {
+    /// @brief Every pad plays (and the screens edit) bank b_.
+    if (b_ >= kPadBankCount) return;
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) if (layerLibrary[l].sampleLoading) { undo_showText("WAIT "); return; }
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) bank_swapLayer(l, b_);
+    liveBank = b_;
+    lcd_drawBank();
+    // screens: lane names, the INST menu and the pages show the new bank's sounds
+    if (page == PAGE_NONE) {   // stock screen: the lane names
+        for (uint8_t l = 0; l < kLayerLibrarySize; l++) lcd_drawLayerTab(l);
+    }
+    if ((menu == LAYER_INST_0_MENU) || (menu == LAYER_INST_1_MENU) || (menu == LAYER_INST_2_MENU)) {
+        const bool prot = lcd.getProtect();
+        lcd.setProtect(false);
+        if ((page == PAGE_NONE) || (page == PAGE_MAIN)) page_restoreInstMenu();
+        if (prot) lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
+    }
+    if ((page == PAGE_SAMPLE) || (page == PAGE_PITCH) || (page == PAGE_MAIN)) { pageFullRedraw = true; page_markDirty(page); }
+}
+
+void Controller::bank_freeSound(uint8_t l_, uint8_t b_) {
+    /// @brief A waiting bank sound goes: its memory back to the pool, its settings to default.
+    for (uint8_t i = 0; i < kSampleSectorLibrarySize; i++)
+        if (sampleSectorLibrary[i].active && (sampleSectorLibrary[i].layer == l_) && (sampleSectorLibrary[i].bank == b_)) {
+            const uint32_t a = sectorAddr(i);
+            uint32_t primask = __get_PRIMASK();
+            __disable_irq();
+            for (uint8_t v = 0; v < kLayerLibrarySize; v++) {
+                BeatPlayData& x = layerPlayData[v].activeBeatPlayData;
+                BeatPlayData& y = layerPlayData[v].tempBeatPlayData;
+                if (x.active && (x.ramAddress == a)) { x.active = false; x.counter = 0; }
+                if (y.active && (y.ramAddress == a)) { y.active = false; y.counter = 0; }
+            }
+            layerInst_clearSampleSector(i);
+            __set_PRIMASK(primask);
+        }
+    new (bank_sound(l_, b_)) Sound();
+}
+
+void Controller::bank_clearOthers() {
+    /// @brief Back to bank A, and banks B-D emptied (a new kit / before loading one).
+    bank_set(0);
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++)
+        for (uint8_t b = 1; b < kPadBankCount; b++) bank_freeSound(l, b);
+}
+
+bool Controller::bank_samplePlay(uint8_t l_, uint8_t b_) {
+    if (b_ == layerLive[l_]) return layerLibrary[l_].samplePlay;
+    const Sound* S = bank_sound(l_, b_);
+    return S->samplePlay && (S->playSampleSector >= 0);
+}
+
+void Controller::layer_playBank(uint8_t l_, float gain_, uint8_t b_) {
+    /// @brief A hit of another bank: its sound's settings go into the Layer just for this hit.
+    /// Runs in the sequencer interrupt, so the main loop never sees the swap.
+    if (b_ == layerLive[l_]) { layer_playBeat(l_, gain_); return; }
+    Layer& L = layerLibrary[l_];
+    const Sound& S = *bank_sound(l_, b_);
+    if (!S.samplePlay || (S.playSampleSector < 0)) return;
+    struct Keep {
+        uint8_t level, pitch, direction, resolution, start, end, envAttack, envHold, envDecay, sliceCount, sliceBeats;
+        bool normalize, sliceOff, sliceSync, samplePlay;
+        int8_t playSampleSector;
+        uint32_t sampleSize;
+        uint32_t slicePos[16];
+    } k;
+    k.level = L.level; k.pitch = L.pitch; k.direction = L.direction; k.resolution = L.resolution; k.start = L.start; k.end = L.end;
+    k.envAttack = L.envAttack; k.envHold = L.envHold; k.envDecay = L.envDecay; k.sliceCount = L.sliceCount; k.sliceBeats = L.sliceBeats;
+    k.normalize = L.normalize; k.sliceOff = L.sliceOff; k.sliceSync = L.sliceSync; k.samplePlay = L.samplePlay;
+    k.playSampleSector = L.playSampleSector; k.sampleSize = L.sampleLoadedData.sampleSize;
+    memcpy(k.slicePos, L.slicePos, sizeof(k.slicePos));
+    L.level = S.level; L.pitch = S.pitch; L.direction = S.direction; L.resolution = S.resolution; L.start = S.start; L.end = S.end;
+    L.envAttack = S.envAttack; L.envHold = S.envHold; L.envDecay = S.envDecay; L.sliceCount = S.sliceCount; L.sliceBeats = S.sliceBeats;
+    L.normalize = S.normalize; L.sliceOff = S.sliceOff; L.sliceSync = S.sliceSync; L.samplePlay = S.samplePlay;
+    L.playSampleSector = S.playSampleSector; L.sampleLoadedData.sampleSize = S.sampleLoadedData.sampleSize;
+    memcpy(L.slicePos, S.slicePos, sizeof(L.slicePos));
+    layer_playBeat(l_, gain_);
+    L.level = k.level; L.pitch = k.pitch; L.direction = k.direction; L.resolution = k.resolution; L.start = k.start; L.end = k.end;
+    L.envAttack = k.envAttack; L.envHold = k.envHold; L.envDecay = k.envDecay; L.sliceCount = k.sliceCount; L.sliceBeats = k.sliceBeats;
+    L.normalize = k.normalize; L.sliceOff = k.sliceOff; L.sliceSync = k.sliceSync; L.samplePlay = k.samplePlay;
+    L.playSampleSector = k.playSampleSector; L.sampleLoadedData.sampleSize = k.sampleSize;
+    memcpy(L.slicePos, k.slicePos, sizeof(L.slicePos));
+}
+
+void Controller::lcd_drawBank() {
+    /// @brief The bank badge on the transport row, always in view: A orange, B yellow, C cyan, D purple.
+    static const RGB16Color colours[kPadBankCount] = {kThemeAccent, kThemeAmber, CYAN, RGB16Color(0xB45F)};
+    const bool prot = lcd.getProtect();
+    const LcdFont f = lcd.getFont();
+    const LcdAlign al = lcd.getAlignment();
+    lcd.setProtect(false);
+    const RGB16Color k = colours[liveBank % kPadBankCount];
+    lcd.setForeColor(k);
+    lcd.fillRect(224, 108, 60, 15);
+    lcd.setFont(FONT_07x09);
+    lcd.setAlignment(CENTER);
+    lcd.setBackColor(k);
+    lcd.setForeColor(BLACK);
+    char t[8];
+    snprintf(t, sizeof(t), "BANK %c", 'A' + liveBank);
+    lcd.drawText(t, strlen(t), 254, 111);
+    lcd.setBackColor(BLACK);
+    lcd.setFont(f);
+    lcd.setAlignment(al);
+    if (prot) lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
+}
+
+void Controller::bank_sidecarName(char* out_, size_t n_, bool kit_, uint8_t num_) {
+    snprintf(out_, n_, "%s%03d.rwb", kit_ ? kDrumkitStart : kFileStart, num_ + 1);
+}
+
+void Controller::bank_saveSidecar(bool kit_, uint8_t num_) {
+    /// @brief Banks B-D of every pad (sample + its settings) next to the project / drumkit file.
+    char path[64];
+    bank_sidecarName(path, sizeof(path), kit_, num_);
+    bool any = false;
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++)
+        for (uint8_t b = 0; b < kPadBankCount; b++)
+            if (b != layerLive[l] ? (bank_sound(l, b)->sampleLoaded >= 0) : false) any = true;
+    // the bank in the Layer counts too when it isn't A
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) if ((layerLive[l] != 0) && (layerLibrary[l].sampleLoaded >= 0)) any = true;
+    f_close(&sd.file);
+    if (!any) { f_unlink(path); return; }
+    if (f_open(&sd.file, path, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK) return;
+    static uint8_t rec[80] __attribute__((aligned(32)));
+    memcpy(rec, "RWB1", 4);
+    f_write(&sd.file, rec, 4, &sd.byteswritten);
+    Sound& tmp = bankTmp;
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++)
+        for (uint8_t b = 1; b < kPadBankCount; b++) {
+            if (b == layerLive[l]) sound_fromLayer(layerLibrary[l], tmp); else memcpy(&tmp, (const void*)bank_sound(l, b), sizeof(Sound));
+            memset(rec, 0, sizeof(rec));
+            const bool has = (tmp.sampleLoaded >= 0) && (tmp.instLoaded >= 0);
+            rec[0] = has ? 'x' : '-';
+            if (has) {
+                strncpy((char*)&rec[1], tmp.instLoadedData.nameLong, kFileNameSize - 1);
+                strncpy((char*)&rec[33], tmp.sampleLoadedData.nameLong, kFileNameSize - 1);
+            }
+            rec[65] = tmp.level; rec[66] = tmp.pitch; rec[67] = tmp.direction; rec[68] = tmp.resolution;
+            rec[69] = tmp.start; rec[70] = tmp.end; rec[71] = tmp.normalize;
+            rec[72] = tmp.envAttack; rec[73] = tmp.envHold; rec[74] = tmp.envDecay;
+            rec[75] = tmp.sliceOff; rec[76] = tmp.sliceSync; rec[77] = tmp.sliceBeats;
+            f_write(&sd.file, rec, 78, &sd.byteswritten);
+        }
+    f_close(&sd.file);
+}
+
+bool Controller::bank_loadByName(uint8_t l_, const char* inst_, const char* sample_) {
+    /// @brief Puts a sample on pad l_ (its bank in the Layer now) by instrument + sample name.
+    int16_t inst = -1, smp = -1;
+    char name[kFileNameSize + 1];
+    f_close(&sd.file);
+    if ((f_open(&sd.file, "System/Data/Inst.lib", FA_READ) == FR_OK) && (f_lseek(&sd.file, 25) == FR_OK)) {
+        for (uint16_t i = 0; i < instLibrarySize; i++) {
+            memset(name, 0, sizeof(name));
+            if (f_read(&sd.file, name, kFileNameSize, &sd.bytesread) != FR_OK) break;
+            if (strcmp(name, inst_) == 0) { inst = (int16_t)i; break; }
+        }
+    }
+    f_close(&sd.file);
+    if (inst < 0) return false;
+    char ins[kFileNameSize + 20];
+    snprintf(ins, sizeof(ins), "System/Data/%s.ins", inst_);
+    if ((f_open(&sd.file, ins, FA_READ) == FR_OK) && (f_lseek(&sd.file, 25) == FR_OK)) {
+        for (uint16_t i = 0; i < sampleLibrarySize[inst]; i++) {
+            memset(name, 0, sizeof(name));
+            if (f_read(&sd.file, name, kFileNameSize, &sd.bytesread) != FR_OK) break;
+            if (strcmp(name, sample_) == 0) { smp = (int16_t)i; break; }
+        }
+    }
+    f_close(&sd.file);
+    if (smp < 0) return false;
+    layerInst_setInstSelected(l_, inst);
+    layerInst_setInstLoaded(l_);
+    layerInst_setSampleSelected(l_, smp);
+    layerInst_setSampleLoaded(l_);
+    return layerLibrary[l_].samplePlay;
+}
+
+void Controller::bank_loadSidecar(bool kit_, uint8_t num_) {
+    /// @brief After a project / drumkit loaded (bank A): banks B-D from the file next to it.
+    char path[64];
+    bank_sidecarName(path, sizeof(path), kit_, num_);
+    f_close(&sd.file);
+    if (f_open(&sd.file, path, FA_READ) != FR_OK) return;
+    static uint8_t rec[80] __attribute__((aligned(32)));
+    UINT got = 0;
+    if ((f_read(&sd.file, rec, 4, &got) != FR_OK) || (got != 4) || (memcmp(rec, "RWB1", 4) != 0)) { f_close(&sd.file); return; }
+    static uint8_t all[(kPadBankCount - 1) * kLayerLibrarySize][78];
+    const UINT want = sizeof(all);
+    const bool ok = (f_read(&sd.file, all, want, &got) == FR_OK) && (got == want);
+    f_close(&sd.file);
+    if (!ok) return;
+    uint8_t e = 0;
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++)
+        for (uint8_t b = 1; b < kPadBankCount; b++, e++) {
+            const uint8_t* r = all[e];
+            if (r[0] != 'x') continue;
+            bank_swapLayer(l, b);   // this pad edits bank b for a moment
+            char inst[kFileNameSize + 1] = {0}, smp[kFileNameSize + 1] = {0};
+            memcpy(inst, &r[1], kFileNameSize - 1);
+            memcpy(smp, &r[33], kFileNameSize - 1);
+            if (bank_loadByName(l, inst, smp)) {
+                Layer& L = layerLibrary[l];
+                L.level = r[65]; L.pitch = r[66]; L.direction = r[67]; L.resolution = r[68];
+                L.start = r[69]; L.end = r[70]; L.normalize = r[71];
+                L.envAttack = r[72]; L.envHold = r[73]; L.envDecay = r[74];
+                L.sliceOff = r[75]; L.sliceSync = r[76]; L.sliceBeats = r[77];
+            }
+            bank_swapLayer(l, liveBank);
+        }
+}
+
 void Controller::choke(uint8_t layerNum_) {
     /// @brief Custom mute groups: a drum that starts cuts the others in its group (short fade, no click).
     /// Called with interrupts off.
@@ -26265,7 +26571,7 @@ void Controller::layerInst_setSampleLoaded(uint8_t layerNum_) {
                 uint32_t primaskFree = __get_PRIMASK();
                 __disable_irq();
                 for (uint8_t i = 0; i < kSampleSectorLibrarySize; i++) {
-                    if (!(sampleSectorLibrary[i].active && (sampleSectorLibrary[i].layer == layer.number))) continue;
+                    if (!(sampleSectorLibrary[i].active && (sampleSectorLibrary[i].layer == layer.number) && (sampleSectorLibrary[i].bank == layerLive[layer.number]))) continue;
                     const uint32_t a = sectorAddr(i);
                     for (uint8_t v = 0; v < kLayerLibrarySize; v++) {
                         BeatPlayData& x = layerPlayData[v].activeBeatPlayData;
@@ -26305,6 +26611,7 @@ void Controller::layerInst_setSampleLoaded(uint8_t layerNum_) {
                 layer.writeSampleSector = targetSector;
                 sampleSectorLibrary[targetSector].active = true;
                 sampleSectorLibrary[targetSector].layer = layer.number;
+                sampleSectorLibrary[targetSector].bank = layerLive[layer.number];   // custom: pad bank
                 sampleSectorLibrary[targetSector].size = layer.sampleLoadedData.sampleSize - 1;
                 sampleSectorLibrary[targetSector].playMode = false;
                 sampleSectorLibrary[targetSector].writeMode = true;
@@ -26406,7 +26713,7 @@ void Controller::layerInst_setSampleLoaded(uint8_t layerNum_) {
 
                         // Clean up old redundant sectors for this specific layer
                         for (uint8_t s = 0; s < kSampleSectorLibrarySize; s++) {
-                            if (sampleSectorLibrary[s].active && sampleSectorLibrary[s].layer == layer.number && s != layer.playSampleSector) {
+                            if (sampleSectorLibrary[s].active && sampleSectorLibrary[s].layer == layer.number && (sampleSectorLibrary[s].bank == layerLive[layer.number]) && s != layer.playSampleSector) {
                                 layerInst_clearSampleSector(s);
                             }
                         }
@@ -26457,7 +26764,7 @@ void Controller::layerInst_setSampleLoaded(uint8_t layerNum_) {
             __disable_irq();
             layer.samplePlay = false;
             for (uint8_t i = 0; i < kSampleSectorLibrarySize; i++) {
-                if (sampleSectorLibrary[i].layer == layer.number) {
+                if (sampleSectorLibrary[i].active && (sampleSectorLibrary[i].layer == layer.number) && (sampleSectorLibrary[i].bank == layerLive[layer.number])) {   // custom: this bank's only
                     layerInst_clearSampleSector(i);
                 }
             }
@@ -26541,6 +26848,7 @@ void Controller::layerInst_clearSampleSector(uint8_t sectorNum_) {
     sampleSectorLibrary[sectorNum_].active = false;
     sampleSectorLibrary[sectorNum_].layer = 0;
     sampleSectorLibrary[sectorNum_].blockCount = 0;   // custom: its blocks go back to the pool
+    sampleSectorLibrary[sectorNum_].bank = 0;
     sampleSectorLibrary[sectorNum_].size = 0;
     sampleSectorLibrary[sectorNum_].playMode = false;
     sampleSectorLibrary[sectorNum_].writeMode = false;
@@ -27467,6 +27775,7 @@ void Controller::layerSong_setBeat(uint8_t layerNum_, uint8_t bankTab_, uint16_t
             bank.beatLibrary[beatNum].note = recordNote;   // custom: Pitch mode note (0 = normal hit)
             bank.beatLibrary[beatNum].gate = 0;
             bank.beatLibrary[beatNum].setVel(recordVel);   // custom: velocity
+            bank.beatLibrary[beatNum].setBank(liveBank);   // custom: pad bank
             bank.setBeatFill(beatNum, fillType_, fillPattern_, fillTime_, fillLevel_);
             layerSong_calculateLastActiveBeatNum(layerNum_, bankTab_);
             layerSong_calculatePlayBeatNum(layerNum_, bankTab_, playInterval);
@@ -30596,7 +30905,7 @@ void Controller::interruptPlay() {
                     // Trigger simple beats at the main beat interval.
                     if ((beat.getFillType() == 0) && (beat.getFillPattern() <= 2) && (beat.getFillTarget() == NULL_FILL_TARGET)) {
                         if (beat.getStartInterval() == playInterval) {
-                            if ((!layer.mute) && (layer.samplePlay)) {
+                            if ((!layer.mute) && bank_samplePlay(i, beat.getBank())) {   // custom: the hit's pad bank
                                 switch (beat.getFillPattern()) {
                                     case 0:
                                         fillVolMultiplier = kNumberDataLibrary[100].powMultiplier;
@@ -30615,7 +30924,7 @@ void Controller::interruptPlay() {
                             pendingStep[i] = (int16_t)(beat.getStartInterval() / (kMeasureInterval / 4));   // custom: slicer STEP
                             if (beat.getGate() && songInterval) { gateOff[i] = (uint16_t)((playInterval + beat.getGate()) % songInterval); gateArmed[i] = true; }
                             else gateArmed[i] = false;
-                            if (fillVolMultiplier > 0.0f) layer_playBeat(layer.number, fillVolMultiplier * vel_gain(beat.getVel()));   // custom: velocity
+                            if (fillVolMultiplier > 0.0f) layer_playBank(layer.number, fillVolMultiplier * vel_gain(beat.getVel()), beat.getBank());   // custom: velocity, pad bank
                             swingDelayTicks[i] = 0;
                             pendingNote[i] = 0;
                             pendingStep[i] = -1;
@@ -30632,11 +30941,11 @@ void Controller::interruptPlay() {
                     else if ((beat.getFillTarget() != NULL_FILL_TARGET) && (playBeatMicroNum != -1)) {
                         BeatMicro& beatMicro = bank.beatFillLibrary[beat.getFillTarget()].beatMicroLibrary[playBeatMicroNum];
                         if (beatMicro.getInterval() == playInterval) {
-                            if ((!layer.mute) && (layer.samplePlay) && ((playBeatMicroNum == 0) || ((playBeatMicroNum != 0) && (layer.fill)))) {
+                            if ((!layer.mute) && bank_samplePlay(i, beat.getBank()) && ((playBeatMicroNum == 0) || ((playBeatMicroNum != 0) && (layer.fill)))) {
                                 fillVolMultiplier = kNumberDataLibrary[beatMicro.getLevel()].powMultiplier;
                                 pendingNote[i] = beat.note;   // custom: rolls keep their note
                                 pendingStep[i] = (int16_t)(beat.getStartInterval() / (kMeasureInterval / 4));   // and their slice
-                                if (fillVolMultiplier > 0.0f) layer_playBeat(layer.number, fillVolMultiplier * vel_gain(beat.getVel()));
+                                if (fillVolMultiplier > 0.0f) layer_playBank(layer.number, fillVolMultiplier * vel_gain(beat.getVel()), beat.getBank());
                                 pendingNote[i] = 0;
                                 pendingStep[i] = -1;
                             }

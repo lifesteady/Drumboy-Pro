@@ -370,6 +370,7 @@ enum UndoKind : uint8_t { UNDO_NONE = 0, UNDO_SINGLE, UNDO_RECORD, UNDO_FILL, UN
 struct SampleSector {
     bool active = false;
     uint8_t layer = 0;
+    uint8_t bank = 0;         // custom: pad bank of the sound (A-D)
     uint8_t startBlock = 0;   // custom: where in the pool (blocks of kSampleBlockSamples)
     uint8_t blockCount = 0;
     uint32_t size = 0;
@@ -2420,7 +2421,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.28 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.29 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -7530,7 +7531,8 @@ struct Beat {
     static constexpr uint16_t ACTIVE_MASK           = 0x8000;
     static constexpr uint16_t TYPE_MASK             = 0x7800;                   // Bits 14:11
     static constexpr uint16_t PATTERN_MASK          = 0x0700;                   // Bits 10:8
-    static constexpr uint16_t TIME_MASK             = 0x00F0;                   // Bits 7:4
+    static constexpr uint16_t TIME_MASK             = 0x0030;                   // Bits 5:4 (custom: fill time is 0-2; bits 7:6 hold the pad bank)
+    static constexpr uint16_t BANK_MASK             = 0x00C0;                   // custom: Bits 7:6 - pad bank A-D of this hit
     static constexpr uint16_t LEVEL_MASK            = 0x000F;                   // Bits 3:0
 
     // Bit shifts for fast field alignment
@@ -7572,7 +7574,7 @@ struct Beat {
 
     // Timing mode logic (0-15)
     void setFillTime(uint8_t mode_) noexcept {
-        data = (data & ~TIME_MASK) | (static_cast<uint16_t>(mode_ & 0x0F) << TIME_SHIFT);
+        data = (data & ~TIME_MASK) | (static_cast<uint16_t>(mode_ & 0x03) << TIME_SHIFT);
     }
 
     uint8_t getFillTime() const noexcept { return static_cast<uint8_t>((data & TIME_MASK) >> TIME_SHIFT); }
@@ -7598,6 +7600,10 @@ struct Beat {
     uint16_t getEndInterval() const noexcept { return endInterval; }
 
     uint16_t getData() const noexcept { return data; }
+
+    // custom: pad bank (0-3 = A-D) the hit plays
+    uint8_t getBank() const noexcept { return static_cast<uint8_t>((data & BANK_MASK) >> 6); }
+    void setBank(uint8_t b_) noexcept { data = (uint16_t)((data & ~BANK_MASK) | ((uint16_t)(b_ & 0x03) << 6)); }
 };
 
 /*----------------------------------------------------------------------------*/
@@ -7821,6 +7827,38 @@ struct Layer {
     Layer(uint8_t number_) : number(number_) {}
     ~Layer() {}
 };
+
+////////////////////////////////////////////////////////////////////////////////
+/* Custom: Pad banks ---------------------------------------------------------*/
+////////////////////////////////////////////////////////////////////////////////
+// Each pad (lane) holds 4 sounds, banks A-D. The sound of the bank being played lives in the
+// Layer itself (so all the existing code works on it); the others wait in SDRAM as a Sound.
+// Lane things (routing, sends, LFO, mute group, the track) stay with the Layer.
+
+const uint8_t kPadBankCount = 4;
+
+struct Sound {
+    int16_t instSelected = -1, instLoaded = -1, sampleSelected = -1, sampleLoaded = -1;
+    uint8_t level = kInitialLayerLevel, pitch = kInitialLayerPitch, direction = kInitialLayerDirection;
+    uint8_t resolution = kInitialLayerResolution, start = kInitialLayerStart, end = kInitialLayerEnd;
+    bool normalize = kInitialLayerNormalize;
+    uint8_t envAttack = kInitialEnvAttack, envHold = kInitialEnvHold, envDecay = kInitialEnvDecay;
+    uint8_t sliceCount = 0;
+    uint32_t slicePos[16] = {0};
+    bool sliceOff = false, sliceSync = false;
+    uint8_t sliceBeats = 0;
+    bool sampleSelectedReadError = false, sampleSelectedTypeError = false;
+    InstData instSelectedData;
+    SampleData sampleSelectedData;
+    WavData wavSelectedData;
+    InstData instLoadedData;
+    SampleData sampleLoadedData;
+    WavData wavLoadedData;
+    int8_t playSampleSector = -1, writeSampleSector = -1;
+    bool samplePlay = false;
+};
+
+#define RAM_BANKSOUND_ADDRESS                       (RAM_MAIN_ADDRESS + 0x40000)   // custom: 10 pads x 4 banks of Sound
 
 ////////////////////////////////////////////////////////////////////////////////
 /* Copy Constants ------------------------------------------------------------*/
