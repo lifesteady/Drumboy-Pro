@@ -1355,7 +1355,7 @@ const EncoderFunc encoderLocalFunction[][8] = {
     {ENC_KIT_TAB0, ENC_KIT_TAB1, ENC_KIT_TAB2, ENC_KIT_TAB3, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE},
     // MIXER_MENU = 0x04
     // custom: the Mixer menu is now ROUTING (signal chain); the mix volumes moved to the Metronome menu
-    {ENC_ROUTE_LAYOUT, ENC_ROUTE_DRUM, ENC_ROUTE_DEST, ENC_ROUTE_EQ, ENC_MIXER_LIMIXERIN, ENC_MIXER_LIVOLUME, ENC_FNC_NONE, ENC_ROUTE_LANEREV},
+    {ENC_ROUTE_LAYOUT, ENC_ROUTE_DRUM, ENC_ROUTE_DEST, ENC_ROUTE_EQ, ENC_MIXER_LIMIXERIN, ENC_MIXER_LIVOLUME, ENC_ROUTE_METRO, ENC_ROUTE_LANEREV},
     // RHYTHM_MENU = 0x05
     {ENC_RHYTHM_TEMPO, ENC_RHYTHM_MEASURE, ENC_RHYTHM_BAR, ENC_RHYTHM_QUANTIZE, ENC_RHYTHM_SWING, ENC_RHYTHM_SWINGGRID, ENC_GROOVE_DRUMSWING, ENC_GROOVE_CORRECT},
     // METRO_MENU = 0x06
@@ -1544,7 +1544,7 @@ const EncoderFuncData kEncoderFuncDataLibrary[] = {
     {ENC_ROUTE_DRUM,          ENC_RES_S, "DRUM      ", "ROUTE ", "   ", false},
     {ENC_ROUTE_DEST,          ENC_RES_S, "GOES TO   ", "ROUTE ", "   ", false},
     {ENC_ROUTE_EQ,            ENC_RES_S, "DRUM EQ   ", "ROUTE ", "   ", false},
-    {ENC_ROUTE_METRO,         ENC_RES_S, "METRO TO  ", "ROUTE ", "   ", false},
+    {ENC_ROUTE_METRO,         ENC_RES_S, "TO REVERB ", "ROUTE ", "   ", false},   // custom: per-drum reverb send
     {ENC_ROUTE_LANEREV,       ENC_RES_S, "REVERB    ", "ROUTE ", "   ", false},
     {ENC_SONG_NOTE,           ENC_RES_S, "NOTE      ", "SONG  ", "   ", false},
     {ENC_SONG_GATE,           ENC_RES_S, "GATE      ", "SONG  ", "   ", false},
@@ -2032,6 +2032,8 @@ enum LaneDest : uint8_t { LANE_DEST_A = 0, LANE_DEST_B = 1, LANE_DEST_REVERB = 2
 const uint8_t kRouteModeFileMark                    = 0xC0;   // song byte 179 = 0xC0 | mode
 const uint8_t kLaneFileMark                         = 0xD0;   // drum byte 24 = 0xD0 | eq << 2 | dest
 const uint8_t kMetroRouteFileMark                   = 0xE0;   // byte 500 + 88 = 0xE0 | metronome route
+const uint16_t kRevSendFileAddr                     = 1087;   // custom: 10 reverb sends at 1087-1096, marker at 1097 (drum 6 asset block, unused bytes)
+const uint8_t kRevSendFileMark                      = 0xA7;
 const uint16_t kMetroRouteFileOffset                = 88;     // inside drum 1's asset block (unused bytes)
 
 const MixerInMode kInitialMixerLiMixerInMode        = MIXER_IN_EQ;
@@ -2374,7 +2376,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.12 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.13 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -7634,6 +7636,7 @@ struct Layer {
     uint8_t swingExtra                              = 0;   // custom: extra swing for this drum (0-25 %)
     uint8_t laneDest                                = LANE_DEST_AUTO;   // custom: 2 LANES destination
     bool laneEq                                     = false;            // custom: 2 LANES, EQ on this drum
+    uint8_t revSend                                 = 0;                // custom: REVERB SEND 0-10 (x 10%), on top of the routing
     uint8_t envAttack                               = kInitialEnvAttack;   // custom envelope (0-100)
     uint8_t envHold                                 = kInitialEnvHold;
     uint8_t envDecay                                = kInitialEnvDecay;

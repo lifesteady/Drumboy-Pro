@@ -5759,11 +5759,11 @@ void Controller::route_knob(uint8_t slot_, int8_t step_) {
                 layerInst_calculateMixMode(routeLayer);
             }
             break;
-        case 6: {
-            int16_t m = (int16_t)metronome.mixerInMode + step_;
-            if (m < MIXER_IN_EQ) m = MIXER_IN_EQ;
-            if (m > MIXER_IN_SEND) m = MIXER_IN_SEND;
-            metronome.mixerInMode = (MixerInMode)m;
+        case 6: {   // custom: REVERB SEND of the selected drum
+            int16_t v = (int16_t)layerLibrary[routeLayer].revSend + step_;
+            if (v < 0) v = 0;
+            if (v > 10) v = 10;
+            layerLibrary[routeLayer].revSend = (uint8_t)v;
         } break;
         case 7: {
             int16_t r = (int16_t)routeLaneRev + step_;
@@ -5778,6 +5778,7 @@ void Controller::route_knob(uint8_t slot_, int8_t step_) {
         lcd_drawRoute_Data(1);
         lcd_drawRoute_Data(2);
         lcd_drawRoute_Data(3);
+        lcd_drawRoute_Data(6);
         lcd_drawRoute_Data(7);
     }
     page_markDirty(PAGE_ROUTE);
@@ -5814,7 +5815,10 @@ void Controller::lcd_drawRoute_Data(uint8_t slot_) {
         case 3: snprintf(t, sizeof(t), "%10s", lanes ? (layerLibrary[routeLayer].laneEq ? "ON" : "OFF") : "IN CHAIN"); break;
         case 4: lcd_drawMixer_LiInData(); return;
         case 5: lcd_drawMixer_LiVolumeData(); return;
-        case 6: snprintf(t, sizeof(t), "%10s", ""); break;   // free knob
+        case 6: {   // custom: REVERB SEND
+            const uint8_t v = layerLibrary[routeLayer].revSend;
+            if (v) snprintf(t, sizeof(t), "%9u%%", v * 10); else snprintf(t, sizeof(t), "%10s", "OFF");
+        } break;
         case 7: {
             static const char* const rv[4] = {"A + B", "A ONLY", "B ONLY", "OFF"};
             snprintf(t, sizeof(t), "%10s", lanes ? rv[routeLaneRev & 0x03] : "IN CHAIN");
@@ -5974,8 +5978,8 @@ void Controller::page_drawRoute() {
         lcd.setFont(FONT_07x09);
         lcd.setAlignment(LEFT);
         lcd.setForeColor(kThemeHeader);
-        const char* h = lanes ? "KNOB 2 OR PADS: PICK A DRUM.   KNOB 3: MOVE IT.   KNOB 4: DRUM EQ.   KNOB 8: LANE REVERB."
-                              : "KNOB 2 OR PADS: PICK A DRUM.   KNOB 3: MOVE IT.   SOUND FLOWS LEFT TO RIGHT.";
+        const char* h = lanes ? "KNOB 2 OR PADS: PICK A DRUM.  KNOB 3: MOVE IT.  KNOB 4: DRUM EQ.  KNOB 7: TO REVERB.  KNOB 8: LANE REVERB."
+                              : "KNOB 2 OR PADS: PICK A DRUM.   KNOB 3: MOVE IT.   KNOB 7: TO REVERB.   SOUND FLOWS LEFT TO RIGHT.";
         lcd.drawText(h, strlen(h), 30, 432);
         pageFullRedraw = false;
     }
@@ -6008,7 +6012,9 @@ void Controller::page_drawRoute() {
         } else {
             for (uint8_t st = c; st < 6; st++) add(st);
         }
-        if (!any) snprintf(text + n, sizeof(text) - n, " DRY, NOTHING CHANGES IT");
+        if (!any) n += snprintf(text + n, sizeof(text) - n, " DRY, NOTHING CHANGES IT");
+        if (layerLibrary[routeLayer].revSend && (n < (int)sizeof(text)))
+            snprintf(text + n, sizeof(text) - n, "   + %u%% TO REVERB%s", layerLibrary[routeLayer].revSend * 10, reverb.active ? "" : " (REVERB IS OFF)");
         page_drawSummary(text);
     }
 
@@ -6063,7 +6069,8 @@ void Controller::page_drawRoute() {
                 snprintf(label, sizeof(label), "LINE IN");
             }
             const bool eqTag = lanes && !more && (isDrum ? hasEq((uint8_t)layerLibrary[l].mixerInMode) : hasEq((uint8_t)mixer.liMixerInMode));
-            const uint8_t room = (uint8_t)((cwid - 10) / 9) - (eqTag ? 3 : 0);
+            const bool rvTag = isDrum && !more && (layerLibrary[l].revSend > 0);   // custom: reverb send marker
+            const uint8_t room = (uint8_t)((cwid - 10) / 9) - (eqTag ? 3 : 0) - (rvTag ? 2 : 0);
             if (strlen(label) > room) label[room] = 0;
             const bool dim = isDrum && !more && (layerLibrary[l].mute || !layerLibrary[l].samplePlay);
             lcd.setForeColor(sel ? kThemeAccent : (dim ? kThemeMid : kThemeInk));
@@ -6072,6 +6079,12 @@ void Controller::page_drawRoute() {
                 lcd.setAlignment(RIGHT);
                 lcd.setForeColor(kThemeGood);
                 lcd.drawText("EQ", 2, cx + cwid - 5, y + 4);
+                lcd.setAlignment(LEFT);
+            }
+            if (rvTag) {   // purple R: this drum also feeds the reverb (amount in the summary)
+                lcd.setAlignment(RIGHT);
+                lcd.setForeColor(cPurple);
+                lcd.drawText("R", 1, cx + cwid - 5 - (eqTag ? 22 : 0), y + 4);
                 lcd.setAlignment(LEFT);
             }
             lcd.setBackColor(BLACK);
@@ -10180,6 +10193,11 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
                     // custom: routing layout (older files: CHAIN). Drums are recalculated as they load.
                     routeMode = ((data[179] & 0xF0) == kRouteModeFileMark) ? ((data[179] & 0x01) ? ROUTE_LANES : ROUTE_CHAIN) : ROUTE_CHAIN;
                     routeLaneRev = ((data[179] & 0xF0) == kRouteModeFileMark) ? ((data[179] >> 2) & 0x03) : 0;
+                    {   // custom: reverb sends (older files: none)
+                        const bool has = (data[kRevSendFileAddr + kLayerLibrarySize] == kRevSendFileMark);
+                        for (uint8_t l = 0; l < kLayerLibrarySize; l++)
+                            layerLibrary[l].revSend = (has && (data[kRevSendFileAddr + l] <= 10)) ? data[kRevSendFileAddr + l] : 0;
+                    }
                     {   // custom: Song mode
                         auto at = [](uint8_t k_) -> uint16_t { return (uint16_t)(500 + 100 * (1 + k_ / 13) + 87 + (k_ % 13)); };
                         if (data[at(0)] == kSongFileMark) {
@@ -10591,6 +10609,8 @@ void Controller::sd_encodeProject(uint8_t* data) {
     data[167] = reverb.active;
     data[178] = kReverbTypeFileMark | reverb.type;   // custom: reverb type
     data[179] = kRouteModeFileMark | (uint8_t)((routeLaneRev & 0x03) << 2) | (routeMode & 0x01);   // custom: layout + lane reverb
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) data[kRevSendFileAddr + l] = layerLibrary[l].revSend;   // custom: reverb sends
+    data[kRevSendFileAddr + kLayerLibrarySize] = kRevSendFileMark;
     {   // custom: Song mode (34 bytes in unused bytes 87-99 of drums 2-4's asset blocks)
         auto at = [](uint8_t k_) -> uint16_t { return (uint16_t)(500 + 100 * (1 + k_ / 13) + 87 + (k_ % 13)); };
         data[at(0)] = kSongFileMark;
@@ -11080,6 +11100,11 @@ SdResult Controller::sd_loadDrumkit(uint8_t kitNum_) {
                     // custom: routing layout (older files: CHAIN). Drums are recalculated as they load.
                     routeMode = ((data[179] & 0xF0) == kRouteModeFileMark) ? ((data[179] & 0x01) ? ROUTE_LANES : ROUTE_CHAIN) : ROUTE_CHAIN;
                     routeLaneRev = ((data[179] & 0xF0) == kRouteModeFileMark) ? ((data[179] >> 2) & 0x03) : 0;
+                    {   // custom: reverb sends (older files: none)
+                        const bool has = (data[kRevSendFileAddr + kLayerLibrarySize] == kRevSendFileMark);
+                        for (uint8_t l = 0; l < kLayerLibrarySize; l++)
+                            layerLibrary[l].revSend = (has && (data[kRevSendFileAddr + l] <= 10)) ? data[kRevSendFileAddr + l] : 0;
+                    }
                     if ((data[500 + kMetroRouteFileOffset] & 0xF0) == kMetroRouteFileMark) {
                         const uint8_t mr = data[500 + kMetroRouteFileOffset] & 0x0F;
                         metronome.mixerInMode = (MixerInMode)((mr <= MIXER_IN_SEND) ? mr : MIXER_IN_REVERB);
@@ -11408,6 +11433,8 @@ SdResult Controller::sd_saveDrumkit(uint8_t kitNum_) {
     data[167] = reverb.active;
     data[178] = kReverbTypeFileMark | reverb.type;   // custom: reverb type
     data[179] = kRouteModeFileMark | (uint8_t)((routeLaneRev & 0x03) << 2) | (routeMode & 0x01);   // custom: layout + lane reverb
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) data[kRevSendFileAddr + l] = layerLibrary[l].revSend;   // custom: reverb sends
+    data[kRevSendFileAddr + kLayerLibrarySize] = kRevSendFileMark;
     data[500 + kMetroRouteFileOffset] = kMetroRouteFileMark | ((uint8_t)metronome.mixerInMode & 0x0F);   // custom: where the metronome goes
     data[168] = reverb.size;
     data[169] = reverb.decay;
@@ -18537,6 +18564,7 @@ void Controller::mixer_reset() {
     padVelocity = 16; humanize = 0; levelsSoftest = 4;   // custom: velocity settings
     memset(songSteps, 0, sizeof(songSteps));
     routeLaneRev = 0;
+    for (uint8_t l = 0; l < kLayerLibrarySize; l++) layerLibrary[l].revSend = 0;   // custom
     /// @brief Restores mixer mute, level, routing, and dynamics parameters to default values.
 
     // 1. MUTE STATE RESET
@@ -27737,6 +27765,18 @@ void Controller::processAudioReverb() {
         }
     }
 
+    // Custom: REVERB SEND - each drum can also feed the reverb engine (wet only) by its own
+    // amount, whatever its routing, so e.g. only the snare gets reverb.
+    static float revSendBus[I2S_BLOCK_SIZE];
+    bool anySend = false;
+    for (uint8_t i = 0; i < kLayerLibrarySize; i++) {
+        const uint8_t sv = layerLibrary[i].revSend;
+        if (!sv) continue;
+        const float g = sv * 0.1f;
+        if (!anySend) { memset(revSendBus, 0, sizeof(revSendBus)); anySend = true; }
+        for (uint16_t j = 0; j < I2S_BLOCK_SIZE; j++) revSendBus[j] += audioLayer[i][j] * g;
+    }
+
     // 3. REVERB ENGINE PROCESSING
     // Run pre-delay, the selected engine, and surround output generation.
     // Custom: STANDARD = the original Freeverb (mono wet); VINTAGE / PLATE / ROOM / NONLIN come
@@ -27750,8 +27790,8 @@ void Controller::processAudioReverb() {
             // Apply anti-denormal noise to prevent CPU spikes on low signals
             inputSample += REVERB_ANTI_DENORMAL;
 
-            // 3.1 PRE-DELAY PROCESSING
-            reverb.preDelayBuffer[reverb.preDelay_recordInterval] = inputSample;
+            // 3.1 PRE-DELAY PROCESSING (custom: the engine also hears the REVERB SEND bus; the dry path doesn't)
+            reverb.preDelayBuffer[reverb.preDelay_recordInterval] = anySend ? (inputSample + revSendBus[i]) : inputSample;
             float reverbInput = reverb.preDelayBuffer[reverb.preDelay_playInterval];
 
             if (++reverb.preDelay_playInterval >= reverb.kPreDelayBufferSize) reverb.preDelay_playInterval = 0;
