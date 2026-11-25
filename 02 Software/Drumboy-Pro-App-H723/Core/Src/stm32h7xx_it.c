@@ -595,6 +595,15 @@ void USART6_IRQHandler(void)
 void I2C3_EV_IRQHandler(void)
 {
   /* USER CODE BEGIN I2C3_EV_IRQn 0 */
+  /* Custom: the freeze seen in the debugger: no transfer running (XferISR = NULL) but the STOP
+     interrupt was left enabled with STOPF set. The HAL ignores it, so it fires for ever. With no
+     transfer running, clear the flags and mask I2C3's interrupts (the next transfer re-enables them). */
+  if (hi2c3.XferISR == NULL)
+  {
+    I2C3->ICR = I2C_ICR_STOPCF | I2C_ICR_NACKCF;
+    I2C3->CR1 &= ~(I2C_CR1_TXIE | I2C_CR1_RXIE | I2C_CR1_ADDRIE | I2C_CR1_NACKIE | I2C_CR1_STOPIE | I2C_CR1_TCIE | I2C_CR1_ERRIE);
+    return;
+  }
   if (i2c3_stormGuard()) return;
 
   /* USER CODE END I2C3_EV_IRQn 0 */
