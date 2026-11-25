@@ -581,6 +581,28 @@ class Controller {
     void sampling_update();                                             // main loop: meter, save when done
     void sampling_drawPanel(bool full_);
     bool sampling_save();
+    bool sampling_writeWav(const char* path_, const int16_t* src_, uint32_t n_, float gain_);
+    int16_t sampling_libAdd(const char* fileName_);                     // adds to RECORDED, returns the instrument (or -1)
+    // custom: Chop page (slice a take onto pads)
+    void chop_begin(const char* base_, uint8_t firstPad_);
+    bool chop_loadLayer(uint8_t layerNum_);
+    bool chop_key(uint8_t key_);
+    void chop_pad(uint8_t pad_);
+    void chop_knob(uint8_t which_, int8_t step_);
+    void chop_auto();
+    void chop_equal();
+    void chop_paste();
+    void chop_view(uint32_t& start_, uint32_t& len_);
+    uint32_t chop_sliceEnd(uint8_t i_);
+    void page_drawChop();
+    void lcd_drawChopKnobs();
+    bool chopActive = false;
+    uint32_t chopLen = 0;                                               // samples in the take
+    uint32_t chopEnd = 0;                                               // end of the last slice
+    uint32_t chopMark[kChopMaxSlices] = {0};                            // slice starts (sorted)
+    uint8_t chopN = 1, chopSel = 0, chopZoom = 0, chopFirstPad = 0, chopAutoSens = 0, chopEqualIdx = 0;
+    float chopGain = 1.0f, chopPeak = 1.0f;
+    char chopBase[24] = "";
     volatile uint8_t sampState = 0;                                     // 0 idle, 1 armed, 2 recording, 3 done (to save), 4 saving
     uint8_t sampLayer = 0;
     volatile uint32_t sampCount = 0;                                    // samples recorded after the trigger

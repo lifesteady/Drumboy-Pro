@@ -349,8 +349,9 @@ const uint8_t kSampleSectorLibrarySize              = 12;
 // Custom: sampling from Line In. Recorded into the undo region (undo history is cleared), with a
 // short pre-roll ring in front so the attack before the threshold isn't lost.
 const uint16_t kSampPreRoll                         = 1024;                     // must be a power of 2 (23 ms)
-const uint32_t kSampMaxLength                       = kSampleSize - kSampPreRoll - 64;   // what one pad can hold
+const uint32_t kSampMaxLength                       = 1323000;                  // 30 s take (16-bit in the undo region)
 const float kSampThreshold                          = 0.03f;                    // about -30 dB starts the take
+static_assert((kSampPreRoll + kSampMaxLength) * 2 <= 3 * 240000 * 4, "sampling take must fit the undo region");
 #define RAM_UNDO_ADDRESS                            (RAM_SAMPLE_ADDRESS + (12 * kSampleByteSize))
 const uint32_t kUndoRegionBytes                     = 3 * kSampleByteSize;     // ends at RAM_DELAY_ADDRESS
 const uint8_t kUndoSlots                            = 16;                      // 15 undo steps
@@ -1346,7 +1347,15 @@ typedef enum {
     ENC_SM_REPEAT                                   = 0x85,
     ENC_SM_MODE                                     = 0x86,
     ENC_SM_ADDDEL                                   = 0x87,
-    ENC_SM_END                                      = 0x88
+    ENC_SM_END                                      = 0x88,
+    ENC_CH_SLICE                                    = 0x89,  // custom: Chop page
+    ENC_CH_MOVE                                     = 0x8A,
+    ENC_CH_FINE                                     = 0x8B,
+    ENC_CH_ZOOM                                     = 0x8C,
+    ENC_CH_AUTO                                     = 0x8D,
+    ENC_CH_EQUAL                                    = 0x8E,
+    ENC_CH_PAD                                      = 0x8F,
+    ENC_CH_END                                      = 0x90
 } EncoderFunc;
 
 const EncoderFunc encoderLocalFunction[][8] = {
@@ -1558,13 +1567,26 @@ const EncoderFuncData kEncoderFuncDataLibrary[] = {
     {ENC_SM_REPEAT,           ENC_RES_S, "REPEATS   ", "SONG  ", "   ", false},
     {ENC_SM_MODE,             ENC_RES_S, "SONG MODE ", "SONG  ", "   ", false},
     {ENC_SM_ADDDEL,           ENC_RES_S, "ADD / DEL ", "SONG  ", "   ", false},
-    {ENC_SM_END,              ENC_RES_S, "AT END    ", "SONG  ", "   ", false}
+    {ENC_SM_END,              ENC_RES_S, "AT END    ", "SONG  ", "   ", false},
+    {ENC_CH_SLICE,            ENC_RES_S, "SLICE     ", "CHOP  ", "   ", false},
+    {ENC_CH_MOVE,             ENC_RES_F, "MOVE      ", "CHOP  ", "   ", false},
+    {ENC_CH_FINE,             ENC_RES_F, "FINE      ", "CHOP  ", "   ", false},
+    {ENC_CH_ZOOM,             ENC_RES_S, "ZOOM      ", "CHOP  ", "   ", false},
+    {ENC_CH_AUTO,             ENC_RES_S, "AUTO CHOP ", "CHOP  ", "   ", false},
+    {ENC_CH_EQUAL,            ENC_RES_S, "EQUAL     ", "CHOP  ", "   ", false},
+    {ENC_CH_PAD,              ENC_RES_S, "FIRST PAD ", "CHOP  ", "   ", false},
+    {ENC_CH_END,              ENC_RES_F, "TAKE END  ", "CHOP  ", "   ", false}
 };
 
 // Knobs while the Song page is open.
 const EncoderFunc kSongPageFunctions[8] = {ENC_SM_STEP, ENC_SM_BANK, ENC_SM_REPEAT, ENC_SM_MODE,
                                            ENC_SM_ADDDEL, ENC_SM_END, ENC_FNC_NONE, ENC_FNC_NONE};
 const uint8_t kSongMaxSteps = 32;
+
+// Knobs while the Chop page is open.
+const EncoderFunc kChopPageFunctions[8] = {ENC_CH_SLICE, ENC_CH_MOVE, ENC_CH_FINE, ENC_CH_ZOOM,
+                                           ENC_CH_AUTO, ENC_CH_EQUAL, ENC_CH_PAD, ENC_CH_END};
+const uint8_t kChopMaxSlices = 10;   // one per pad
 const uint8_t kSongFileMark = 0xA5;
 
 // Knobs while the Pitch page is open (all 8 belong to Pitch mode).
@@ -1576,7 +1598,7 @@ const EncoderFunc kSamplePageFunctions[8] = {ENC_INST_0_INST, ENC_INST_0_SAMPLE,
                                              ENC_INST_1_START, ENC_INST_1_END, ENC_SMP_DECAY, ENC_FNC_NONE};
 
 // The table above is indexed by EncoderFunc value, so every entry must sit at its own enum number.
-static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_SM_END + 1,
+static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_CH_END + 1,
               "kEncoderFuncDataLibrary must have one entry per EncoderFunc value");
 
 typedef enum {
@@ -2323,7 +2345,8 @@ typedef enum {
     PAGE_MAIN                                       = 0x0A,  // custom main screen: zoomed lanes, decay hits, focus lane
     PAGE_PITCH                                      = 0x0B,  // Sync key: one drum played across the 10 pads in a scale
     PAGE_ROUTE                                      = 0x0C,  // Mixer key: signal chain and where each drum enters it
-    PAGE_SONG                                       = 0x0D   // Song key tapped alone: chain the 5 song banks into a song
+    PAGE_SONG                                       = 0x0D,  // Song key tapped alone: chain the 5 song banks into a song
+    PAGE_CHOP                                       = 0x0E   // after sampling / ADD + REC on the Sample page: slice a take onto pads
 } PageView;
 
 // Custom Pitch mode: scales (semitone steps from the root). Pads 1-10 climb the scale from the root.
@@ -2381,7 +2404,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.16 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.17 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
