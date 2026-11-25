@@ -4101,6 +4101,8 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
         case ENC_ROUTE_EQ: route_knob(3, 1); break;
         case ENC_ROUTE_METRO: route_knob(6, 1); break;
         case ENC_ROUTE_LANEREV: route_knob(7, 1); break;
+        case ENC_SONG_NOTE: layerSong_noteKnob(1); break;
+        case ENC_SONG_GATE: layerSong_gateKnob(1); break;
 
         case ENC_SMP_HOLD:
             sample_setEnv(1, (int16_t)layerLibrary[selectedLayerNum].envHold + 1);
@@ -4711,6 +4713,8 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
         case ENC_ROUTE_EQ: route_knob(3, -1); break;
         case ENC_ROUTE_METRO: route_knob(6, -1); break;
         case ENC_ROUTE_LANEREV: route_knob(7, -1); break;
+        case ENC_SONG_NOTE: layerSong_noteKnob(-1); break;
+        case ENC_SONG_GATE: layerSong_gateKnob(-1); break;
 
         case ENC_SMP_HOLD:
             sample_setEnv(1, (int16_t)layerLibrary[selectedLayerNum].envHold - 1);
@@ -16018,6 +16022,8 @@ void Controller::lcd_drawLayerSongMenu(uint8_t layerNum_) {
     lcd.drawText(kHeaderPattern, kMenuHeaderTextSize, kMenuHeaderX[1], kMenuHeaderY[1]);
     lcd.drawText(kHeaderTiming, kMenuHeaderTextSize, kMenuHeaderX[4], kMenuHeaderY[4]);
     lcd.drawText(kHeaderVelocity, kMenuHeaderTextSize, kMenuHeaderX[5], kMenuHeaderY[5]);
+    lcd.drawText("NOTE      ", kMenuHeaderTextSize, kMenuHeaderX[6], kMenuHeaderY[6]);   // custom
+    lcd.drawText("GATE      ", kMenuHeaderTextSize, kMenuHeaderX[7], kMenuHeaderY[7]);   // custom
 
     // 4. DATA DRAW
     // Draw beat-fill values and graph.
@@ -16034,6 +16040,8 @@ void Controller::lcd_drawLayerSongMenu(uint8_t layerNum_) {
     lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[1], kMenuSignBoxY[1]);
     lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[4], kMenuSignBoxY[4]);
     lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[5], kMenuSignBoxY[5]);
+    lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[6], kMenuSignBoxY[6]);
+    lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[7], kMenuSignBoxY[7]);
 
     // 6. GRAPH BACKGROUND DRAW
     // Draw graph axes and boundary markers.
@@ -16152,6 +16160,7 @@ void Controller::lcd_drawLayerSong_BeatFillLevelData(uint8_t layerNum_) {
         text = kDataDashR;
     }
     lcd.drawText(text, kMenuDataTextSize, kMenuDataX[5], kMenuDataY[5]);
+    lcd_drawLayerSong_NoteGateData(layerNum_);   // custom
 }
 
 void Controller::lcd_drawLayerSong_BeatFillGraphData(uint8_t layerNum_) {
@@ -25364,51 +25373,115 @@ void Controller::layerSong_generateBeat(uint8_t type) {
     layerSong_calculatePlayBeatNum(selectedLayerNum, activeSongBank, playInterval);
 }
 
-void Controller::layerSong_shiftSelectedBeat(bool direction_) {
-    /// @brief Shifts selected beat start position by one quantize step (straight or triplet grid).
+void Controller::lcd_drawLayerSong_NoteGateData(uint8_t layerNum_) {
+    /// @brief Custom: SEQ menu NOTE (knob 7) and GATE (knob 8) of the selected hit.
+    if (menu != LAYER_SONG_MENU) return;
+    Bank& bank = layerLibrary[layerNum_].bankLibrary[activeSongBank];
+    char t[16];
+    lcd_setMenuDataState(WHITE);
+    if ((selectedBeatNum >= 0) && (selectedBeatNum <= bank.lastActiveBeatNum)) {
+        const Beat& b = bank.beatLibrary[selectedBeatNum];
+        const int16_t abs = 48 + b.note;
+        char nm[8];
+        snprintf(nm, sizeof(nm), "%s%d", kPitchNoteName[abs % 12], abs / 12 - 1);
+        if (b.note) snprintf(t, sizeof(t), "%5s %+3d", nm, b.note); else snprintf(t, sizeof(t), "%10s", nm);
+        lcd.drawText(t, kMenuDataTextSize, kMenuDataX[6], kMenuDataY[6]);
+        const uint16_t g = b.getGate();
+        if (g == 0) snprintf(t, sizeof(t), "%10s", "RING OUT");
+        else snprintf(t, sizeof(t), "%7u/32", (unsigned)((g + 50) / 100));
+        lcd.drawText(t, kMenuDataTextSize, kMenuDataX[7], kMenuDataY[7]);
+    } else {
+        lcd.drawText(kDataDashR, kMenuDataTextSize, kMenuDataX[6], kMenuDataY[6]);
+        lcd.drawText(kDataDashR, kMenuDataTextSize, kMenuDataX[7], kMenuDataY[7]);
+    }
+}
 
+void Controller::layerSong_noteKnob(int8_t step_) {
+    /// @brief Custom: change the selected hit's note a semitone at a time, and hear it.
+    Bank& bank = layerLibrary[selectedLayerNum].bankLibrary[activeSongBank];
+    if ((selectedBeatNum < 0) || (selectedBeatNum > bank.lastActiveBeatNum)) return;
+    undo_checkpoint(UNDO_FILL);
+    Beat& b = bank.beatLibrary[selectedBeatNum];
+    int16_t n = (int16_t)b.note + step_;
+    if (n < -36) n = -36;
+    if (n > 36) n = 36;
+    b.note = (int8_t)n;
+    Layer& layer = layerLibrary[selectedLayerNum];
+    if (!playActive && !layer.mute && layer.samplePlay) {
+        pendingNote[selectedLayerNum] = b.note;
+        layer_playBeat(selectedLayerNum, vel_gain(b.getVel()));
+        pendingNote[selectedLayerNum] = 0;
+    }
+    lcd_drawLayerSong_NoteGateData(selectedLayerNum);
+}
+
+void Controller::layerSong_gateKnob(int8_t step_) {
+    /// @brief Custom: selected hit's gate, in 1/32 notes (0 = RING OUT, at most about 5 beats).
+    Bank& bank = layerLibrary[selectedLayerNum].bankLibrary[activeSongBank];
+    if ((selectedBeatNum < 0) || (selectedBeatNum > bank.lastActiveBeatNum)) return;
+    undo_checkpoint(UNDO_FILL);
+    Beat& b = bank.beatLibrary[selectedBeatNum];
+    int32_t g = (int32_t)((b.getGate() + 50) / 100) + step_;
+    if (g < 0) g = 0;
+    if (g > 40) g = 40;
+    b.setGate((uint16_t)(g * 100));
+    lcd_drawLayerSong_NoteGateData(selectedLayerNum);
+}
+
+void Controller::layerSong_shiftSelectedBeat(bool direction_) {
+    /// @brief Custom: moves the selected hit one grid step (straight or triplet grid). Unlike stock,
+    /// it can pass other hits: it hops over a position that is already taken and the hit list is
+    /// re-ordered. The hit keeps its note, velocity, gate and fill.
     Layer& layer = layerLibrary[selectedLayerNum];
     Bank& bank = layer.bankLibrary[activeSongBank];
-    Beat& beat = bank.beatLibrary[selectedBeatNum];
-    uint16_t interval = beat.getStartInterval();
+    const int16_t last = bank.lastActiveBeatNum;
+    const int16_t sel = selectedBeatNum;
+    if ((sel < 0) || (sel > last) || !songInterval) return;
+    const uint16_t interval = bank.beatLibrary[sel].getStartInterval();
 
-    // 1. DIRECTIONAL SHIFT APPLY
-    // Shift forward/backward when neighbor and boundary constraints allow.
-    if (direction_) {
-        uint16_t nearest = rhythm_snapToGrid(interval);
-        uint16_t newInterval = (nearest > interval) ? nearest : rhythm_snapToGrid(interval, 1);
-        if (((selectedBeatNum == bank.lastActiveBeatNum) && (newInterval < songInterval)) || ((selectedBeatNum < bank.lastActiveBeatNum) && (newInterval < bank.beatLibrary[selectedBeatNum + 1].getStartInterval()))) {
-            // Extend previous beat
-            if (selectedBeatNum > 0) {
-                bank.beatLibrary[selectedBeatNum - 1].setEndInterval(newInterval);
-                bank.setBeatFill(selectedBeatNum - 1, 0, 0, 0, 0);
-                lcd_drawBeat(selectedLayerNum, activeSongBank, (selectedBeatNum - 1), false);
-            }
-
-            // Update beat position
-            lcd_clearBeat(selectedLayerNum, activeSongBank, selectedBeatNum);
-            beat.setStartInterval(newInterval);
-            bank.setBeatFill(selectedBeatNum, 0, 0, 0, 0);
-            layerSong_setSelectedBeatFill(0, 0, 0, 0);
+    auto stepFrom = [&](uint16_t from_) -> int32_t {
+        if (direction_) {
+            const uint16_t nearest = rhythm_snapToGrid(from_);
+            return (nearest > from_) ? nearest : rhythm_snapToGrid(from_, 1);
         }
-    } else if (interval > 0) {
-        uint16_t nearest = rhythm_snapToGrid(interval);
-        uint16_t newInterval = (nearest < interval) ? nearest : rhythm_snapToGrid(interval, -1);
-        if (((selectedBeatNum == 0) && (newInterval >= 0)) || ((selectedBeatNum > 0) && (newInterval > bank.beatLibrary[selectedBeatNum - 1].getStartInterval()))) {
-            // Shrink previous beat
-            if (selectedBeatNum > 0) {
-                bank.beatLibrary[selectedBeatNum - 1].setEndInterval(newInterval);
-                bank.setBeatFill(selectedBeatNum - 1, 0, 0, 0, 0);
-                lcd_drawBeat(selectedLayerNum, activeSongBank, (selectedBeatNum - 1), false);
-            }
+        if (from_ == 0) return -1;
+        const uint16_t nearest = rhythm_snapToGrid(from_);
+        return (nearest < from_) ? nearest : rhythm_snapToGrid(from_, -1);
+    };
+    auto taken = [&](int32_t at_) {
+        for (int16_t j = 0; j <= last; j++)
+            if ((j != sel) && (bank.beatLibrary[j].getStartInterval() == (uint16_t)at_)) return true;
+        return false;
+    };
+    int32_t target = stepFrom(interval);
+    for (uint8_t guard = 0; (guard < 160) && (target >= 0) && (target < (int32_t)songInterval) && taken(target); guard++)
+        target = stepFrom((uint16_t)target);
+    if ((target < 0) || (target >= (int32_t)songInterval) || (target == (int32_t)interval)) return;
 
-            // Update beat position
-            lcd_clearBeat(selectedLayerNum, activeSongBank, selectedBeatNum);
-            beat.setStartInterval(newInterval);
-            bank.setBeatFill(selectedBeatNum, 0, 0, 0, 0);
-            layerSong_setSelectedBeatFill(0, 0, 0, 0);
-        }
+    // take the hit out and put it back where it now belongs
+    Beat moved = bank.beatLibrary[sel];
+    moved.setStartInterval((uint16_t)target);
+    int16_t pos = 0;
+    for (int16_t j = 0; j <= last; j++)
+        if ((j != sel) && (bank.beatLibrary[j].getStartInterval() < (uint16_t)target)) pos++;
+    if (pos > sel) for (int16_t k = sel; k < pos; k++) bank.beatLibrary[k] = bank.beatLibrary[k + 1];
+    else if (pos < sel) for (int16_t k = sel; k > pos; k--) bank.beatLibrary[k] = bank.beatLibrary[k - 1];
+    bank.beatLibrary[pos] = moved;
+    for (int16_t k = 0; k < last; k++) bank.beatLibrary[k].setEndInterval(bank.beatLibrary[k + 1].getStartInterval());
+    bank.beatLibrary[last].setEndInterval(songInterval);
+    for (int16_t k = 0; k <= last; k++) {   // fills follow the new spacing
+        const Beat& b = bank.beatLibrary[k];
+        bank.setBeatFill((uint8_t)k, b.getFillType(), b.getFillPattern(), b.getFillTime(), b.getFillLevel());
     }
+    layerSong_calculatePlayBeatNum(selectedLayerNum, activeSongBank, playInterval);
+    selectedBeatNum = (int8_t)pos;
+    lcd_drawSong(selectedLayerNum, activeSongBank);
+    lcd_drawBeat(selectedLayerNum, activeSongBank, selectedBeatNum, true);
+    lcd_drawLayerSong_BeatFillTypeData(selectedLayerNum);
+    lcd_drawLayerSong_BeatFillPatternData(selectedLayerNum);
+    lcd_drawLayerSong_BeatFillTimeData(selectedLayerNum);
+    lcd_drawLayerSong_BeatFillLevelData(selectedLayerNum);
+    lcd_drawLayerSong_BeatFillGraphData(selectedLayerNum);
 }
 
 void Controller::layerSong_resetSelectedBeat() {

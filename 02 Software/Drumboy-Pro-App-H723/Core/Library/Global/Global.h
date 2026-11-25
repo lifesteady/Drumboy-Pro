@@ -1329,7 +1329,9 @@ typedef enum {
     ENC_ROUTE_DEST                                  = 0x7D,
     ENC_ROUTE_EQ                                    = 0x7E,
     ENC_ROUTE_METRO                                 = 0x7F,
-    ENC_ROUTE_LANEREV                               = 0x80
+    ENC_ROUTE_LANEREV                               = 0x80,
+    ENC_SONG_NOTE                                   = 0x81,  // custom: SEQ menu, selected hit's note
+    ENC_SONG_GATE                                   = 0x82   // custom: SEQ menu, selected hit's gate length
 } EncoderFunc;
 
 const EncoderFunc encoderLocalFunction[][8] = {
@@ -1372,7 +1374,7 @@ const EncoderFunc encoderLocalFunction[][8] = {
     // LAYER_INST_2_MENU = 0x11
     {ENC_INST_2_INST, ENC_INST_2_SAMPLE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_INST_2_EQ, ENC_INST_2_FILTER, ENC_INST_2_EFFECT, ENC_INST_2_REVERB},
     // LAYER_SONG_MENU = 0x12
-    {ENC_SONG_FILL, ENC_SONG_PATTERN, ENC_FNC_NONE, ENC_FNC_NONE, ENC_SONG_TIMING, ENC_SONG_VELOCITY, ENC_FNC_NONE, ENC_FNC_NONE},
+    {ENC_SONG_FILL, ENC_SONG_PATTERN, ENC_FNC_NONE, ENC_FNC_NONE, ENC_SONG_TIMING, ENC_SONG_VELOCITY, ENC_SONG_NOTE, ENC_SONG_GATE},
     // TEST_MENU = 0x13
     {ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE, ENC_FNC_NONE}};
 
@@ -1533,7 +1535,9 @@ const EncoderFuncData kEncoderFuncDataLibrary[] = {
     {ENC_ROUTE_DEST,          ENC_RES_S, "GOES TO   ", "ROUTE ", "   ", false},
     {ENC_ROUTE_EQ,            ENC_RES_S, "DRUM EQ   ", "ROUTE ", "   ", false},
     {ENC_ROUTE_METRO,         ENC_RES_S, "METRO TO  ", "ROUTE ", "   ", false},
-    {ENC_ROUTE_LANEREV,       ENC_RES_S, "REVERB    ", "ROUTE ", "   ", false}
+    {ENC_ROUTE_LANEREV,       ENC_RES_S, "REVERB    ", "ROUTE ", "   ", false},
+    {ENC_SONG_NOTE,           ENC_RES_S, "NOTE      ", "SONG  ", "   ", false},
+    {ENC_SONG_GATE,           ENC_RES_S, "GATE      ", "SONG  ", "   ", false}
 };
 
 // Knobs while the Pitch page is open (all 8 belong to Pitch mode).
@@ -1545,7 +1549,7 @@ const EncoderFunc kSamplePageFunctions[8] = {ENC_INST_0_INST, ENC_INST_0_SAMPLE,
                                              ENC_INST_1_START, ENC_INST_1_END, ENC_SMP_DECAY, ENC_FNC_NONE};
 
 // The table above is indexed by EncoderFunc value, so every entry must sit at its own enum number.
-static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_ROUTE_LANEREV + 1,
+static_assert(sizeof(kEncoderFuncDataLibrary) / sizeof(kEncoderFuncDataLibrary[0]) == ENC_SONG_GATE + 1,
               "kEncoderFuncDataLibrary must have one entry per EncoderFunc value");
 
 typedef enum {
@@ -2347,7 +2351,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.90 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V2.91 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;

@@ -493,6 +493,9 @@ class Controller {
     float noteRepeat_step();
     void noteRepeat_tick();
     void noteRepeat_stopped();
+    void layerSong_noteKnob(int8_t step_);
+    void layerSong_gateKnob(int8_t step_);
+    void lcd_drawLayerSong_NoteGateData(uint8_t layerNum_);
     uint8_t vel_pad();
     float vel_gain(uint8_t v_) const { return kVelGain[(v_ >= 1 && v_ <= 16) ? v_ : 16]; }
     void page_drawLevels();
