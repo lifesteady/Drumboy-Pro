@@ -621,6 +621,8 @@ class Controller {
     uint32_t sectorAddr(uint8_t s_) const { return RAM_SAMPLE_ADDRESS + (uint32_t)sampleSectorLibrary[s_].startBlock * kSampleBlockBytes; }   // custom: sample pool
     int8_t sample_allocSlot(uint32_t samples_);                         // custom: a free slot + enough free blocks, or -1
     // custom: pad banks A-D
+    int8_t loadBank = -1;                                               // custom: pad bank for hits put back by a file load
+    bool loadPartial = false;                                           // custom: a project loaded with some samples missing
     uint8_t liveBank = 0;                                               // bank the pads play (and the screens edit)
     uint8_t layerLive[kLayerLibrarySize] = {0};                         // bank whose sound is in each Layer right now
     bool padBankKeyPress = false, padBankKeyUsed = false;

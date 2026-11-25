@@ -9595,9 +9595,11 @@ void Controller::pitch_loadNotes(uint8_t fileNum_) {
             if ((found < 0) && (esz == 9)) {   // a hit past the song file's 64: add it back
                 const uint16_t d = ((uint16_t)e[7] << 8) | e[8];
                 if ((d >> 15) && (st < songInterval)) {
+                    loadBank = (int8_t)((d & Beat::BANK_MASK) >> 6);
                     layerSong_setBeat(e[0], e[1], st, (uint8_t)((d & Beat::TYPE_MASK) >> Beat::TYPE_SHIFT),
                                       (uint8_t)((d & Beat::PATTERN_MASK) >> Beat::PATTERN_SHIFT),
                                       (uint8_t)((d & Beat::TIME_MASK) >> Beat::TIME_SHIFT), (uint8_t)(d & Beat::LEVEL_MASK), false);
+                    loadBank = -1;
                     touched[e[0]] |= (uint16_t)(1u << e[1]);
                     for (int16_t j = 0; j <= bank.lastActiveBeatNum; j++)
                         if (bank.beatLibrary[j].getActive() && (bank.beatLibrary[j].startInterval == st)) { found = j; break; }
@@ -11837,6 +11839,8 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
                     // 6.4 BEAT DECODE
                     // Decode packed beat metadata and restore bank beat lists.
                     Layer& layer = layerLibrary[i];
+                    const uint8_t quantizeWas = rhythm.quantize;   // custom: hits come back exactly where they were saved
+                    rhythm.quantize = kQuantizeOff;
                     for (uint8_t j = 0; j < kBankLibrarySize; j++) {
                         Bank& bank = layer.bankLibrary[j];
                         uint16_t offsetBank = 1 + (j * 257);
@@ -11858,19 +11862,16 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
                                 uint8_t startInterval0 = data[offsetBeat + 2];
                                 uint8_t startInterval1 = data[offsetBeat + 3];
                                 uint16_t startInterval = ((uint16_t)startInterval0 << 8) + startInterval1;
+                                loadBank = (int8_t)((dataBeat & Beat::BANK_MASK) >> 6);   // custom: the hit's pad bank
                                 layerSong_setBeat(i, j, startInterval, fillType, fillPattern, fillTime, fillLevel, true);
-                                const uint8_t hb = (uint8_t)((dataBeat & Beat::BANK_MASK) >> 6);   // custom: pad bank
-                                if (hb) {
-                                    Bank& bk = layer.bankLibrary[j];
-                                    for (int16_t q = 0; q <= bk.lastActiveBeatNum; q++)
-                                        if (bk.beatLibrary[q].getActive() && (bk.beatLibrary[q].startInterval == startInterval)) { bk.beatLibrary[q].setBank(hb); break; }
-                                }
+                                loadBank = -1;
                             }
                         }
 
                         // Normalize/arrange active beat ordering for runtime playback
                         layerSong_arrangeActiveBeats(i, j, true, true, true, true);
                     }
+                    rhythm.quantize = quantizeWas;
                 }
                 if (errorCount == 0) phaseCheck[1] = true;
             }
@@ -11889,6 +11890,7 @@ SdResult Controller::sd_loadFile(uint8_t fileNum_) {
             lcd_drawAlert();
             HAL_Delay(1000);
             result = SD_ERROR;
+            loadPartial = phaseCheck[0] && phaseCheck[1];   // custom: the song loaded, only some samples are missing
         } else if ((phaseCheck[0]) && (phaseCheck[1])) {
             result = SD_OK;
         }
@@ -19495,6 +19497,7 @@ void Controller::file_loadAction() {
     // 3. SD LOAD EXECUTION & RESULT MAPPING
     // Execute SD load and map result code to alert outcome.
     bank_clearOthers();   // custom: banks B-D come from the file (if it has them)
+    loadPartial = false;
     switch (sd_loadFile(fileMenuCounter)) {
         case SD_OK:
 
@@ -19518,7 +19521,8 @@ void Controller::file_loadAction() {
     // 4. TRANSACTION FLAG RESTORE
     // Release load-in-progress flag after SD transaction completes.
     loadAction = false;
-    if (alertType != ALERT_LOADERROR) { currentFileNum = fileMenuCounter; pitch_loadNotes(fileMenuCounter); bank_loadSidecar(false, fileMenuCounter); }   // custom
+    // custom: notes and banks B-D load too when only some samples were missing (the song itself loaded)
+    if ((alertType != ALERT_LOADERROR) || loadPartial) { currentFileNum = fileMenuCounter; pitch_loadNotes(fileMenuCounter); bank_loadSidecar(false, fileMenuCounter); }
     project_markSaved();
 
     // 5. RESULT ALERT PRESENTATION
@@ -25447,8 +25451,8 @@ void Controller::bank_loadSidecar(bool kit_, uint8_t num_) {
     const UINT want = sizeof(all);
     const bool ok = (f_read(&sd.file, all, want, &got) == FR_OK) && (got == want);
     f_close(&sd.file);
-    if (!ok) return;
-    uint8_t e = 0;
+    if (!ok) { undo_showText("RWB? "); return; }   // custom: the banks file is there but unreadable
+    uint8_t e = 0, missed = 0;
     for (uint8_t l = 0; l < kLayerLibrarySize; l++)
         for (uint8_t b = 1; b < kPadBankCount; b++, e++) {
             const uint8_t* r = all[e];
@@ -25463,9 +25467,10 @@ void Controller::bank_loadSidecar(bool kit_, uint8_t num_) {
                 L.start = r[69]; L.end = r[70]; L.normalize = r[71];
                 L.envAttack = r[72]; L.envHold = r[73]; L.envDecay = r[74];
                 L.sliceOff = r[75]; L.sliceSync = r[76]; L.sliceBeats = r[77];
-            }
+            } else missed++;
             bank_swapLayer(l, liveBank);
         }
+    if (missed) { char t[6]; snprintf(t, sizeof(t), "MISS%u", (unsigned)(missed > 9 ? 9 : missed)); undo_showText(t); }   // bank sounds that couldn't be found
 }
 
 void Controller::choke(uint8_t layerNum_) {
@@ -27814,7 +27819,7 @@ void Controller::layerSong_setBeat(uint8_t layerNum_, uint8_t bankTab_, uint16_t
             bank.beatLibrary[beatNum].note = recordNote;   // custom: Pitch mode note (0 = normal hit)
             bank.beatLibrary[beatNum].gate = 0;
             bank.beatLibrary[beatNum].setVel(recordVel);   // custom: velocity
-            bank.beatLibrary[beatNum].setBank(liveBank);   // custom: pad bank
+            bank.beatLibrary[beatNum].setBank((loadBank >= 0) ? (uint8_t)loadBank : liveBank);   // custom: pad bank (a file load gives its own)
             bank.setBeatFill(beatNum, fillType_, fillPattern_, fillTime_, fillLevel_);
             layerSong_calculateLastActiveBeatNum(layerNum_, bankTab_);
             layerSong_calculatePlayBeatNum(layerNum_, bankTab_, playInterval);
