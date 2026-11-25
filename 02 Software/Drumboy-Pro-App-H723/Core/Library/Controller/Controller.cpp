@@ -7002,7 +7002,7 @@ void Controller::main_drawLabels(uint8_t lane_) {
 void Controller::main_drawTransport() {
     /// @brief Row above the lanes: BAR / BEAT counter and an overview of the whole song with the visible window framed.
     // custom: counter = the playhead (also when stopped); while editing a hit in SEQ = that hit
-    const bool editHit = !playActive && (menu == LAYER_SONG_MENU) && (selectedLayerNum >= 0) && (selectedBeatNum >= 0);
+    const bool editHit = !playActive && mainFollowHit && (menu == LAYER_SONG_MENU) && (selectedLayerNum >= 0) && (selectedBeatNum >= 0);
     const uint32_t pos = editHit ? layerLibrary[selectedLayerNum].bankLibrary[activeSongBank].beatLibrary[selectedBeatNum].getStartInterval() : playInterval;
     const uint16_t beatsPerBar = (barInterval / kMeasureInterval) ? (barInterval / kMeasureInterval) : 4;
     const uint16_t bar = (uint16_t)(pos / barInterval) + 1;
@@ -7089,10 +7089,23 @@ void Controller::page_drawMain() {
     const uint32_t twoBars = (uint32_t)barInterval * 2;
     const uint32_t viewLen = (song <= twoBars) ? song : twoBars;
     uint32_t anchor = 0;
+    // custom: stopped = where PLAY stopped it (RESET puts it back at the start). In the HITS menu
+    // the window follows the selected hit only once you move the selection (mainFollowHit), so
+    // stopping still shows the playhead.
+    {
+        static int16_t prevSel = -2, prevLayer = -2;
+        static bool prevPlay = false;
+        if (playActive || (prevPlay && !playActive)) mainFollowHit = false;
+        if ((menu == LAYER_SONG_MENU) && ((selectedBeatNum != prevSel) || (selectedLayerNum != prevLayer)) && (prevSel != -2) && !playActive) mainFollowHit = true;
+        if (menu != LAYER_SONG_MENU) mainFollowHit = false;
+        prevSel = selectedBeatNum;
+        prevLayer = selectedLayerNum;
+        prevPlay = playActive;
+    }
     if (playActive) anchor = playInterval;
-    else if ((menu == LAYER_SONG_MENU) && (selectedLayerNum >= 0) && (selectedBeatNum >= 0))
+    else if (mainFollowHit && (menu == LAYER_SONG_MENU) && (selectedLayerNum >= 0) && (selectedBeatNum >= 0))
         anchor = layerLibrary[selectedLayerNum].bankLibrary[activeSongBank].beatLibrary[selectedBeatNum].getStartInterval();
-    else anchor = playInterval;   // custom: stopped = where PLAY stopped it (RESET puts it back at the start)
+    else anchor = playInterval;
     uint32_t viewStart = (anchor / viewLen) * viewLen;
     if (viewStart >= song) viewStart = 0;
     const int8_t expanded = ((selectedLayerNum >= 0) && (selectedLayerNum < kLayerLibrarySize) &&

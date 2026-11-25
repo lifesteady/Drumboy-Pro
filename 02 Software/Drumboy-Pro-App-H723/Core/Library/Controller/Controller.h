@@ -636,6 +636,7 @@ class Controller {
     EqFilter laneEqF[4][6];                                             // 2 LANES: EQ state per path (A, B, REVERB, DRY)
     uint32_t routeCpuTick = 0;
     volatile int8_t noteRepeatPitchPad = -1;                            // Notes: pad the roll plays
+    bool mainFollowHit = false;                                         // main screen follows the selected hit (HITS menu, stopped)
     int16_t pitchStripPlay = -1;                                        // Notes / Levels strip: playhead column
     uint32_t pitchStripKey = 0;                                         // hits fingerprint the strip was built from
     uint32_t pitchStripTick = 0;
