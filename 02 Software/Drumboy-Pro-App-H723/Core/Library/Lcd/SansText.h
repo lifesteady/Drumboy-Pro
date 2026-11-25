@@ -39,13 +39,22 @@ static inline void layout(const SansFont& f_, const char* text_, uint16_t len_, 
     else if (trail && !lead) mode = 0;
     else if (lead && trail) mode = 2;
 
+    // Custom: spaces that pad a number ("SLOPE  6" vs "SLOPE 12") are as wide as a digit, so
+    // numbers keep their place and the rest of the line doesn't shift when a value changes.
+    auto advOf = [&](uint16_t i_) -> uint16_t {
+        uint8_t c = (uint8_t)text_[i_];
+        if ((c < 32) || (c > 126)) c = '?';
+        if (c == ' ') {
+            uint16_t j = i_;
+            while ((j < b) && (text_[j] == ' ')) j++;
+            if ((j < b) && (((text_[j] >= '0') && (text_[j] <= '9')) || (text_[j] == '+') || (text_[j] == '-')))
+                return f_.glyphs['0' - 32].adv;
+        }
+        return f_.glyphs[c - 32].adv;
+    };
     // total width in 1/4 px
     uint32_t q = 0;
-    for (uint16_t i = a; i < b; i++) {
-        uint8_t c = (uint8_t)text_[i];
-        if ((c < 32) || (c > 126)) c = '?';
-        q += f_.glyphs[c - 32].adv;
-    }
+    for (uint16_t i = a; i < b; i++) q += advOf(i);
     int32_t wPx = (int32_t)((q + 2) / 4);
     // too wide for the box: squeeze the letter spacing a little (at most 1 px per letter)
     int32_t squeezeQ = 0;
@@ -72,7 +81,7 @@ static inline void layout(const SansFont& f_, const char* text_, uint16_t len_, 
             const int16_t below = (int16_t)g.yoff + (int16_t)g.h;   // rows below the baseline
             if ((below > 0) && (below > L_.extraRows)) L_.extraRows = (uint8_t)below;
         }
-        pen += g.adv - squeezeQ;
+        pen += advOf(i) - squeezeQ;
     }
 }
 
