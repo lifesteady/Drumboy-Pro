@@ -6702,10 +6702,13 @@ bool Controller::sampling_writeWav(const char* path_, const int16_t* src_, uint3
     UINT bw = 0;
     bool ok = (f_write(&sd.file, hdr, 44, &bw) == FR_OK) && (bw == 44);
     static int16_t pcm[2048] __attribute__((aligned(32)));
+    float wz[4][2] = {{0}};   // custom: LOW / HIGH CUT baked in (writeCut), from silence
     for (uint32_t k = 0; ok && (k < n_);) {
         uint32_t n = 0;
         for (; (n < 2048) && (k < n_); n++, k++) {
-            int32_t v = (int32_t)((float)src_[k] * gain_);
+            float x = (float)src_[k];
+            if (writeCut) x = chop_cutRun(x, wz);
+            int32_t v = (int32_t)(x * gain_);
             if (v > 32767) v = 32767;
             if (v < -32767) v = -32767;
             pcm[n] = (int16_t)v;
@@ -6882,6 +6885,7 @@ void Controller::chop_begin(const char* base_, uint8_t firstPad_) {
     for (uint8_t k = 0; k < kChopMaxSlices; k++) { chopPadOf[k] = -1; chopSavedIdx[k] = -1; }
     chopFirstPad = (firstPad_ < kLayerLibrarySize) ? firstPad_ : 0;
     chopStep = 0; chopTrimFocus = 0; chopTarget = -1; chopFitTempo = 0; chopMsg[0] = 0;
+    chopLowCut = 0; chopHighCut = 0; chop_cutSetup();   // custom: no cuts on a fresh take
     chopFirstPad = 0;   // PASTE fills from pad 1   // custom: the editor opens on TRIM
     chopActive = true;
 }
@@ -7101,7 +7105,7 @@ void Controller::chop_drawHints() {
     const bool sh = keyboard.shiftKeyPress;
     chopHintShift = sh;
     static const char* const kTips[3][2][4] = {
-        {{"REC: PLAY", "LEFT / RIGHT: START OR END", "+ / -: ZOOM", "TRIM ENDS: CUTS OFF THE GREY PARTS"},
+        {{"REC: PLAY", "LEFT / RIGHT: START OR END", "+ / -: ZOOM", "LOW / HIGH CUT GO INTO THE CHOPS"},
          {"ADD + COPY: DELETE THE TAKE", nullptr, nullptr, nullptr}},
         {{"REC: PLAY + TAP PADS TO MARK", "CENTER: MARK HERE", "CLEAR: REMOVE MARKER", "+ / -: ZOOM ON MARKER"},
          {"ADD + LEFT: REMOVE ALL MARKERS", "ADD + REC: JUST PLAY", "PADS: LISTEN", nullptr}},
@@ -7122,6 +7126,42 @@ void Controller::chop_drawHints() {
         lcd.drawText(t, strlen(t), x, y);
         x = (uint16_t)(x + w + 48);   // room between tips
     }
+}
+
+static const uint16_t kLowCutHz[14] = {0, 30, 40, 60, 80, 100, 120, 150, 200, 300, 400, 600, 800, 1000};
+static const uint16_t kHighCutHz[12] = {0, 16000, 12000, 10000, 9000, 8000, 6000, 5000, 4000, 3000, 2000, 1000};
+
+void Controller::chop_cutSetup() {
+    /// @brief Custom: LOW CUT / HIGH CUT of the editor - each a 24 dB / octave Butterworth
+    /// (two biquads). Stages 0-1 high-pass, 2-3 low-pass; an unused stage passes straight through.
+    float c[4][5];
+    const float q[2] = {0.5412f, 1.3066f};
+    for (uint8_t st = 0; st < 4; st++) {
+        const bool hp = (st < 2);
+        const float f = hp ? (float)kLowCutHz[chopLowCut % 14] : (float)kHighCutHz[chopHighCut % 12];
+        if (f <= 0.0f) { c[st][0] = 1; c[st][1] = 0; c[st][2] = 0; c[st][3] = 0; c[st][4] = 0; continue; }
+        const float w = 2.0f * 3.14159265f * f / 44100.0f, cw = cosf(w), al = sinf(w) / (2.0f * q[st & 1]);
+        const float a0 = 1.0f + al;
+        const float b0 = hp ? (1.0f + cw) / 2.0f : (1.0f - cw) / 2.0f;
+        const float b1 = hp ? -(1.0f + cw) : (1.0f - cw);
+        c[st][0] = b0 / a0; c[st][1] = b1 / a0; c[st][2] = b0 / a0; c[st][3] = (-2.0f * cw) / a0; c[st][4] = (1.0f - al) / a0;
+    }
+    __disable_irq();
+    memcpy(chopCut, c, sizeof(chopCut));
+    chopCutOn = (chopLowCut != 0) || (chopHighCut != 0);
+    __enable_irq();
+}
+
+float Controller::chop_cutRun(float x_, float (*z_)[2]) {
+    if (!chopCutOn) return x_;
+    for (uint8_t st = 0; st < 4; st++) {   // transposed direct form II
+        const float* c = chopCut[st];
+        const float y = c[0] * x_ + z_[st][0];
+        z_[st][0] = c[1] * x_ - c[3] * y + z_[st][1];
+        z_[st][1] = c[2] * x_ - c[4] * y;
+        x_ = y;
+    }
+    return x_;
 }
 
 bool Controller::chop_padFree(uint8_t pad_) {
@@ -7327,6 +7367,8 @@ void Controller::chop_knob(uint8_t which_, int8_t step_) {
             case 2: chopTrimFocus = 1; moveEnd(step_ * coarse); break;
             case 3: chopTrimFocus = 1; moveEnd(step_ * fine); break;
             case 4: if ((step_ > 0) && ((chopMark[0] > 0) || (chopEnd < chopLen))) chop_truncate(); break;   // TRIM ENDS: turn right to cut the grey parts off
+            case 5: { int16_t v = (int16_t)chopLowCut + step_; if (v < 0) v = 0; if (v > 13) v = 13; chopLowCut = (uint8_t)v; chop_cutSetup(); } break;    // LOW CUT
+            case 6: { int16_t v = (int16_t)chopHighCut + step_; if (v < 0) v = 0; if (v > 11) v = 11; chopHighCut = (uint8_t)v; chop_cutSetup(); } break;   // HIGH CUT
             default: return;
         }
     } else if (chopStep == 1) {   // CHOP
@@ -7564,7 +7606,9 @@ void Controller::chop_pasteLoop() {
     snprintf(name, sizeof(name), "%s_LOOP.wav", chopStem);
     snprintf(path, sizeof(path), "Sample/RECORDED/%s", name);
     const bool exists = (f_stat(path, &sd.fileInfo) == FR_OK);
+    writeCut = true;   // custom: LOW / HIGH CUT baked into what goes on pads
     const bool ok = sampling_writeWav(path, sampBuf() + s0, n, chopGain, cues, nc);
+    writeCut = false;
     int16_t inst = -1, idx = -1;
     if (ok && !exists) { inst = sampling_libAdd(name); if (inst >= 0) idx = (int16_t)(sampleLibrarySize[inst] - 1); }
     keyboard_enable();
@@ -7625,7 +7669,9 @@ bool Controller::chop_putSlice(uint8_t i_, uint8_t pad_) {
     if (n > kSampleSize - 64) n = kSampleSize - 64;
     snprintf(name, sizeof(name), "%s_%02u.wav", chopStem, i_ + 1);
     snprintf(path, sizeof(path), "Sample/RECORDED/%s", name);
+    writeCut = true;   // custom: LOW / HIGH CUT baked into what goes on pads
     const bool ok = sampling_writeWav(path, sampBuf() + s, n, chopGain);
+    writeCut = false;
     keyboard_enable();
     if (!ok) return false;
     int16_t inst = -1, idx = -1;
@@ -7715,7 +7761,7 @@ void Controller::lcd_drawChopKnobs(bool full_) {
         }
     }
     static const char* const kHdr[3][8] = {
-        {"START       ", "START FINE  ", "END         ", "END FINE    ", "TRIM ENDS   ", "            ", "            ", "STEP        "},
+        {"START       ", "START FINE  ", "END         ", "END FINE    ", "TRIM ENDS   ", "LOW CUT     ", "HIGH CUT    ", "STEP        "},
         {"MARKER      ", "MOVE MARKER ", "FINE        ", "            ", "FIND HITS   ", "EQUAL PARTS ", "            ", "STEP        "},
         {"CHOP        ", "PITCH       ", "MUTE GROUP  ", "            ", "ATTACK      ", "HOLD        ", "DECAY       ", "STEP        "}};
     static const uint8_t counts[7] = {1, 2, 3, 4, 6, 8, 10};
@@ -7744,7 +7790,17 @@ void Controller::lcd_drawChopKnobs(bool full_) {
         secs4(chopMark[0], t, sizeof(t)); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[1], kMenuDataY[1]);
         secs(chopEnd, t, sizeof(t)); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[2], kMenuDataY[2]);
         secs4(chopEnd, t, sizeof(t)); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[3], kMenuDataY[3]);
-        put(4, ((chopMark[0] > 0) || (chopEnd < chopLen)) ? "TURN RIGHT" : "DONE"); put(5, ""); put(6, "");
+        put(4, ((chopMark[0] > 0) || (chopEnd < chopLen)) ? "TURN RIGHT" : "DONE");
+        auto hz = [&](uint8_t k, uint16_t f) {
+            if (!f) { put(k, "OFF"); return; }
+            char v[12];
+            if (f >= 1000) snprintf(v, sizeof(v), "%u KHZ", f / 1000); else snprintf(v, sizeof(v), "%u HZ", f);
+            lcd_setMenuDataState(kThemeAmber);
+            put(k, v);
+            lcd_setMenuDataState(WHITE);
+        };
+        hz(5, kLowCutHz[chopLowCut % 14]);
+        hz(6, kHighCutHz[chopHighCut % 12]);
     } else if (st == 1) {
         snprintf(t, sizeof(t), "%4u OF %2u", chopSel + 1, chopN); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[0], kMenuDataY[0]);
         secs(chopMark[chopSel], t, sizeof(t)); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[1], kMenuDataY[1]);
@@ -8016,6 +8072,27 @@ void Controller::page_drawChop() {
             lcd.drawColumn(ex + c, ey, eh + 1, colb);
         }
         return;
+    }
+    {   // custom: LOW / HIGH CUT curve, top right (TRIM, when a cut is on)
+        const uint16_t cx = 740, cy = 150, cwd = 190, ch = 24;
+        lcd.setBackColor(BLACK);
+        lcd.clearRect(cx, cy, cwd, ch + 1);
+        if ((st == 0) && chopCutOn) {
+            const float lo = (float)kLowCutHz[chopLowCut % 14], hi = (float)kHighCutHz[chopHighCut % 12];
+            lcd.setForeColor(page_mix(BLACK, kThemeLine, 0.6f));
+            lcd.drawHLine(cx, cy + ch, cwd);
+            lcd.setForeColor(kThemeAmber);
+            for (uint16_t c = 0; c < cwd; c++) {
+                const float f = 20.0f * powf(1000.0f, (float)c / (cwd - 1));   // 20 Hz .. 20 kHz
+                float g = 1.0f;
+                if (lo > 0.0f) g *= 1.0f / sqrtf(1.0f + powf(lo / f, 8.0f));
+                if (hi > 0.0f) g *= 1.0f / sqrtf(1.0f + powf(f / hi, 8.0f));
+                float db = 20.0f * log10f(g + 1e-6f);
+                if (db < -24.0f) db = -24.0f;
+                const uint16_t y = (uint16_t)(cy + (-db / 24.0f) * (ch - 2));
+                lcd.fillRect(cx + c, y, 1, 2);
+            }
+        }
     }
     // ---- waveform (TRIM / CHOP): every column built in memory and sent once, then the tags
     uint32_t vs, vl;
@@ -30606,13 +30683,18 @@ void Controller::processAudioSend(uint32_t* outputBuffer) {
         const int16_t* src = (const int16_t*)(RAM_UNDO_ADDRESS);
         const float g = kLayerVolumeCoef * mixer.masterVolumeFloat * chopGain / 32768.0f;
         uint32_t p = chopPlayPos;
+        static float pz[4][2];
+        if (!chopPlayWas) memset(pz, 0, sizeof(pz));   // custom: LOW / HIGH CUT from silence each play
+        chopPlayWas = true;
         for (uint16_t i = 0; i < I2S_BLOCK_SIZE; i++) {
             if ((p >= chopEnd) || (p >= chopPlayStop)) { chopPlay = false; break; }
-            const float v = (float)src[p++] * g;
+            const float v = chop_cutRun((float)src[p++], pz) * g;
             audioSend_L[i] += v;
             audioSend_R[i] += v;
         }
         chopPlayPos = p;
+    } else {
+        chopPlayWas = false;
     }
 
     // Accumulate all active layer signals

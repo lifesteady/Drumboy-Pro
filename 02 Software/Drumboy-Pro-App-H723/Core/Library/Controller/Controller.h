@@ -680,6 +680,13 @@ class Controller {
     int8_t chopTarget = -1;      // PADS: the PAD knob's pad
     uint16_t chopFitTempo = 0;   // tempo the take was last fitted to
     char chopMsg[72] = "";     // PADS: a message line (replace? / did not fit)
+    uint8_t chopLowCut = 0, chopHighCut = 0;   // editor LOW / HIGH CUT (table indexes)
+    float chopCut[4][5] = {{1,0,0,0,0},{1,0,0,0,0},{1,0,0,0,0},{1,0,0,0,0}};
+    volatile bool chopCutOn = false;
+    bool writeCut = false;
+    bool chopPlayWas = false;
+    void chop_cutSetup();
+    float chop_cutRun(float x_, float (*z_)[2]);
     bool chop_padFree(uint8_t pad_);
     void chop_padName(uint8_t pad_, char* out_, size_t n_);
     void chop_unplace(uint8_t k_);
