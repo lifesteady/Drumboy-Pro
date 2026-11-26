@@ -853,6 +853,7 @@ class Controller {
     void lcd_clearPage();
     // Alert functions
     void lcd_drawAlert();
+    void lcd_drawAlertBox();   // custom: the stock alert drawing
     void lcd_clearAlert();
     // Limit functions
     void lcd_drawLimitAlert();

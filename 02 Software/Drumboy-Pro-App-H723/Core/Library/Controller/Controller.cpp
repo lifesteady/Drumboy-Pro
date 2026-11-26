@@ -14423,10 +14423,21 @@ void Controller::lcd_drawPage(bool animate_) {
 /* Lcd Alert Functions -------------------------------------------------------*/
 
 void Controller::lcd_drawAlert() {
-    /// @brief Draws alert notification box and message based on current alert type.
+    /// @brief Custom wrapper: with the custom main screen, an alert sits on top of it (no switch
+    /// to the stock lanes and their old font); any other page goes back to the main screen first.
+    if (kMainView) {
+        if ((page != PAGE_NONE) && (page != PAGE_MAIN)) page_close(false);
+    } else if (page != PAGE_NONE) {
+        page_close(true);
+    }
+    const bool overMain = (page == PAGE_MAIN);
+    if (overMain) lcd.setProtect(false);
+    lcd_drawAlertBox();
+    if (overMain) lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
+}
 
-    // Custom: alerts sit in the song-grid area; close any page so the alert can be seen.
-    if (page != PAGE_NONE) page_close(true);
+void Controller::lcd_drawAlertBox() {
+    /// @brief Draws alert notification box and message based on current alert type.
 
     // 1. STYLE SETUP
     // Configure text alignment, font, and colors for alert rendering.
@@ -14546,6 +14557,11 @@ void Controller::lcd_clearAlert() {
 
     // 2. CONTENT RESTORE
     // Redraw song lane that can be overlapped by alert box.
+    if (page == PAGE_MAIN) {   // custom: the main screen draws itself back
+        pageFullRedraw = true;
+        page_draw();
+        return;
+    }
     lcd_drawSong(4, activeSongBank);
 }
 
