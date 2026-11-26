@@ -7672,16 +7672,8 @@ bool Controller::chop_putSlice(uint8_t i_, uint8_t pad_) {
     if (n > kSampleSize - 64) n = kSampleSize - 64;
     snprintf(name, sizeof(name), "%s_%02u.wav", chopStem, i_ + 1);
     snprintf(path, sizeof(path), "Sample/RECORDED/%s", name);
-    float sliceGain = chopGain;   // custom: every chop peaks at the same level (about -1 dB), so pads match
-    {
-        const int16_t* sb = sampBuf() + s;
-        int32_t pk = 1;
-        for (uint32_t q = 0; q < n; q++) { const int32_t a = (sb[q] < 0) ? -sb[q] : sb[q]; if (a > pk) pk = a; }
-        sliceGain = (0.89f * 32767.0f) / (float)pk;
-        if (sliceGain > 16.0f) sliceGain = 16.0f;
-    }
-    writeCut = true;   // custom: LOW / HIGH CUT baked into what goes on pads
-    const bool ok = sampling_writeWav(path, sampBuf() + s, n, sliceGain);
+    writeCut = true;   // custom: LOW / HIGH CUT baked into what goes on pads (the level stays as recorded)
+    const bool ok = sampling_writeWav(path, sampBuf() + s, n, chopGain);
     writeCut = false;
     keyboard_enable();
     if (!ok) return false;
