@@ -1823,6 +1823,8 @@ void Controller::keyboard_action() {
                         if ((page == PAGE_CHOP) && !alertFlag && chop_key(i)) break;   // custom: Chop page keys
                         if ((page == PAGE_SAMPLE) && (sampState == 2) && (i == KEY_CLEAR) && !alertFlag) { sampling_restart(); break; }   // custom
                         if ((page == PAGE_SAMPLE) && (sampState == 1) && (i == KEY_CLEAR) && !alertFlag) { sampState = 0; page_markDirty(PAGE_SAMPLE); pageFullRedraw = true; break; }   // custom: cancel READY
+                        if ((page == PAGE_SAMPLE) && (sampState == 5) && (i == KEY_CENTER) && !alertFlag) { chopPlay = false; sampState = 6; break; }   // custom: KEEP
+                        if ((page == PAGE_SAMPLE) && (sampState == 5) && (i == KEY_CLEAR) && !alertFlag) { chopPlay = false; sampling_arm(); sampShown = 0xFF; undo_showText("GONE "); break; }   // custom: DISCARD, READY again
                         switch (i) {
                             case KEY_RESET:
                                 if (!alertFlag) {
@@ -6490,6 +6492,7 @@ void Controller::sampling_key() {
         case 0: sampling_arm(); break;                     // READY: meter + SPEED
         case 1: sampCount = 0; sampState = 2; break;      // custom: REC starts the take now
         case 2: sampState = 3; break;                     // stop
+        case 5: if (chopPlay) chopPlay = false; else sampling_listen(); break;   // custom: listen again / stop
         default: break;                 // saving: wait
     }
     page_markDirty(PAGE_SAMPLE);
@@ -6515,7 +6518,13 @@ void Controller::sampling_update() {
     }
     if (sampState == 0) return;
     if ((page != PAGE_SAMPLE) && (sampState == 1)) { sampState = 0; return; }   // left the page while armed
-    if (sampState == 3) {
+    if (sampState == 3) {   // custom: stopped - put the take in order, play it back, and ask KEEP / DISCARD
+        sampling_prepare();
+        sampState = 5;
+        sampShown = 0xFF;
+        return;
+    }
+    if (sampState == 6) {   // custom: KEEP pressed
         sampState = 4;
         if (page == PAGE_SAMPLE) {
             lcd.setProtect(false);
@@ -6555,9 +6564,10 @@ void Controller::sampling_drawPanel(bool full_) {
         lcd.drawText(text, strlen(text), 30, 133);
         const char* st = (sampState == 1) ? "READY: PRESS REC TO RECORD"
                        : (sampState == 2) ? "RECORDING"
+                       : (sampState == 5) ? "RECORDED: KEEP IT OR DISCARD IT?"
                                           : "SAVING TO THE SD CARD";
         snprintf(text, sizeof(text), "%s", st);
-        page_drawSummary(text, (uint8_t)((sampState == 2) ? 9 : ((sampState == 1) ? 5 : 6)), (sampState == 2) ? RED : kThemeAmber);
+        page_drawSummary(text, (uint8_t)((sampState == 2) ? 9 : ((sampState == 1) ? 5 : ((sampState == 5) ? 9 : 6))), (sampState == 2) ? RED : kThemeAmber);
         lcd.setFont(FONT_07x09);
         sampling_drawKnobs();   // custom: SPEED and INPUT LEVEL live in the knob boxes now
         lcd.setFont(FONT_07x09);
@@ -6568,6 +6578,7 @@ void Controller::sampling_drawPanel(bool full_) {
         lcd.drawText("TAKE", 4, x0, 290);
         const char* hint = (sampState == 1) ? "REC: RECORD        CLEAR: CANCEL"
                          : (sampState == 2) ? "REC: STOP        CLEAR: START OVER"
+                         : (sampState == 5) ? "CENTER: KEEP        CLEAR: DISCARD        REC: LISTEN AGAIN"
                                             : "";
         lcd.clearRect(30, 380, 905, 12);
         lcd.drawText(hint, strlen(hint), x0, 380);
@@ -6762,10 +6773,9 @@ int16_t Controller::sampling_libAdd(const char* fileName_) {
     return inst;
 }
 
-bool Controller::sampling_save() {
-    /// @brief Puts the take in order (pre-roll first), peak-normalises it to about -1 dB, writes
-    /// Sample/RECORDED/REC_nnn.wav, adds it to the library, loads it onto the drum and sets up
-    /// the Chop page on it.
+void Controller::sampling_prepare() {
+    /// @brief Custom: when REC stops - the pre-roll ring in order, peak-normalised to about -1 dB,
+    /// then it plays once so you can decide KEEP or DISCARD.
     int16_t* b = sampBuf();
     const uint32_t total = kSampPreRoll + sampCount;
     {   // un-rotate the pre-roll ring in place
@@ -6777,7 +6787,25 @@ bool Controller::sampling_save() {
     for (uint32_t k = 0; k < total; k++) { const int32_t a = (b[k] < 0) ? -b[k] : b[k]; if (a > peak) peak = a; }
     float gain = (0.89f * 32767.0f) / (float)peak;
     if (gain > 16.0f) gain = 16.0f;
-    for (uint32_t k = 0; k < total; k++) b[k] = (int16_t)((float)b[k] * gain);   // the take as saved
+    for (uint32_t k = 0; k < total; k++) b[k] = (int16_t)((float)b[k] * gain);   // the take as it will be saved
+    sampling_listen();
+}
+
+void Controller::sampling_listen() {
+    chopGain = 1.0f;
+    chopEnd = kSampPreRoll + sampCount;
+    chopPlayStop = chopEnd;
+    chopPlayPos = 0;
+    chopTap = false;
+    chopPlay = true;
+}
+
+bool Controller::sampling_save() {
+    /// @brief Puts the take in order (pre-roll first), peak-normalises it to about -1 dB, writes
+    /// Sample/RECORDED/REC_nnn.wav, adds it to the library, loads it onto the drum and sets up
+    /// the Chop page on it.
+    int16_t* b = sampBuf();
+    const uint32_t total = kSampPreRoll + sampCount;   // (put in order and normalised by sampling_prepare)
 
     keyboard_disable();
     f_mkdir("Sample/RECORDED");
