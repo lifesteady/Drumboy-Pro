@@ -665,6 +665,9 @@ class Controller {
     uint8_t sampHalf = 0;
     void sampling_speedKnob(int8_t step_);
     void sampling_arm();
+    void chop_drawHints();
+    void chop_cutAt(uint32_t at_);
+    bool chopHintShift = false;
     void sampling_restart();       // custom: CLEAR while recording - throw it away, armed again
     void chop_discardTake();       // custom: ADD + COPY on the Chop page - delete the take, drum as before, armed again
     int16_t sampPrevInst = -1, sampPrevSample = -1, sampRecInst = -1, sampRecIdx = -1;

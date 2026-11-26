@@ -1822,6 +1822,7 @@ void Controller::keyboard_action() {
                     case KEYSTATE_PRESS:
                         if ((page == PAGE_CHOP) && !alertFlag && chop_key(i)) break;   // custom: Chop page keys
                         if ((page == PAGE_SAMPLE) && (sampState == 2) && (i == KEY_CLEAR) && !alertFlag) { sampling_restart(); break; }   // custom
+                        if ((page == PAGE_SAMPLE) && (sampState == 1) && (i == KEY_CLEAR) && !alertFlag) { sampState = 0; page_markDirty(PAGE_SAMPLE); pageFullRedraw = true; break; }   // custom: cancel READY
                         switch (i) {
                             case KEY_RESET:
                                 if (!alertFlag) {
@@ -6344,7 +6345,7 @@ void Controller::sampling_put(float x_) {
             if (++sampCount >= kSampMaxLength) { sampState = 3; break; }
         }
     }
-    if ((sampState == 1) && (a >= kSampThreshold)) { sampCount = 0; sampState = 2; }
+    (void)a;   // custom: no threshold - REC starts the take (sampling_key)
 }
 
 void Controller::sampling_arm() {
@@ -6440,9 +6441,9 @@ void Controller::sampling_key() {
         return;
     }
     switch (sampState) {
-        case 0: sampling_arm(); break;
-        case 1: sampState = 0; break;   // cancel
-        case 2: sampState = 3; break;   // stop
+        case 0: sampling_arm(); break;                     // READY: meter + SPEED
+        case 1: sampCount = 0; sampState = 2; break;      // custom: REC starts the take now
+        case 2: sampState = 3; break;                     // stop
         default: break;                 // saving: wait
     }
     page_markDirty(PAGE_SAMPLE);
@@ -6451,6 +6452,7 @@ void Controller::sampling_key() {
 
 void Controller::sampling_update() {
     /// @brief Main loop: live meter about 30 times a second, and saving once a take is done.
+    if ((page == PAGE_CHOP) && (keyboard.shiftKeyPress != chopHintShift)) chop_drawHints();   // custom: ADD held / let go
     if (page == PAGE_CHOP) {   // custom: Chop page playhead while the take plays (two columns at a time)
         if ((chopPlay || (chopHeadCol >= 0)) && ((HAL_GetTick() - chopPlayTick) >= 25)) {
             chopPlayTick = HAL_GetTick();
@@ -6497,7 +6499,7 @@ void Controller::sampling_drawPanel(bool full_) {
         lcd.setForeColor(kThemeAccent);
         snprintf(text, sizeof(text), "DRUM %02u  SAMPLING FROM LINE IN", sampLayer + 1);
         lcd.drawText(text, strlen(text), 30, 133);
-        const char* st = (sampState == 1) ? "ARMED: STARTS WHEN THE SOUND COMES IN"
+        const char* st = (sampState == 1) ? "READY: PRESS REC TO RECORD"
                        : (sampState == 2) ? "RECORDING"
                                           : "SAVING TO THE SD CARD";
         snprintf(text, sizeof(text), "%s", st);
@@ -6520,7 +6522,7 @@ void Controller::sampling_drawPanel(bool full_) {
         lcd.setForeColor(kThemeHeader);
         lcd.drawText("INPUT", 5, x0, 200);
         lcd.drawText("TAKE", 4, x0, 290);
-        const char* hint = (sampState == 1) ? "REC: CANCEL    MIXER LINE IN LEVEL: INPUT LEVEL    THE WHITE LINE: WHERE IT STARTS"
+        const char* hint = (sampState == 1) ? "REC: RECORD    CLEAR: CANCEL    MIXER LINE IN LEVEL: INPUT LEVEL"
                          : (sampState == 2) ? "REC: STOP    CLEAR: START OVER    THEN CHOP IT ONTO THE PADS"
                                             : "";
         lcd.clearRect(30, 380, 905, 12);
@@ -6550,8 +6552,7 @@ void Controller::sampling_drawPanel(bool full_) {
         lcd.setForeColor(k);
         lcd.fillRect(x0 + c, my, 3, mh);
     }
-    lcd.setForeColor(kThemeInk);
-    lcd.drawVLine(x0 + thr, my - 6, mh + 12);
+    (void)thr;   // custom: no threshold line (REC starts the take)
     // take length, with a tick where one pad's worth (5.4 s) ends
     const uint16_t ty = 304, th = 22;
     const uint32_t n = (sampState >= 2) ? sampCount : 0;
@@ -6935,13 +6936,28 @@ bool Controller::chop_key(uint8_t key_) {
     /// @brief Left keypad on the Chop page. Returns true when the key was used here.
     switch (key_) {
         case KEY_ADD: keyboard.shiftKeyPress = true; return true;   // modifier only (ADD + pad = put the slice there)
-        case KEY_LEFT: if (chopSel > 0) chopSel--; break;
+        case KEY_LEFT:
+            if (keyboard.shiftKeyPress) {   // custom: ADD + LEFT - remove every cut, start over
+                chopN = 1;
+                for (uint8_t k = 1; k < kChopMaxSlices; k++) { chopPadOf[k] = -1; chopSavedIdx[k] = -1; }
+                chopSel = 0;
+                undo_showText("CLEAN");
+                break;
+            }
+            if (chopSel > 0) chopSel--;
+            break;
         case KEY_RIGHT: if (chopSel + 1 < chopN) chopSel++; break;
         case KEY_UP: if (chopZoom < 10) chopZoom++; break;
         case KEY_DOWN: if (chopZoom > 0) chopZoom--; break;
         case KEY_CENTER: {   // split the selected slice in the middle
             if (keyboard.shiftKeyPress) { chop_stretch(); break; }   // ADD + CENTER: stretch to the tempo
             if (chopN >= kChopMaxSlices) { undo_showText("FULL "); return true; }
+            if (chopPlay) {   // custom: while it plays, CENTER cuts right where you hear it
+                const uint32_t lag = 220;
+                const uint32_t p = chopPlayPos;
+                chop_cutAt((p > lag) ? (p - lag) : 0);
+                break;
+            }
             const uint32_t s = chopMark[chopSel], e = chop_sliceEnd(chopSel);
             if (e - s < 512) return true;
             for (int8_t k = (int8_t)chopN; k > (int8_t)chopSel + 1; k--) { chopMark[k] = chopMark[k - 1]; chopPadOf[k] = chopPadOf[k - 1]; chopSavedIdx[k] = chopSavedIdx[k - 1]; }
@@ -6980,6 +6996,42 @@ bool Controller::chop_key(uint8_t key_) {
     }
     page_markDirty(PAGE_CHOP);
     return true;
+}
+
+void Controller::chop_cutAt(uint32_t at_) {
+    /// @brief Custom: a new cut at at_, in order among the others; it becomes the selected slice.
+    if ((chopN >= kChopMaxSlices) || (at_ + 64 >= chopEnd)) return;
+    uint8_t k = 0;   // the slice at_ falls in
+    while ((k + 1 < chopN) && (chopMark[k + 1] <= at_)) k++;
+    if ((at_ < chopMark[k] + 64) || ((k + 1 < chopN) && (at_ + 64 > chopMark[k + 1]))) return;   // too close to a cut
+    for (int8_t q = (int8_t)chopN; q > (int8_t)k + 1; q--) { chopMark[q] = chopMark[q - 1]; chopPadOf[q] = chopPadOf[q - 1]; chopSavedIdx[q] = chopSavedIdx[q - 1]; }
+    chopMark[k + 1] = at_;
+    chopPadOf[k + 1] = -1;
+    chopSavedIdx[k + 1] = -1;
+    chopN++;
+    chopSel = k + 1;
+}
+
+void Controller::chop_drawHints() {
+    /// @brief Custom: one quiet line of keys; holding ADD shows the ADD keys instead.
+    const bool sh = keyboard.shiftKeyPress;
+    chopHintShift = sh;
+    lcd.setBackColor(BLACK);
+    lcd.clearRect(30, 416, 905, 32);
+    lcd.setFont(FONT_07x09);
+    lcd.setAlignment(LEFT);
+    lcd.setForeColor(kThemeHeader);
+    if (!sh) {
+        const char h[] = "REC: PLAY + TAP PADS TO CHOP   CENTER: CUT (WHILE PLAYING)   CLEAR: REMOVE CUT   PADS: HEAR   HOLD ADD: MORE";
+        lcd.drawText(h, strlen(h), 30, 420);
+    } else {
+        lcd.setForeColor(kThemeAmber);
+        const char h1[] = "ADD + PAD: SLICE ON THAT PAD   ADD + LEFT: REMOVE ALL CUTS   ADD + CLEAR: TRUNCATE   ADD + REC: LISTEN";
+        const char* h2 = chopFromTake ? "ADD + CENTER: FIT TEMPO   PASTE: SLICES ON PADS   ADD + PASTE: LOOP   ADD + COPY: DELETE TAKE"
+                                      : "ADD + CENTER: FIT TEMPO   PASTE: SLICES ON PADS   ADD + PASTE: LOOP";
+        lcd.drawText(h1, strlen(h1), 30, 420);
+        lcd.drawText(h2, strlen(h2), 30, 438);
+    }
 }
 
 void Controller::chop_pad(uint8_t pad_) {
@@ -7564,13 +7616,9 @@ void Controller::page_drawChop() {
         lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
         lcd.setForeColor(kThemeLine);
         lcd.drawHLine(30, 177, 900);
+        chop_drawHints();   // custom: one quiet line (ADD shows the rest)
         lcd.setFont(FONT_07x09);
-        lcd.setAlignment(LEFT);
         lcd.setForeColor(kThemeHeader);
-        const char h1[] = "PADS: HEAR   ADD + PAD: PUT THE SLICE THERE   REC: PLAY + TAP PADS TO CHOP   UP / DOWN: ZOOM";
-        lcd.drawText(h1, strlen(h1), 30, 420);
-        const char h2[] = "LEFT / RIGHT: SLICE  CENTER: SPLIT  CLEAR: REMOVE  ADD + CLEAR: TRUNCATE  ADD + CENTER: FIT TEMPO";
-        lcd.drawText(h2, strlen(h2), 30, 438);
         lcd.setAlignment(RIGHT);
         const char h3[] = "LAYER INST: BACK";
         lcd.drawText(h3, strlen(h3), 930, 137);
@@ -7622,13 +7670,6 @@ void Controller::page_drawChop() {
     lcd.setForeColor(kThemeHeader);
     lcd.clearRect(30, 393, 900, 14);
     lcd.drawText(text, strlen(text), 30, 396);
-    {   // paste keys, right end of the same row
-        lcd.setAlignment(RIGHT);
-        lcd.setForeColor(kThemeAmber);
-        const char* hp = chopFromTake ? "ADD + COPY: DELETE   PASTE: ON PADS   ADD + PASTE: LOOP" : "PASTE: ON PADS   ADD + PASTE: LOOP";
-        lcd.drawText(hp, strlen(hp), 930, 396);
-        lcd.setAlignment(LEFT);
-    }
     const uint16_t oy = 182, oh = 4;
     if (chopZoom) {
         for (uint16_t c = 0; c < gw; c += 2) {
