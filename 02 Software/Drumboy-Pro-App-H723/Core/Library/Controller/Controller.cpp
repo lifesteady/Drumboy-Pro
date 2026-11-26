@@ -26711,7 +26711,7 @@ void Controller::layerInst_setSampleLoaded(uint8_t layerNum_) {
             // inherits that same guarantee, so 4x keeps the property while quadrupling read
             // throughput.
             const uint32_t rawArraySize = 24576;
-            static uint8_t rawArray[rawArraySize];
+            static uint8_t rawArray[rawArraySize] __attribute__((section(".RAM_D2"), aligned(32)));   // custom: in the free 32 KB D2 RAM (SDMMC2 reaches it), main RAM is full
 
             // Determine Format Coefficients
             uint32_t sRate = layer.wavLoadedData.fmt_chunk.sampleRate;
