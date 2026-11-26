@@ -666,7 +666,7 @@ class Controller {
     uint8_t sampHalf = 0;
     void sampling_speedKnob(int8_t step_);
     void sampling_knob(uint8_t function_, int8_t step_);
-    void sampling_drawKnobs();
+    void sampling_drawKnobs(bool full_ = true);
     void sampling_prepare();
     void sampling_listen();
     bool sampKnobsShown = false;
@@ -685,6 +685,8 @@ class Controller {
     volatile bool chopCutOn = false;
     bool writeCut = false;
     bool chopPlayWas = false;
+    uint16_t chopCurveKey = 0xFFFF; bool chopCurveForce = true;
+    uint8_t chopTileKey[10], chopPadKey[10], chopTileN = 0xFF;   // PADS: what each tile / pad box shows now
     void chop_cutSetup();
     float chop_cutRun(float x_, float (*z_)[2]);
     bool chop_padFree(uint8_t pad_);

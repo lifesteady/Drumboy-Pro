@@ -6433,23 +6433,25 @@ void Controller::sampling_knob(uint8_t function_, int8_t step_) {
         int16_t v = (int16_t)mixer.liVolume + step_;
         if (v < kMinMixerLiVolume) v = kMinMixerLiVolume;
         if (v > kMaxMixerLiVolume) v = kMaxMixerLiVolume;
-        if (v != mixer.liVolume) { mixer_setLiVolume((uint8_t)v); sampling_drawKnobs(); }
+        if (v != mixer.liVolume) { mixer_setLiVolume((uint8_t)v); sampling_drawKnobs(false); }
     }
 }
 
-void Controller::sampling_drawKnobs() {
+void Controller::sampling_drawKnobs(bool full_) {
     /// @brief Custom: knob boxes while READY / recording. Only what works is labelled.
     static const char* const kSpeed[3] = {"    NORMAL", "  45 AT 33", " HALF RATE"};
     const LcdFont f = lcd.getFont();
     const LcdAlign al = lcd.getAlignment();
     lcd.setProtect(false);
     lcd.setBackColor(BLACK);
-    lcd.clearRect(kMenuLineX[2] + 2, kMenuLineY[2], (kMenuDataX[3] + 20) - (kMenuLineX[2] + 2), kMenuLineHeight);
-    lcd.setForeColor(kThemeLine);
-    lcd.drawVLine(kMenuLineX[3], kMenuLineY[3], kMenuLineHeight);
-    for (uint8_t k = 0; k < 8; k++) {
-        const uint16_t y0 = kMenuHeaderY[k] + kMenuHeaderHeight + 1;
-        lcd.clearRect(kMenuLineX[k] + 2, y0, 170, kMenuDataY[k] - 1 - y0);
+    if (full_) {   // custom: clearing only on the first draw (no flashing when a value changes)
+        lcd.clearRect(kMenuLineX[2] + 2, kMenuLineY[2], (kMenuDataX[3] + 20) - (kMenuLineX[2] + 2), kMenuLineHeight);
+        lcd.setForeColor(kThemeLine);
+        lcd.drawVLine(kMenuLineX[3], kMenuLineY[3], kMenuLineHeight);
+        for (uint8_t k = 0; k < 8; k++) {
+            const uint16_t y0 = kMenuHeaderY[k] + kMenuHeaderHeight + 1;
+            lcd.clearRect(kMenuLineX[k] + 2, y0, 170, kMenuDataY[k] - 1 - y0);
+        }
     }
     lcd_setMenuHeaderState(CYAN);
     for (uint8_t k = 0; k < 8; k++) lcd.drawText((k == 0) ? "SPEED       " : ((k == 1) ? "INPUT LEVEL " : "            "), 12, kMenuHeaderX[k], kMenuHeaderY[k]);
@@ -6571,7 +6573,7 @@ void Controller::sampling_drawPanel(bool full_) {
         snprintf(text, sizeof(text), "%s", st);
         page_drawSummary(text, (uint8_t)((sampState == 2) ? 9 : ((sampState == 1) ? 5 : ((sampState == 5) ? 9 : 6))), (sampState == 2) ? RED : kThemeAmber);
         lcd.setFont(FONT_07x09);
-        sampling_drawKnobs();   // custom: SPEED and INPUT LEVEL live in the knob boxes now
+        sampling_drawKnobs(!sampKnobsShown);   // custom: SPEED and INPUT LEVEL live in the knob boxes now
         lcd.setFont(FONT_07x09);
         lcd.setAlignment(LEFT);
         lcd.setBackColor(BLACK);
@@ -7929,6 +7931,10 @@ void Controller::page_drawChop() {
         lcd.drawText(h3, strlen(h3), 930, 137);
         pageFullRedraw = false;
         lcd_drawChopKnobs(true);
+        chopCurveForce = true;   // custom: everything below draws in full once
+        memset(chopTileKey, 0xFF, sizeof(chopTileKey));
+        memset(chopPadKey, 0xFF, sizeof(chopPadKey));
+        chopTileN = 0xFF;
     } else {
         lcd_drawChopKnobs(false);
     }
@@ -7958,12 +7964,16 @@ void Controller::page_drawChop() {
             const uint16_t sy = 188, sh = 44, gap = 6;
             uint16_t tw = (uint16_t)((900 - (chopN - 1) * gap) / (chopN ? chopN : 1));
             if (tw > 140) tw = 140;
-            lcd.clearRect(30, sy, 900, sh + 2);
+            if (chopTileN != chopN) { lcd.clearRect(30, sy, 900, sh + 2); memset(chopTileKey, 0xFF, sizeof(chopTileKey)); chopTileN = chopN; }
             const int16_t* bb = sampBuf();
             for (uint8_t k = 0; k < chopN; k++) {
                 const uint16_t x = (uint16_t)(30 + k * (tw + gap));
                 const bool sel = (k == chopSel);
                 const bool placed = (chopPadOf[k] >= 0);
+                const uint8_t tk = (uint8_t)((sel ? 0x80 : 0) | (uint8_t)(chopPadOf[k] + 1));   // custom: a tile is drawn only when it changes
+                if (chopTileKey[k] == tk) continue;
+                chopTileKey[k] = tk;
+                lcd.clearRect(x, sy, tw, sh);
                 const RGB16Color edge = sel ? kThemeAmber : (placed ? page_mix(BLACK, kThemeLine, 0.6f) : kThemeLine);
                 lcd.setForeColor(edge);
                 lcd.drawHLine(x, sy, tw); lcd.drawHLine(x, sy + sh - 1, tw);
@@ -7995,6 +8005,9 @@ void Controller::page_drawChop() {
             const bool selPad = (ck >= 0) && (ck == (int8_t)chopSel);
             const bool other = (ck < 0) && !chop_padFree(p);   // holds a sound from outside this take
             const bool asking = (chopTarget == (int8_t)p);
+            const uint8_t pk = (uint8_t)((ck + 1) | (selPad ? 0x20 : 0) | (other ? 0x40 : 0) | (asking ? 0x80 : 0));   // custom: drawn only when it changes
+            if (chopPadKey[p] == pk) continue;
+            chopPadKey[p] = pk;
             const RGB16Color edge = asking ? RED : ((ck >= 0) ? kThemeAccent : kThemeLine);
             const RGB16Color fill = selPad ? page_mix(BLACK, kThemeAccent, 0.22f) : BLACK;
             lcd.setForeColor(fill);
@@ -8014,8 +8027,8 @@ void Controller::page_drawChop() {
         }
         // message line (replace? / did not fit)
         lcd.setForeColor(kThemeAmber);
-        lcd.clearRect(30, 393, 900, 14);
-        if (chopMsg[0]) lcd.drawText(chopMsg, strlen(chopMsg), 30, 396);
+        snprintf(text, sizeof(text), "%-99s", chopMsg);   // custom: padded, drawn over the old (no flashing)
+        lcd.drawText(text, 99, 30, 396);
         // envelope over the chop's waveform (right side)
         const uint16_t ex = 490, ew = 440, ey = 262, eh = 120;
         lcd.setForeColor(kThemeHeader);
@@ -8075,9 +8088,12 @@ void Controller::page_drawChop() {
     }
     {   // custom: LOW / HIGH CUT curve, top right (TRIM, when a cut is on)
         const uint16_t cx = 740, cy = 150, cwd = 190, ch = 24;
+        const uint16_t key = (uint16_t)((st << 10) | (chopCutOn << 9) | (chopLowCut << 4) | chopHighCut);
+        const bool redraw = (key != chopCurveKey) || chopCurveForce;
+        chopCurveKey = key; chopCurveForce = false;
         lcd.setBackColor(BLACK);
-        lcd.clearRect(cx, cy, cwd, ch + 1);
-        if ((st == 0) && chopCutOn) {
+        if (redraw) lcd.clearRect(cx, cy, cwd, ch + 1);
+        if (redraw && (st == 0) && chopCutOn) {
             const float lo = (float)kLowCutHz[chopLowCut % 14], hi = (float)kHighCutHz[chopHighCut % 12];
             lcd.setForeColor(page_mix(BLACK, kThemeLine, 0.6f));
             lcd.drawHLine(cx, cy + ch, cwd);
@@ -8118,8 +8134,11 @@ void Controller::page_drawChop() {
     lcd.setAlignment(LEFT);
     lcd.setForeColor(kThemeHeader);
     lcd.setBackColor(BLACK);
-    lcd.clearRect(30, 393, 900, 14);
-    lcd.drawText(text, strlen(text), 30, 396);
+    {   // custom: padded, drawn over the old (no flashing)
+        char line[104];
+        snprintf(line, sizeof(line), "%-99s", text);
+        lcd.drawText(line, 99, 30, 396);
+    }
     const uint16_t oy = 182, oh = 4;
     if (chopZoom) {
         for (uint16_t c = 0; c < gw; c += 2) {
@@ -8642,12 +8661,16 @@ void Controller::page_drawSample() {
     float dMs = sample_envMs(layer.envDecay, kEnvDecayMaxMs);
     if (dMs < 2.0f) dMs = 2.0f;
     int16_t prevY = -1;
+    // custom: each column is built in memory and sent in one go (no black flash while a knob turns)
+    static RGB16Color colB[300];
+    const uint16_t colH = (uint16_t)(gBot - gTop + 1);
+    auto px = [&](int16_t y, RGB16Color c) { if ((y >= gTop) && (y <= gBot)) colB[y - gTop] = c; };
+    auto vl = [&](int16_t y0, int16_t n, RGB16Color c) { for (int16_t q = 0; q < n; q++) px(y0 + q, c); };
     for (uint16_t c = 0; c < gw; c++) {
         const uint16_t x = gx + c;
-        lcd.setForeColor(BLACK);
-        lcd.drawVLine(x, gTop, gBot - gTop + 1);
-        if ((c % 2) == 0) { lcd.setForeColor(kThemeLine); lcd.drawPixel(x, mid); }
-        if (!hasSample) continue;
+        for (uint16_t r = 0; r < colH; r++) colB[r] = BLACK;
+        if ((c % 2) == 0) px(mid, kThemeLine);
+        if (!hasSample) { lcd.drawColumn(x, gTop, colH, colB); continue; }
 
         const uint32_t idx = (uint32_t)(((uint64_t)size * c) / gw);
         const bool inside = (idx >= sIdx) && (idx < eIdx);
@@ -8662,30 +8685,29 @@ void Controller::page_drawSample() {
         const int16_t yMax = (int16_t)(mid - (peakMax[c] / 100.0f) * half);
         const int16_t yMin = (int16_t)(mid - (peakMin[c] / 100.0f) * half);
         // Faint full waveform, then the part you hear (shaped by the envelope) on top.
-        lcd.setForeColor(inside ? page_mix(BLACK, kThemeInk, 0.22f) : page_mix(BLACK, kThemeLine, 0.7f));
-        if (yMin > yMax) lcd.drawVLine(x, yMax, yMin - yMax + 1); else lcd.drawPixel(x, mid);
+        { const RGB16Color cc = inside ? page_mix(BLACK, kThemeInk, 0.22f) : page_mix(BLACK, kThemeLine, 0.7f);
+          if (yMin > yMax) vl(yMax, yMin - yMax + 1, cc); else px(mid, cc); }
         if (inside && (g > 0.0f)) {
             const int16_t yMaxG = (int16_t)(mid - (peakMax[c] / 100.0f) * half * g);
             const int16_t yMinG = (int16_t)(mid - (peakMin[c] / 100.0f) * half * g);
-            lcd.setForeColor(kThemeInk);
-            if (yMinG > yMaxG) lcd.drawVLine(x, yMaxG, yMinG - yMaxG + 1); else lcd.drawPixel(x, mid);
+            if (yMinG > yMaxG) vl(yMaxG, yMinG - yMaxG + 1, kThemeInk); else px(mid, kThemeInk);
         }
         // Envelope line (top half) inside the window
         if (inside) {
             const int16_t y = (int16_t)(mid - g * half);
-            lcd.setForeColor(kThemeAccent);
             if (prevY >= 0) {
                 const int16_t lo = (y < prevY) ? y : prevY, hi = (y < prevY) ? prevY : y;
-                if (hi - lo > 1) lcd.drawVLine(x, lo, hi - lo);
+                if (hi - lo > 1) vl(lo, hi - lo, kThemeAccent);
             }
-            lcd.drawPixel(x, y);
+            px(y, kThemeAccent);
             prevY = y;
         } else {
             prevY = -1;
         }
         // START / END markers
-        if ((idx >= sIdx) && (c > 0) && ((uint32_t)(((uint64_t)size * (c - 1)) / gw) < sIdx)) { lcd.setForeColor(kThemeAccent); lcd.drawVLine(x, gTop, gBot - gTop + 1); }
-        if ((idx >= eIdx) && (c > 0) && ((uint32_t)(((uint64_t)size * (c - 1)) / gw) < eIdx)) { lcd.setForeColor(kThemeAccent); lcd.drawVLine(x, gTop, gBot - gTop + 1); }
+        if ((idx >= sIdx) && (c > 0) && ((uint32_t)(((uint64_t)size * (c - 1)) / gw) < sIdx)) vl(gTop, colH, kThemeAccent);
+        if ((idx >= eIdx) && (c > 0) && ((uint32_t)(((uint64_t)size * (c - 1)) / gw) < eIdx)) vl(gTop, colH, kThemeAccent);
+        lcd.drawColumn(x, gTop, colH, colB);
     }
 
     // ---- time labels under the waveform
