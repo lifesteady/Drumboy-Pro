@@ -4220,6 +4220,7 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
         case ENC_SONG_NOTE: layerSong_noteKnob(1); break;
         case ENC_SONG_GATE: layerSong_gateKnob(1); break;
         case ENC_SONG_BANK: layerSong_bankKnob(1); break;   // custom
+        case ENC_SONG_FIT: layerSong_fitKnob(1); break;     // custom
         case ENC_SM_STEP: song_knob(0, 1); break;
         case ENC_SM_BANK: song_knob(1, 1); break;
         case ENC_SM_REPEAT: song_knob(2, 1); break;
@@ -4852,6 +4853,7 @@ void Controller::encoder_decValue(uint8_t encoderNum_) {
         case ENC_SONG_NOTE: layerSong_noteKnob(-1); break;
         case ENC_SONG_GATE: layerSong_gateKnob(-1); break;
         case ENC_SONG_BANK: layerSong_bankKnob(-1); break;   // custom
+        case ENC_SONG_FIT: break;                            // custom: turn right only
         case ENC_SM_STEP: song_knob(0, -1); break;
         case ENC_SM_BANK: song_knob(1, -1); break;
         case ENC_SM_REPEAT: song_knob(2, -1); break;
@@ -18587,6 +18589,7 @@ void Controller::lcd_drawLayerSongMenu(uint8_t layerNum_) {
     lcd.drawText("NOTE      ", kMenuHeaderTextSize, kMenuHeaderX[6], kMenuHeaderY[6]);   // custom
     lcd.drawText("GATE      ", kMenuHeaderTextSize, kMenuHeaderX[7], kMenuHeaderY[7]);   // custom
     lcd.drawText("BANK      ", kMenuHeaderTextSize, kMenuHeaderX[2], kMenuHeaderY[2]);   // custom: pad bank of the hit
+    lcd.drawText("FIT TO TEMPO", 12, kMenuHeaderX[3], kMenuHeaderY[3]);                     // custom: knob 4, turn right
 
     // 4. DATA DRAW
     // Draw beat-fill values and graph.
@@ -18858,7 +18861,7 @@ void Controller::lcd_drawLayerSong_BeatFillGraphData(uint8_t layerNum_) {
             // Draw graph grid after bars in all cases.
             lcd.setForeColor(WHITE);
             lcd.drawVLine(gridX0, kBeatGraphStartY, kBeatGraphHeight);
-            for (uint8_t i = 0; i < 18; i++) {
+            for (uint8_t i = 0; i < (kBeatGraphHeight / 3); i++) {
                 uint16_t y = kBeatGraphStartY + (i * 3);
                 lcd.drawPixel(gridX1, y);
                 lcd.drawPixel(gridX2, y);
@@ -18875,7 +18878,7 @@ void Controller::lcd_drawLayerSong_BeatFillGraphData(uint8_t layerNum_) {
         // Clear and reset graph on menu change or deselection
         lcd.clearRect(kBeatGraphStartX, kBeatGraphStartY, kBeatGraphWidth - 2, kBeatGraphHeight);
         lcd.drawVLine(kBeatGraphStartX, kBeatGraphStartY, kBeatGraphHeight);
-        for (uint8_t i = 0; i < 18; i++) {
+        for (uint8_t i = 0; i < (kBeatGraphHeight / 3); i++) {
             lcd.drawPixel(kBeatGraphStartX + (kBeatGraphWidth / 4), kBeatGraphStartY + (i * 3));
             lcd.drawPixel(kBeatGraphStartX + (kBeatGraphWidth / 2), kBeatGraphStartY + (i * 3));
             lcd.drawPixel(kBeatGraphStartX + (3 * kBeatGraphWidth / 4), kBeatGraphStartY + (i * 3));
@@ -18888,7 +18891,7 @@ void Controller::lcd_drawLayerSong_BeatFillGraphData(uint8_t layerNum_) {
         // Default clear state
         lcd.clearRect(kBeatGraphStartX, kBeatGraphStartY, kBeatGraphWidth - 2, kBeatGraphHeight - 1);
         lcd.drawVLine(kBeatGraphStartX, kBeatGraphStartY, kBeatGraphHeight);
-        for (uint8_t i = 0; i < 18; i++) {
+        for (uint8_t i = 0; i < (kBeatGraphHeight / 3); i++) {
             lcd.drawPixel(kBeatGraphStartX + (kBeatGraphWidth / 4), kBeatGraphStartY + (i * 3));
             lcd.drawPixel(kBeatGraphStartX + (kBeatGraphWidth / 2), kBeatGraphStartY + (i * 3));
             lcd.drawPixel(kBeatGraphStartX + (3 * kBeatGraphWidth / 4), kBeatGraphStartY + (i * 3));
@@ -28511,6 +28514,48 @@ void Controller::layerSong_gateKnob(int8_t step_) {
     if (g > 40) g = 40;
     b.setGate((uint16_t)(g * 100));
     lcd_drawLayerSong_NoteGateData(selectedLayerNum);
+}
+
+void Controller::layerSong_fitKnob(int8_t step_) {
+    /// @brief Custom: HITS menu knob 4, turned right - the drum's sound (this bank) stretched to a
+    /// whole number of beats at the current tempo, pitch unchanged. Saved as a new file in
+    /// Sample/RECORDED (the original stays) and loaded onto the drum.
+    static uint32_t lastTick = 0;
+    if (step_ <= 0) return;
+    if ((HAL_GetTick() - lastTick) < 1500) return;   // one turn, one fit
+    lastTick = HAL_GetTick();
+    const uint8_t l = (uint8_t)selectedLayerNum;
+    if (l >= kLayerLibrarySize) return;
+    if ((sampState != 0) || chopActive) { undo_showText("BUSY "); return; }
+    if (!layerLibrary[l].samplePlay || !chop_loadLayer(l)) { undo_showText("EMPTY"); return; }
+    undo_showText("WAIT ");
+    chopN = 1;
+    chopMark[0] = 0;
+    chopEnd = chopLen;
+    const uint32_t before = chopLen;
+    chop_stretch();
+    if (chopLen == before) { chopActive = false; return; }   // already in time (NONE) or too long (LONG)
+    keyboard_disable();
+    f_mkdir("Sample/RECORDED");
+    char name[kFileNameSize], path[96];
+    for (uint16_t q = 1; q < 100; q++) {
+        snprintf(name, sizeof(name), "%.12s_T%02u.wav", chopBase, q);
+        snprintf(path, sizeof(path), "Sample/RECORDED/%s", name);
+        if (f_stat(path, &sd.fileInfo) != FR_OK) break;
+    }
+    const bool ok = sampling_writeWav(path, sampBuf(), chopLen, chopGain);
+    const int16_t inst = ok ? sampling_libAdd(name) : -1;
+    keyboard_enable();
+    chopActive = false;
+    if (inst < 0) { undo_showText("ERROR"); return; }
+    layerInst_setInstSelected(l, inst);
+    layerInst_setSampleSelected(l, (int16_t)(sampleLibrarySize[inst] - 1));
+    layerInst_setInstLoaded(l);
+    memset(layerLibrary[l].sampleLoadedData.fileName, 0, sizeof(layerLibrary[l].sampleLoadedData.fileName));
+    layerInst_setSampleLoaded(l);
+    layerInst_setStart(l, kInitialLayerStart);
+    layerInst_setEnd(l, kInitialLayerEnd);
+    undo_showText("FIT  ");
 }
 
 void Controller::layerSong_bankKnob(int8_t step_) {

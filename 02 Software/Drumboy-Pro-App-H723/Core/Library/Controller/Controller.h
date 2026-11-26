@@ -516,6 +516,7 @@ class Controller {
     void layerSong_noteKnob(int8_t step_);
     void layerSong_gateKnob(int8_t step_);
     void layerSong_bankKnob(int8_t step_);
+    void layerSong_fitKnob(int8_t step_);   // custom: HITS knob 4
     void layerSong_recordBeat(uint8_t layerNum_, uint8_t bankTab_, uint16_t interval_, uint8_t fillType_, uint8_t fillPattern_, uint8_t fillTime_, uint8_t fillLevel_, bool selected_);   // custom: live hit, replaces one at the same spot   // custom: pad bank of the selected hit
     void lcd_drawLayerSong_NoteGateData(uint8_t layerNum_);
     uint8_t vel_pad();
