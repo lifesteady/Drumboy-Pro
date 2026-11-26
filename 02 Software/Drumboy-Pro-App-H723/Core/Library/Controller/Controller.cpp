@@ -582,7 +582,7 @@ void Controller::update() {
                     undo_checkpoint(UNDO_RECORD);   // custom: one undo step per take
                     if (!metronome.precountState) {
                         recordVel = v;
-                        layerSong_setBeat(layerNum, activeSongBank, groove_unswing(layerNum, playInterval), 0, 0, 0, 0, true);
+                        layerSong_recordBeat(layerNum, activeSongBank, groove_unswing(layerNum, playInterval), 0, 0, 0, 0, true);
                         recordVel = 16;
                     } else {
                         // Note landed during precount; commit it to position 0 once playback starts.
@@ -1782,7 +1782,7 @@ void Controller::keyboard_action() {
                                 undo_checkpoint(UNDO_RECORD);
                                 HAL_NVIC_DisableIRQ(TIM15_IRQn);
                                 recordVel = v;
-                                layerSong_setBeat(layerNum, activeSongBank, (uint16_t)at, 0, 0, 0, 0, true);
+                                layerSong_recordBeat(layerNum, activeSongBank, (uint16_t)at, 0, 0, 0, 0, true);
                                 recordVel = 16;
                                 HAL_NVIC_EnableIRQ(TIM15_IRQn);
                             }
@@ -1795,7 +1795,7 @@ void Controller::keyboard_action() {
                                 undo_checkpoint(UNDO_RECORD);   // custom: one undo step per take
                                 if (!metronome.precountState) {
                                     recordVel = v;
-                                    layerSong_setBeat(layerNum, activeSongBank, groove_unswing(layerNum, playInterval), 0, 0, 0, 0, true);
+                                    layerSong_recordBeat(layerNum, activeSongBank, groove_unswing(layerNum, playInterval), 0, 0, 0, 0, true);
                                     recordVel = 16;
                                 } else {
                                     // Hit landed during precount; commit it to position 0 once playback starts.
@@ -8653,7 +8653,7 @@ void Controller::noteRepeat_pitchHit(int8_t pad_, bool record_, uint16_t at_) {
     if (record_) {
         recordNote = note;
         recordVel = vel;
-        layerSong_setBeat(pitchLayer, activeSongBank, at_, 0, 0, 0, 0, true);
+        layerSong_recordBeat(pitchLayer, activeSongBank, at_, 0, 0, 0, 0, true);
         recordNote = 0;
         recordVel = 16;
     }
@@ -8683,7 +8683,7 @@ void Controller::noteRepeat_tick() {
         Layer& layer = layerLibrary[l];
         const uint8_t v = vel_pad();   // custom: humanize makes rolls breathe
         if ((!layer.mute) && (layer.samplePlay)) layer_playBeat(l, vel_gain(v));
-        if (recordActive) { recordVel = v; layerSong_setBeat(l, activeSongBank, playInterval, 0, 0, 0, 0, true); recordVel = 16; }
+        if (recordActive) { recordVel = v; layerSong_recordBeat(l, activeSongBank, playInterval, 0, 0, 0, 0, true); recordVel = 16; }
     }
 }
 
@@ -8847,7 +8847,7 @@ void Controller::pitch_pad(uint8_t pad_) {
                 undo_checkpoint(UNDO_RECORD);
                 recordNote = note;
                 HAL_NVIC_DisableIRQ(TIM15_IRQn);
-                layerSong_setBeat(pitchLayer, activeSongBank, (uint16_t)at, 0, 0, 0, 0, true);
+                layerSong_recordBeat(pitchLayer, activeSongBank, (uint16_t)at, 0, 0, 0, 0, true);
                 HAL_NVIC_EnableIRQ(TIM15_IRQn);
                 recordNote = 0;
             }
@@ -8866,7 +8866,7 @@ void Controller::pitch_pad(uint8_t pad_) {
         undo_checkpoint(UNDO_RECORD);
         recordNote = note;
         const uint16_t at = groove_unswing(pitchLayer, playInterval);
-        layerSong_setBeat(pitchLayer, activeSongBank, at, 0, 0, 0, 0, true);
+        layerSong_recordBeat(pitchLayer, activeSongBank, at, 0, 0, 0, 0, true);
         recordNote = 0;
         uint16_t st = rhythm_snapToGrid(at);
         if (st >= songInterval) st = 0;
@@ -27741,6 +27741,24 @@ void Controller::layerSong_beatLeft() {
     }
 }
 
+void Controller::layerSong_recordBeat(uint8_t layerNum_, uint8_t bankTab_, uint16_t interval_, uint8_t fillType_, uint8_t fillPattern_, uint8_t fillTime_, uint8_t fillLevel_, bool selected_) {
+    /// @brief Custom: a hit played in live (pads, Notes, MIDI). Where the lane already has a hit at that
+    /// spot, the new one replaces it: its pad bank, velocity and note (the old hit's roll / fill stays).
+    Bank& bank = layerLibrary[layerNum_].bankLibrary[bankTab_];
+    uint16_t st = rhythm_snapToGrid(interval_);
+    if (st == songInterval) st = 0;
+    for (int16_t i = 0; i <= bank.lastActiveBeatNum; i++) {
+        Beat& b = bank.beatLibrary[i];
+        if (!b.getActive() || (b.getStartInterval() != st)) continue;
+        b.setBank(liveBank);
+        b.setVel(recordVel);
+        b.note = recordNote;
+        if ((menu == LAYER_SONG_MENU) && (selectedLayerNum == layerNum_) && (activeSongBank == bankTab_)) lcd_drawLayerSong_NoteGateData(layerNum_);
+        return;
+    }
+    layerSong_setBeat(layerNum_, bankTab_, interval_, fillType_, fillPattern_, fillTime_, fillLevel_, selected_);
+}
+
 void Controller::layerSong_setBeat(uint8_t layerNum_, uint8_t bankTab_, uint16_t interval_, uint8_t fillType_, uint8_t fillPattern_, uint8_t fillTime_, uint8_t fillLevel_, bool selected_) {
     /// @brief Inserts a beat into target bank with quantization, ordering, and UI sync.
 
@@ -30906,7 +30924,7 @@ void Controller::interruptPlay() {
                     if (precountPendingBeat[i]) {
                         precountPendingBeat[i] = false;
                         recordVel = precountPendingVel[i];   // custom: velocity
-                        layerSong_setBeat(i, activeSongBank, playInterval, 0, 0, 0, 0, true);
+                        layerSong_recordBeat(i, activeSongBank, playInterval, 0, 0, 0, 0, true);
                         recordVel = 16;
                     }
                 }
@@ -30914,7 +30932,7 @@ void Controller::interruptPlay() {
                 if (pitchPendingPad >= 0) {
                     recordNote = pitchPendingNote;
                     recordVel = pitchPendingVel;
-                    layerSong_setBeat(pitchLayer, activeSongBank, playInterval, 0, 0, 0, 0, true);
+                    layerSong_recordBeat(pitchLayer, activeSongBank, playInterval, 0, 0, 0, 0, true);
                     recordNote = 0;
                     recordVel = 16;
                     if (pitchHeldPad == pitchPendingPad) {   // still held: PAD HELD gate measures from here
