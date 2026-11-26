@@ -1821,6 +1821,7 @@ void Controller::keyboard_action() {
                 switch (keyboard.keyLeft.changeState[i]) {
                     case KEYSTATE_PRESS:
                         if ((page == PAGE_CHOP) && !alertFlag && chop_key(i)) break;   // custom: Chop page keys
+                        if ((page == PAGE_NEW) && !alertFlag) { newSong_key(i); break; }   // custom: New song choices
                         if ((page == PAGE_SAMPLE) && (sampState == 2) && (i == KEY_CLEAR) && !alertFlag) { sampling_restart(); break; }   // custom
                         if ((page == PAGE_SAMPLE) && (sampState == 1) && (i == KEY_CLEAR) && !alertFlag) { sampState = 0; page_markDirty(PAGE_SAMPLE); pageFullRedraw = true; break; }   // custom: cancel READY
                         if ((page == PAGE_SAMPLE) && (sampState == 5) && (i == KEY_CENTER) && !alertFlag) { chopPlay = false; sampState = 6; break; }   // custom: KEEP
@@ -2777,6 +2778,7 @@ void Controller::keyboard_action() {
                     case KEYSTATE_PRESS:
                         switch (i) {
                             case KEY_FILE:
+                                if (!alertFlag && keyboard.shiftKeyPress) { undo_cancelShiftActions(); newSong_open(); break; }   // custom: ADD + FILE = New song
                                 if (!alertFlag) file_select();
                                 break;
 
@@ -10505,6 +10507,9 @@ void Controller::page_draw() {
             break;
         case PAGE_CHOP:
             page_drawChop();
+            break;
+        case PAGE_NEW:
+            page_drawNew();
             break;
         default:
             break;
@@ -20048,6 +20053,8 @@ void Controller::file_menuDown() {
 
 void Controller::file_newSelect() {
     /// @brief Opens confirmation alert for creating a new file state.
+    newSong_open();   // custom: the New song screen instead of the stock yes / no
+    return;
 
     // 1. ALERT STATE CONFIGURATION
     // Arm alert subsystem for New File confirmation flow.
@@ -20059,7 +20066,118 @@ void Controller::file_newSelect() {
     lcd_drawAlert();
 }
 
+void Controller::newSong_open() {
+    /// @brief Custom: the New song screen (from anywhere with ADD + FILE, or File > NEW).
+    if ((sampState != 0) || loadAction || saveAction) return;
+    newSongSel = 0;
+    newSongMsg[0] = 0;
+    page_open(PAGE_NEW);
+}
+
+void Controller::newSong_key(uint8_t key_) {
+    switch (key_) {
+        case KEY_LEFT: if (newSongSel > 0) newSongSel--; break;
+        case KEY_RIGHT: if (newSongSel < (projectDirty ? 2 : 1)) newSongSel++; break;
+        case KEY_CLEAR: page_close(); return;
+        case KEY_CENTER:
+            if (newSongSel == 2) {   // save first
+                if (currentFileNum >= 0) {
+                    fileMenuCounter = (uint8_t)currentFileNum;
+                    file_saveAction();   // (its alert closes this page)
+                    newSongSel = 0;
+                    page_open(PAGE_NEW);
+                    snprintf(newSongMsg, sizeof(newSongMsg), "SAVED. NOW CHOOSE HOW TO START");
+                    pageFullRedraw = true;
+                    page_markDirty(PAGE_NEW);
+                    return;
+                } else {   // never saved: the File menu picks where
+                    page_close();
+                    file_select();
+                    return;
+                }
+                break;
+            }
+            page_close();
+            if (newSongSel == 0) {   // clean slate: every sound in every bank, every hit, every setting
+                file_newAction();
+            } else {                 // keep the sounds: only the hits (and the song chain) go
+                undo_reset();
+                lcd_clearAlert();
+                reset();
+                activeSongBank = 0;
+                lcd_drawSongBankTab(activeSongBank, false);
+                for (uint8_t i = 0; i < kLayerLibrarySize; i++)
+                    for (uint8_t j = 0; j < kBankLibrarySize; j++) layerSong_reset(i, j);
+                memset(songSteps, 0, sizeof(songSteps));
+                songCount = 0;
+                currentFileNum = -1;
+                savedHashValid = false;
+                lcd_drawProjectName();
+            }
+            undo_showText("NEW  ");
+            return;
+        default: return;
+    }
+    pageFullRedraw = true;
+    page_markDirty(PAGE_NEW);
+}
+
+void Controller::page_drawNew() {
+    /// @brief Custom New song screen: three choices side by side, the selected one lit.
+    char text[96];
+    lcd.setBackColor(BLACK);
+    if (!pageFullRedraw) return;
+    pageFullRedraw = false;
+    lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
+    lcd.setAlignment(LEFT);
+    lcd.setFont(FONT_14x18);
+    lcd.setForeColor(kThemeAccent);
+    lcd.drawText("NEW SONG", 8, 30, 133);
+    if (newSongMsg[0]) {
+        page_drawSummary(newSongMsg, 6, kThemeAmber);
+    } else if (projectDirty) {
+        if (currentFileNum >= 0) snprintf(text, sizeof(text), "NOT SAVED: FILE_%03d HAS CHANGES SINCE YOU LAST SAVED IT", currentFileNum + 1);
+        else snprintf(text, sizeof(text), "NOT SAVED: THIS SONG HAS NEVER BEEN SAVED");
+        page_drawSummary(text, 10, kThemeAmber);
+    } else {
+        page_drawSummary("EVERYTHING IS SAVED", 0, kThemeAmber);
+    }
+    static const char* const kHead[3] = {"CLEAN SLATE", "KEEP THE SOUNDS", "SAVE FIRST"};
+    static const char* const kLines[3][3] = {
+        {"EMPTY PADS IN EVERY BANK", "NO HITS", "TEMPO, EFFECTS, MIXER RESET"},
+        {"SAME KIT IN BANKS A TO D", "PAD SETTINGS KEPT", "NO HITS, TEMPO KEPT"},
+        {"SAVES THIS SONG", "THEN ASKS AGAIN", ""}};
+    const uint8_t n = projectDirty ? 3 : 2;
+    const uint16_t bw = 280, bh = 150, gap = 30, y0 = 200;
+    for (uint8_t k = 0; k < n; k++) {
+        const uint16_t x = (uint16_t)(30 + k * (bw + gap));
+        const bool sel = (k == newSongSel);
+        const RGB16Color fill = sel ? page_mix(BLACK, kThemeAmber, 0.12f) : BLACK;
+        lcd.setForeColor(fill);
+        lcd.fillRect(x, y0, bw, bh);
+        lcd.setForeColor(sel ? kThemeAmber : kThemeLine);
+        for (uint8_t t = 0; t < (sel ? 2 : 1); t++) {
+            lcd.drawHLine(x + t, y0 + t, bw - 2 * t); lcd.drawHLine(x + t, y0 + bh - 1 - t, bw - 2 * t);
+            lcd.drawVLine(x + t, y0 + t, bh - 2 * t); lcd.drawVLine(x + bw - 1 - t, y0 + t, bh - 2 * t);
+        }
+        lcd.setBackColor(fill);
+        lcd.setFont(FONT_10x14);
+        lcd.setForeColor(sel ? kThemeInk : kThemeHeader);
+        lcd.drawText(kHead[k], strlen(kHead[k]), x + 14, y0 + 14);
+        lcd.setFont(FONT_07x09);
+        lcd.setForeColor(kThemeHeader);
+        for (uint8_t q = 0; q < 3; q++) if (kLines[k][q][0]) lcd.drawText(kLines[k][q], strlen(kLines[k][q]), x + 14, y0 + 54 + q * 20);
+        lcd.setBackColor(BLACK);
+    }
+    static const char* const tips[] = {"LEFT / RIGHT: CHOOSE", "CENTER: DO IT", "CLEAR: CANCEL", "ADD + FILE: OPENS THIS FROM ANYWHERE"};
+    page_drawTips(tips, 4);
+}
+
 void Controller::file_newAction() {
+    bank_clearOthers();   // custom: banks B-D emptied too, back to bank A
+    lcd_drawBank();
+    memset(songSteps, 0, sizeof(songSteps));   // custom: no song chain
+    songCount = 0;
     undo_reset();   // custom
     currentFileNum = -1;   // custom
     savedHashValid = false;   // re-baselined once the reset below is done

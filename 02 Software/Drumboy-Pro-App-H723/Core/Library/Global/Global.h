@@ -2367,7 +2367,8 @@ typedef enum {
     PAGE_PITCH                                      = 0x0B,  // Sync key: one drum played across the 10 pads in a scale
     PAGE_ROUTE                                      = 0x0C,  // Mixer key: signal chain and where each drum enters it
     PAGE_SONG                                       = 0x0D,  // Song key tapped alone: chain the 5 song banks into a song
-    PAGE_CHOP                                       = 0x0E   // after sampling / ADD + REC on the Sample page: slice a take onto pads
+    PAGE_CHOP                                       = 0x0E,  // after sampling / ADD + REC on the Sample page: slice a take onto pads
+    PAGE_NEW                                        = 0x0F   // custom: ADD + FILE / File > NEW: clean slate, keep the sounds, save first
 } PageView;
 
 // Custom Pitch mode: scales (semitone steps from the root). Pads 1-10 climb the scale from the root.
@@ -2425,7 +2426,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.61 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.62 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;

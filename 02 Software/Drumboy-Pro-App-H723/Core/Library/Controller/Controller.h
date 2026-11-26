@@ -672,6 +672,11 @@ class Controller {
     bool sampKnobsShown = false;
     void sampling_arm();
     void chop_drawHints();
+    void newSong_open();
+    void newSong_key(uint8_t key_);
+    void page_drawNew();
+    uint8_t newSongSel = 0;
+    char newSongMsg[48] = "";
     void page_drawTips(const char* const* tips_, uint8_t n_);
     void chop_cutAt(uint32_t at_);
     bool chopHintShift = false;
