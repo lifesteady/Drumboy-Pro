@@ -7850,7 +7850,7 @@ void Controller::page_drawChop() {
         lcd.drawText(text, 36, ex, 196);
         const uint32_t s0 = chopMark[chopSel], s1 = chop_sliceEnd(chopSel);
         const uint32_t slen = (s1 > s0) ? (s1 - s0) : 1;
-        float aMs = 0, hMs = 1e9f, dMs = 0;
+        float aMs = 0, hMs = 1e9f, dMs = 0;   // (dMs adjusted below)
         bool full = true;
         if (pad >= 0) {
             const Layer& L = layerLibrary[pad];
@@ -7864,25 +7864,31 @@ void Controller::page_drawChop() {
         const int16_t* b = sampBuf();
         const int16_t mid = (int16_t)(eh / 2);
         static RGB16Color colb[160];
-        const RGB16Color cWave = page_mix(BLACK, kThemeInk, 0.7f), cBase = page_mix(BLACK, kThemeLine, 0.5f);   // custom: waveform at full strength
+        // custom: drawn like the Sample page - the whole chop faint, the part you hear (shaped by
+        // the envelope) bright on top, and the envelope line over the top half
+        const RGB16Color cFaint = page_mix(BLACK, kThemeInk, 0.22f), cBase = page_mix(BLACK, kThemeLine, 0.5f);
+        const float half = (float)(eh / 2 - 2);
+        if (dMs < 2.0f) dMs = 2.0f;
         int16_t prevY = -1;
         for (uint16_t c = 0; c < ew; c++) {   // each column built in memory and sent once (no flicker)
             for (uint16_t r = 0; r <= eh; r++) colb[r] = BLACK;
             colb[eh] = cBase;
+            if ((c % 2) == 0) colb[mid] = cBase;
             const float tMs = winMs * c / ew;
-            // dim waveform
+            // waveform
             const uint32_t a0 = s0 + (uint32_t)(tMs * 44.1f), a1 = s0 + (uint32_t)((winMs * (c + 1) / ew) * 44.1f);
             int16_t mx = 0;
             for (uint32_t k = a0; (k < a1) && (k < s1); k += 8) { const int16_t v = (b[k] < 0) ? (int16_t)-b[k] : b[k]; if (v > mx) mx = v; }
-            const uint16_t hh = (uint16_t)((float)mx / (chopPeak * 32767.0f + 1.0f) * (eh / 2 - 2));
-            for (int16_t r = mid - (int16_t)hh; r < mid + (int16_t)hh; r++) if ((r >= 0) && (r < (int16_t)eh)) colb[r] = cWave;
-            // envelope line
-            float g;
-            if (tMs < aMs) g = (aMs > 0.0f) ? tMs / aMs : 1.0f;
+            const float amp = (float)mx / (chopPeak * 32767.0f + 1.0f);
+            float g;   // the envelope (same shape as the drum plays it: squared decay)
+            if ((aMs > 0.0f) && (tMs < aMs)) g = tMs / aMs;
             else if (tMs < aMs + hMs) g = 1.0f;
-            else if (dMs > 0.0f) { g = 1.0f - (tMs - aMs - hMs) / dMs; if (g < 0.0f) g = 0.0f; }
+            else if (tMs < aMs + hMs + dMs) { const float u = 1.0f - (tMs - aMs - hMs) / dMs; g = u * u; }
             else g = 0.0f;
-            const int16_t y = (int16_t)(eh - 2 - g * (eh - 3));
+            const int16_t hh = (int16_t)(amp * half), hg = (int16_t)(amp * half * g);
+            for (int16_t r = mid - hh; r <= mid + hh; r++) if ((r >= 0) && (r < (int16_t)eh)) colb[r] = cFaint;
+            for (int16_t r = mid - hg; r <= mid + hg; r++) if ((r >= 0) && (r < (int16_t)eh)) colb[r] = kThemeInk;
+            const int16_t y = (int16_t)(mid - g * half);
             // a solid line: fill from the last column's height to this one (steep attack / decay)
             int16_t y0 = y, y1 = y + 1;
             if (prevY >= 0) { if (prevY < y0) y0 = prevY; if (prevY + 1 > y1) y1 = prevY + 1; }
@@ -8390,18 +8396,8 @@ void Controller::page_drawSample() {
         lcd.clearRect(kPageX, kPageY, kPageWidth, kPageHeight);
         lcd.setForeColor(kThemeLine);
         lcd.drawHLine(30, 177, 900);
-        lcd.setFont(FONT_07x09);
-        lcd.setAlignment(LEFT);
-        lcd.setForeColor(kThemeHeader);
-        const char h1[] = "TOP KNOBS 3-4: ATTACK / HOLD    BOTTOM KNOBS 1-3: START / END / DECAY    HOLD AT FULL: NO DECAY";
-        lcd.drawText(h1, strlen(h1), 30, 422);
-        lcd.setAlignment(RIGHT);
-        const char h2[] = "TAP LAYER INST: BACK";
-        lcd.drawText(h2, strlen(h2), 930, 438);
-        lcd.setAlignment(LEFT);
-        lcd.setForeColor(kThemeAmber);
-        const char h3[] = "REC: SAMPLE FROM LINE IN    ADD + REC: CHOP THIS SAMPLE";
-        lcd.drawText(h3, strlen(h3), 30, 438);
+        static const char* const tips[] = {"REC: SAMPLE FROM LINE IN", "LAYER INST: EDIT AND CHOP THIS SAMPLE", "HOLD AT FULL: NO DECAY"};
+        page_drawTips(tips, 3);   // custom: a few tips with room between them
         pageFullRedraw = false;
         sampShown = 0xFF;
     }
