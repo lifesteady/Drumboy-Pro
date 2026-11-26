@@ -7101,14 +7101,14 @@ void Controller::chop_drawHints() {
          {"ADD + COPY: DELETE THE TAKE", nullptr, nullptr, nullptr}},
         {{"REC: PLAY + TAP PADS TO MARK", "CENTER: MARK HERE", "CLEAR: REMOVE MARKER", "+ / -: ZOOM ON MARKER"},
          {"ADD + LEFT: REMOVE ALL MARKERS", "ADD + REC: JUST PLAY", "PADS: LISTEN", nullptr}},
-        {{"PADS: LISTEN", "ADD + PAD: PUT THIS CHOP THERE", "CENTER: PUT IT ON THE PAD KNOB'S PAD", "HOLD ADD: MORE"},
+        {{"PADS: LISTEN", "ADD + PAD: PUT THIS CHOP THERE", "CENTER: PUT IT ON THE CHOSEN PAD", "HOLD ADD: MORE"},
          {"PASTE: ALL CHOPS FROM PAD 1", "ADD + PASTE: ONE PAD THAT PLAYS THEM ALL", nullptr, nullptr}}};
     lcd.setBackColor(BLACK);
     lcd.clearRect(30, 416, 905, 32);
     lcd.setFont(FONT_07x09);
     lcd.setAlignment(LEFT);
     lcd.setForeColor(sh ? kThemeAmber : kThemeHeader);
-    const uint16_t cw = lcd.getFontWidth() ? lcd.getFontWidth() : 8;
+    const uint16_t cw = (uint16_t)((lcd.getFontWidth() ? lcd.getFontWidth() : 7) + 2);   // character plus its spacing
     uint16_t x = 30, y = 422;
     for (uint8_t k = 0; k < 4; k++) {
         const char* t = kTips[chopStep % 3][sh ? 1 : 0][k];
@@ -7864,7 +7864,8 @@ void Controller::page_drawChop() {
         const int16_t* b = sampBuf();
         const int16_t mid = (int16_t)(eh / 2);
         static RGB16Color colb[160];
-        const RGB16Color cWave = page_mix(BLACK, kThemeInk, 0.25f), cBase = page_mix(BLACK, kThemeLine, 0.5f);
+        const RGB16Color cWave = page_mix(BLACK, kThemeInk, 0.7f), cBase = page_mix(BLACK, kThemeLine, 0.5f);   // custom: waveform at full strength
+        int16_t prevY = -1;
         for (uint16_t c = 0; c < ew; c++) {   // each column built in memory and sent once (no flicker)
             for (uint16_t r = 0; r <= eh; r++) colb[r] = BLACK;
             colb[eh] = cBase;
@@ -7881,8 +7882,12 @@ void Controller::page_drawChop() {
             else if (tMs < aMs + hMs) g = 1.0f;
             else if (dMs > 0.0f) { g = 1.0f - (tMs - aMs - hMs) / dMs; if (g < 0.0f) g = 0.0f; }
             else g = 0.0f;
-            const uint16_t y = (uint16_t)(eh - 2 - g * (eh - 3));
-            colb[y] = kThemeAccent; colb[y + 1] = kThemeAccent;
+            const int16_t y = (int16_t)(eh - 2 - g * (eh - 3));
+            // a solid line: fill from the last column's height to this one (steep attack / decay)
+            int16_t y0 = y, y1 = y + 1;
+            if (prevY >= 0) { if (prevY < y0) y0 = prevY; if (prevY + 1 > y1) y1 = prevY + 1; }
+            for (int16_t r = y0; r <= y1; r++) if ((r >= 0) && (r < (int16_t)eh)) colb[r] = kThemeAccent;
+            prevY = y;
             lcd.drawColumn(ex + c, ey, eh + 1, colb);
         }
         return;
@@ -9794,7 +9799,7 @@ void Controller::page_drawTips(const char* const* tips_, uint8_t n_) {
     lcd.setFont(FONT_07x09);
     lcd.setAlignment(LEFT);
     lcd.setForeColor(kThemeHeader);
-    const uint16_t cw = lcd.getFontWidth() ? lcd.getFontWidth() : 8;
+    const uint16_t cw = (uint16_t)((lcd.getFontWidth() ? lcd.getFontWidth() : 7) + 2);   // character plus its spacing
     uint16_t x = 30, y = 422;
     for (uint8_t k = 0; k < n_; k++) {
         const uint16_t w = (uint16_t)(strlen(tips_[k]) * cw);
