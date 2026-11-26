@@ -14297,11 +14297,13 @@ void Controller::lcd_drawEncoderBankTab() {
     lcd.fillRect(30, 454, 92, 54);
     lcd.setBackColor(k);
     lcd.setForeColor(kBankText);
+    lcd.sansForce = true;   // custom: our smooth font here too
     lcd.setFont(FONT_10x14);
     lcd.drawText("BANK", 4, 76, 459);
     lcd.setFont(FONT_14x18);
     char textData[2] = {(char)('A' + (liveBank % kPadBankCount)), 0};
     lcd.drawText(textData, 1, 76, 480);
+    lcd.sansForce = false;
     lcd.setBackColor(BLACK);
     lcd.setFont(FONT_07x09);
 }
