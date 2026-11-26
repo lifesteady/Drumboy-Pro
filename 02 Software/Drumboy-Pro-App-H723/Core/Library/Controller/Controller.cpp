@@ -6876,7 +6876,7 @@ void Controller::chop_begin(const char* base_, uint8_t firstPad_) {
     chopFromTake = false;
     for (uint8_t k = 0; k < kChopMaxSlices; k++) { chopPadOf[k] = -1; chopSavedIdx[k] = -1; }
     chopFirstPad = (firstPad_ < kLayerLibrarySize) ? firstPad_ : 0;
-    chopStep = 0; chopTrimFocus = 0; chopTarget = -1; chopFitTempo = 0;
+    chopStep = 0; chopTrimFocus = 0; chopTarget = -1; chopFitTempo = 0; chopMsg[0] = 0;
     chopFirstPad = 0;   // PASTE fills from pad 1   // custom: the editor opens on TRIM
     chopActive = true;
 }
@@ -7023,12 +7023,12 @@ bool Controller::chop_key(uint8_t key_) {
                 break;
             }
             if (chopSel > 0) chopSel--;
-            if (chopStep == 2) chopTarget = chopPadOf[chopSel];
+            chopTarget = -1;
             break;
         case KEY_RIGHT:
             if (chopStep == 0) { chopTrimFocus = 1; break; }
             if (chopSel + 1 < chopN) chopSel++;
-            if (chopStep == 2) chopTarget = chopPadOf[chopSel];
+            chopTarget = -1;
             break;
         case KEY_UP: if (chopZoom < 10) chopZoom++; break;
         case KEY_DOWN: if (chopZoom > 0) chopZoom--; break;
@@ -7043,12 +7043,11 @@ bool Controller::chop_key(uint8_t key_) {
                     const uint32_t a = chopMark[chopSel], e = chop_sliceEnd(chopSel);
                     if (e - a >= 512) chop_cutAt(a + (e - a) / 2);
                 }
-            } else if (chopStep == 2) {   // put the selected chop on the PAD knob's pad
-                if ((chopTarget >= 0) && chop_putSlice(chopSel, (uint8_t)chopTarget)) undo_showText("DONE ");
             }
             break;
         case KEY_CLEAR:
             if (add) { chop_truncate(); break; }   // ADD + CLEAR: cut off the grey parts
+            if ((chopStep == 2) && (chopPadOf[chopSel] >= 0)) { chop_unplace(chopSel); break; }   // PADS: off its pad
             if ((chopStep == 1) && (chopN > 1) && (chopSel > 0)) {   // remove the selected marker (not the start)
                 for (uint8_t k = chopSel; k + 1 < chopN; k++) { chopMark[k] = chopMark[k + 1]; chopPadOf[k] = chopPadOf[k + 1]; chopSavedIdx[k] = chopSavedIdx[k + 1]; }
                 chopN--;
@@ -7101,8 +7100,8 @@ void Controller::chop_drawHints() {
          {"ADD + COPY: DELETE THE TAKE", nullptr, nullptr, nullptr}},
         {{"REC: PLAY + TAP PADS TO MARK", "CENTER: MARK HERE", "CLEAR: REMOVE MARKER", "+ / -: ZOOM ON MARKER"},
          {"ADD + LEFT: REMOVE ALL MARKERS", "ADD + REC: JUST PLAY", "PADS: LISTEN", nullptr}},
-        {{"PADS: LISTEN", "ADD + PAD: PUT THIS CHOP THERE", "CENTER: PUT IT ON THE CHOSEN PAD", "HOLD ADD: MORE"},
-         {"PASTE: ALL CHOPS FROM PAD 1", "ADD + PASTE: ONE PAD THAT PLAYS THEM ALL", nullptr, nullptr}}};
+        {{"PRESS A PAD: PUT THE CHOP THERE", "ADD + PAD: LISTEN", "CLEAR: TAKE IT OFF ITS PAD", "PASTE: ALL INTO EMPTY PADS"},
+         {"ADD + PASTE: ONE PAD THAT PLAYS THEM ALL", "ADD + COPY: DELETE THE TAKE", nullptr, nullptr}}};
     lcd.setBackColor(BLACK);
     lcd.clearRect(30, 416, 905, 32);
     lcd.setFont(FONT_07x09);
@@ -7120,14 +7119,72 @@ void Controller::chop_drawHints() {
     }
 }
 
+bool Controller::chop_padFree(uint8_t pad_) {
+    /// @brief Custom: a pad PASTE / a plain press may fill without asking - empty, holding a chop of
+    /// this take, or the drum the take itself was recorded onto.
+    if (pad_ >= kLayerLibrarySize) return false;
+    for (uint8_t k = 0; k < chopN; k++) if (chopPadOf[k] == (int8_t)pad_) return true;
+    if (chopFromTake && (pad_ == chopTakeLayer)) return true;
+    const Layer& L = layerLibrary[pad_];
+    return !L.samplePlay || (L.sampleLoaded < 0);
+}
+
+void Controller::chop_padName(uint8_t pad_, char* out_, size_t n_) {
+    const Layer& L = layerLibrary[pad_];
+    char nm[kFileNameSize + 1] = {0};
+    strncpy(nm, L.sampleLoadedData.nameLong, kFileNameSize);
+    char* dot = strrchr(nm, '.');
+    if (dot) *dot = 0;
+    snprintf(out_, n_, "%.12s", nm[0] ? nm : "A SOUND");
+}
+
+void Controller::chop_unplace(uint8_t k_) {
+    /// @brief Custom: CLEAR on PADS - the chop comes off its pad and that pad is empty again.
+    const int8_t pad = chopPadOf[k_];
+    if (pad < 0) return;
+    chopPadOf[k_] = -1;
+    keyboard_disable();
+    layerInst_setInstSelected((uint8_t)pad, -1);
+    layerInst_setInstLoaded((uint8_t)pad);
+    layerInst_setSampleSelected((uint8_t)pad, -1);
+    layerInst_setSampleLoaded((uint8_t)pad);
+    keyboard_enable();
+    undo_showText("OFF  ");
+    pageFullRedraw = true;
+}
+
 void Controller::chop_pad(uint8_t pad_) {
     /// @brief Pad on the Chop page: hear that slice (first 3 s). ADD + pad: put the SELECTED
     /// slice on this pad. While tapping (REC), any pad drops a slice start where the take is.
-    if ((chopStep == 2) && !keyboard.shiftKeyPress) {   // custom PADS step: the pad as it plays now (envelope and all)
-        for (uint8_t k = 0; k < chopN; k++) if (chopPadOf[k] == (int8_t)pad_) chopSel = k;
-        chopTarget = (int8_t)pad_;
-        const Layer& pl = layerLibrary[pad_];
-        if ((!pl.mute) && (pl.samplePlay)) layer_playBeat(pad_, 1.0f);
+    if (chopStep == 2) {   // custom PADS step
+        chopMsg[0] = 0;
+        if (keyboard.shiftKeyPress) {   // ADD + pad: listen, as it plays now (envelope and all)
+            for (uint8_t k = 0; k < chopN; k++) if (chopPadOf[k] == (int8_t)pad_) chopSel = k;
+            const Layer& pl = layerLibrary[pad_];
+            if ((!pl.mute) && (pl.samplePlay)) layer_playBeat(pad_, 1.0f);
+            chopTarget = -1;
+            page_markDirty(PAGE_CHOP);
+            return;
+        }
+        // a pad holding a sound from outside this take asks first: press it again to replace
+        if (!chop_padFree(pad_) && (chopTarget != (int8_t)pad_)) {
+            chopTarget = (int8_t)pad_;
+            char nm[16];
+            chop_padName(pad_, nm, sizeof(nm));
+            snprintf(chopMsg, sizeof(chopMsg), "PAD %u HAS %s: PRESS IT AGAIN TO REPLACE IT", pad_ + 1, nm);
+            page_markDirty(PAGE_CHOP);
+            return;
+        }
+        chopTarget = -1;
+        if (chop_putSlice(chopSel, pad_)) {   // deal it out, then the next chop that has no pad yet
+            const uint8_t was = chopSel;
+            for (uint8_t q = 1; q <= chopN; q++) { const uint8_t k = (uint8_t)((was + q) % chopN); if (chopPadOf[k] < 0) { chopSel = k; break; } }
+            const Layer& pl = layerLibrary[pad_];
+            if ((!pl.mute) && (pl.samplePlay)) layer_playBeat(pad_, 1.0f);
+        } else {
+            snprintf(chopMsg, sizeof(chopMsg), "COULD NOT SAVE THE CHOP (SD CARD)");
+        }
+        pageFullRedraw = true;
         page_markDirty(PAGE_CHOP);
         return;
     }
@@ -7244,7 +7301,8 @@ void Controller::chop_knob(uint8_t which_, int8_t step_) {
         chopPlay = false; chopTap = false;
         chopStep = (uint8_t)v;
         chopZoom = 0;
-        if (chopStep == 2) chopTarget = (chopPadOf[chopSel] >= 0) ? chopPadOf[chopSel] : (int8_t)((chopSel < kLayerLibrarySize) ? chopSel : 0);
+        chopTarget = -1;
+        chopMsg[0] = 0;
         pageFullRedraw = true;
         page_markDirty(PAGE_CHOP);
         return;
@@ -7270,10 +7328,9 @@ void Controller::chop_knob(uint8_t which_, int8_t step_) {
     } else {   // PADS
         const int8_t pad = chopPadOf[chopSel];
         switch (which_) {
-            case 0: { int16_t v = (int16_t)chopSel + step_; if (v < 0) v = 0; if (v >= chopN) v = chopN - 1; chopSel = (uint8_t)v; chopTarget = chopPadOf[chopSel]; } break;
-            case 1: { int16_t v = (int16_t)((chopTarget < 0) ? 0 : chopTarget) + ((chopTarget < 0) ? 0 : step_); if (v < 0) v = 0; if (v >= kLayerLibrarySize) v = kLayerLibrarySize - 1; chopTarget = (int8_t)v; } break;
-            case 2: if (pad >= 0) { int16_t v = (int16_t)layerLibrary[pad].pitch + step_; if (v < kMinLayerPitch) v = kMinLayerPitch; if (v > kMaxLayerPitch) v = kMaxLayerPitch; layerInst_setPitch((uint8_t)pad, (uint8_t)v); } break;
-            case 3: if (pad >= 0) { int16_t v = (int16_t)layerLibrary[pad].muteGroup + step_; if (v < 0) v = 0; if (v > 4) v = 4; layerLibrary[pad].muteGroup = (uint8_t)v; } break;
+            case 0: { int16_t v = (int16_t)chopSel + step_; if (v < 0) v = 0; if (v >= chopN) v = chopN - 1; chopSel = (uint8_t)v; chopTarget = -1; } break;
+            case 1: if (pad >= 0) { int16_t v = (int16_t)layerLibrary[pad].pitch + step_; if (v < kMinLayerPitch) v = kMinLayerPitch; if (v > kMaxLayerPitch) v = kMaxLayerPitch; layerInst_setPitch((uint8_t)pad, (uint8_t)v); } break;
+            case 2: if (pad >= 0) { int16_t v = (int16_t)layerLibrary[pad].muteGroup + step_; if (v < 0) v = 0; if (v > 4) v = 4; layerLibrary[pad].muteGroup = (uint8_t)v; } break;
             case 4: case 5: case 6:
                 if (pad >= 0) {
                     Layer& L = layerLibrary[pad];
@@ -7597,23 +7654,36 @@ bool Controller::chop_putSlice(uint8_t i_, uint8_t pad_) {
 }
 
 void Controller::chop_paste() {
-    /// @brief PASTE: every slice onto FIRST PAD, the next pad, and so on (past pad 10: left out).
-    const uint8_t count = ((chopFirstPad + chopN) > kLayerLibrarySize) ? (uint8_t)(kLayerLibrarySize - chopFirstPad) : chopN;
-    if (count == 0) return;
+    /// @brief PASTE: every chop not on a pad yet goes into the empty pads, starting at the drum
+    /// this editor was opened on and going round; pads with other sounds are left alone.
+    const uint8_t home = chopFromTake ? chopTakeLayer : (uint8_t)((selectedLayerNum >= 0) ? selectedLayerNum : 0);
     const LcdFont f = lcd.getFont();
     const LcdAlign al = lcd.getAlignment();
+    uint8_t q = 0, left = 0;
     bool allOk = true;
-    for (uint8_t i = 0; i < count; i++) {
+    for (uint8_t i = 0; i < chopN; i++) {
+        if (chopPadOf[i] >= 0) continue;
+        int8_t pad = -1;
+        for (; q < kLayerLibrarySize; q++) {
+            const uint8_t p = (uint8_t)((home + q) % kLayerLibrarySize);
+            bool taken = false;
+            for (uint8_t k = 0; k < chopN; k++) if (chopPadOf[k] == (int8_t)p) taken = true;
+            if (!taken && chop_padFree(p)) { pad = (int8_t)p; q++; break; }
+        }
+        if (pad < 0) { left++; continue; }
         char msg[64];
-        snprintf(msg, sizeof(msg), "PUTTING SLICE %u ON PAD %u", i + 1, chopFirstPad + i + 1);
+        snprintf(msg, sizeof(msg), "PUTTING CHOP %u ON PAD %u", i + 1, pad + 1);
         lcd.setProtect(false);
         page_drawSummary(msg, 7, kThemeAmber);
         lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
-        if (!chop_putSlice(i, (uint8_t)(chopFirstPad + i))) allOk = false;
+        if (!chop_putSlice(i, (uint8_t)pad)) allOk = false;
     }
     lcd.setFont(f);
     lcd.setAlignment(al);
+    if (left) snprintf(chopMsg, sizeof(chopMsg), "%u %s DID NOT FIT: NO EMPTY PADS LEFT", left, (left == 1) ? "CHOP" : "CHOPS");
+    else chopMsg[0] = 0;
     undo_showText(allOk ? "DONE " : "ERROR");
+    pageFullRedraw = true;
     page_markDirty(PAGE_CHOP);
 }
 
@@ -7634,7 +7704,7 @@ void Controller::lcd_drawChopKnobs(bool full_) {
     static const char* const kHdr[3][8] = {
         {"START       ", "START FINE  ", "END         ", "END FINE    ", "TRIM ENDS   ", "            ", "            ", "STEP        "},
         {"MARKER      ", "MOVE MARKER ", "FINE        ", "            ", "FIND HITS   ", "EQUAL PARTS ", "            ", "STEP        "},
-        {"CHOP        ", "PAD         ", "PITCH       ", "MUTE GROUP  ", "ATTACK      ", "HOLD        ", "DECAY       ", "STEP        "}};
+        {"CHOP        ", "PITCH       ", "MUTE GROUP  ", "            ", "ATTACK      ", "HOLD        ", "DECAY       ", "STEP        "}};
     static const uint8_t counts[7] = {1, 2, 3, 4, 6, 8, 10};
     const uint8_t st = chopStep % 3;
     char t[16];
@@ -7673,23 +7743,18 @@ void Controller::lcd_drawChopKnobs(bool full_) {
     } else {
         const int8_t pad = chopPadOf[chopSel];
         snprintf(t, sizeof(t), "%4u OF %2u", chopSel + 1, chopN); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[0], kMenuDataY[0]);
-        if (chopTarget >= 0) {
-            if (chopTarget != pad) lcd_setMenuDataState(kThemeAmber);   // not there yet: CENTER puts it there
-            snprintf(t, sizeof(t), "%10u", (unsigned)(chopTarget + 1));
-            lcd.drawText(t, kMenuDataTextSize, kMenuDataX[1], kMenuDataY[1]);
-            lcd_setMenuDataState(WHITE);
-        } else put(1, "-");
+        put(3, "");
         if (pad >= 0) {
             const Layer& L = layerLibrary[pad];
-            lcd.drawText(kLayerPitchDataLibrary[L.pitch].nameLongR, kMenuDataTextSize, kMenuDataX[2], kMenuDataY[2]);
-            if (L.muteGroup) { snprintf(t, sizeof(t), "%10u", L.muteGroup); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[3], kMenuDataY[3]); } else put(3, "OFF");
+            lcd.drawText(kLayerPitchDataLibrary[L.pitch].nameLongR, kMenuDataTextSize, kMenuDataX[1], kMenuDataY[1]);
+            if (L.muteGroup) { snprintf(t, sizeof(t), "%10u", L.muteGroup); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[2], kMenuDataY[2]); } else put(2, "OFF");
             snprintf(t, sizeof(t), "%7u MS", (unsigned)(sample_envMs(L.envAttack, kEnvAttackMaxMs) + 0.5f)); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[4], kMenuDataY[4]);
             if (L.envHold >= 100) put(5, "FULL");
             else { snprintf(t, sizeof(t), "%7u MS", (unsigned)(sample_envMs(L.envHold, kEnvHoldMaxMs) + 0.5f)); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[5], kMenuDataY[5]); }
             if (L.envHold >= 100) put(6, "-");
             else { snprintf(t, sizeof(t), "%7u MS", (unsigned)(sample_envMs(L.envDecay, kEnvDecayMaxMs) + 0.5f)); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[6], kMenuDataY[6]); }
         } else {
-            for (uint8_t k = 2; k <= 6; k++) put(k, "-");
+            for (uint8_t k = 1; k <= 6; k++) if (k != 3) put(k, "-");
         }
     }
     put(7, kStepName[st]);
@@ -7815,17 +7880,52 @@ void Controller::page_drawChop() {
             x += 110;
         }
     }
-    if (st == 2) {   // ---- PADS: the ten pads, and the selected chop's envelope
+    if (st == 2) {   // ---- PADS: the chops in a strip, the ten pads under it, and the selected chop's envelope
         lcd.setBackColor(BLACK);
-        const uint16_t pw = 100, ph = 84, px0 = 30, py0 = 196;
         lcd.setFont(FONT_07x09);
         lcd.setAlignment(LEFT);
+        {   // chop strip: number (and its pad), and a tiny waveform; the selected one outlined yellow
+            const uint16_t sy = 188, sh = 44, gap = 6;
+            uint16_t tw = (uint16_t)((900 - (chopN - 1) * gap) / (chopN ? chopN : 1));
+            if (tw > 140) tw = 140;
+            lcd.clearRect(30, sy, 900, sh + 2);
+            const int16_t* bb = sampBuf();
+            for (uint8_t k = 0; k < chopN; k++) {
+                const uint16_t x = (uint16_t)(30 + k * (tw + gap));
+                const bool sel = (k == chopSel);
+                const bool placed = (chopPadOf[k] >= 0);
+                const RGB16Color edge = sel ? kThemeAmber : (placed ? page_mix(BLACK, kThemeLine, 0.6f) : kThemeLine);
+                lcd.setForeColor(edge);
+                lcd.drawHLine(x, sy, tw); lcd.drawHLine(x, sy + sh - 1, tw);
+                lcd.drawVLine(x, sy, sh); lcd.drawVLine(x + tw - 1, sy, sh);
+                if (sel) { lcd.drawHLine(x + 1, sy + 1, tw - 2); lcd.drawHLine(x + 1, sy + sh - 2, tw - 2); lcd.drawVLine(x + 1, sy + 1, sh - 2); lcd.drawVLine(x + tw - 2, sy + 1, sh - 2); }
+                lcd.setForeColor(sel ? kThemeInk : (placed ? page_mix(BLACK, kThemeHeader, 0.55f) : kThemeHeader));
+                if (placed && (tw >= 90)) snprintf(text, sizeof(text), "%u > PAD %u", k + 1, chopPadOf[k] + 1);
+                else if (placed) snprintf(text, sizeof(text), "%u>%u", k + 1, chopPadOf[k] + 1);
+                else snprintf(text, sizeof(text), "%u", k + 1);
+                lcd.drawText(text, strlen(text), x + 5, sy + 5);
+                const uint32_t a = chopMark[k], e = chop_sliceEnd(k);
+                const uint16_t ww = (uint16_t)(tw - 10), wy = sy + 30;
+                lcd.setForeColor(placed ? page_mix(BLACK, kThemeInk, 0.35f) : kThemeInk);
+                for (uint16_t c = 0; c < ww; c += 2) {
+                    const uint32_t a0 = a + (uint32_t)(((uint64_t)(e - a) * c) / ww), a1 = a + (uint32_t)(((uint64_t)(e - a) * (c + 2)) / ww);
+                    int16_t mx = 0;
+                    for (uint32_t q = a0; (q < a1) && (q < chopLen); q += 16) { const int16_t v = (bb[q] < 0) ? (int16_t)-bb[q] : bb[q]; if (v > mx) mx = v; }
+                    uint16_t hh = (uint16_t)((float)mx / (chopPeak * 32767.0f + 1.0f) * 9.0f);
+                    if (hh < 1) hh = 1;
+                    lcd.fillRect(x + 5 + c, wy - hh, 1, hh * 2);
+                }
+            }
+        }
+        const uint16_t pw = 82, ph = 64, px0 = 30, py0 = 246;
         for (uint8_t p = 0; p < kLayerLibrarySize; p++) {
-            const uint16_t x = px0 + (p % 5) * (pw + 8), y = py0 + (p / 5) * (ph + 10);
+            const uint16_t x = px0 + (p % 5) * (pw + 6), y = py0 + (p / 5) * (ph + 8);
             int8_t ck = -1;
             for (uint8_t k = 0; k < chopN; k++) if (chopPadOf[k] == (int8_t)p) ck = (int8_t)k;
             const bool selPad = (ck >= 0) && (ck == (int8_t)chopSel);
-            const RGB16Color edge = (chopTarget == (int8_t)p) ? kThemeAmber : ((ck >= 0) ? kThemeAccent : kThemeLine);
+            const bool other = (ck < 0) && !chop_padFree(p);   // holds a sound from outside this take
+            const bool asking = (chopTarget == (int8_t)p);
+            const RGB16Color edge = asking ? RED : ((ck >= 0) ? kThemeAccent : kThemeLine);
             const RGB16Color fill = selPad ? page_mix(BLACK, kThemeAccent, 0.22f) : BLACK;
             lcd.setForeColor(fill);
             lcd.fillRect(x, y, pw, ph);
@@ -7835,19 +7935,24 @@ void Controller::page_drawChop() {
             lcd.setBackColor(fill);
             lcd.setForeColor(kThemeHeader);
             snprintf(text, sizeof(text), "PAD %u", p + 1);
-            lcd.drawText(text, strlen(text), x + 8, y + 10);
-            lcd.setForeColor((ck >= 0) ? kThemeInk : page_mix(BLACK, kThemeHeader, 0.5f));
-            if (ck >= 0) snprintf(text, sizeof(text), "CHOP %u", ck + 1); else snprintf(text, sizeof(text), "EMPTY");
-            lcd.drawText(text, strlen(text), x + 8, y + 50);
+            lcd.drawText(text, strlen(text), x + 6, y + 8);
+            if (ck >= 0) { lcd.setForeColor(kThemeInk); snprintf(text, sizeof(text), "CHOP %u", ck + 1); }
+            else if (other) { lcd.setForeColor(page_mix(BLACK, kThemeAmber, 0.7f)); chop_padName(p, text, 9); }
+            else { lcd.setForeColor(page_mix(BLACK, kThemeHeader, 0.5f)); snprintf(text, sizeof(text), "EMPTY"); }
+            lcd.drawText(text, strlen(text), x + 6, y + 40);
             lcd.setBackColor(BLACK);
         }
+        // message line (replace? / did not fit)
+        lcd.setForeColor(kThemeAmber);
+        lcd.clearRect(30, 393, 900, 14);
+        if (chopMsg[0]) lcd.drawText(chopMsg, strlen(chopMsg), 30, 396);
         // envelope over the chop's waveform (right side)
-        const uint16_t ex = 580, ew = 350, ey = 214, eh = 150;
+        const uint16_t ex = 490, ew = 440, ey = 262, eh = 120;
         lcd.setForeColor(kThemeHeader);
         const int8_t pad = chopPadOf[chopSel];
         if (pad >= 0) snprintf(text, sizeof(text), "CHOP %u ON PAD %u%-20s", chopSel + 1, pad + 1, "");
         else snprintf(text, sizeof(text), "CHOP %u IS NOT ON A PAD YET%-8s", chopSel + 1, "");
-        lcd.drawText(text, 36, ex, 196);
+        lcd.drawText(text, 36, ex, 246);
         const uint32_t s0 = chopMark[chopSel], s1 = chop_sliceEnd(chopSel);
         const uint32_t slen = (s1 > s0) ? (s1 - s0) : 1;
         float aMs = 0, hMs = 1e9f, dMs = 0;   // (dMs adjusted below)

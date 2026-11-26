@@ -679,6 +679,10 @@ class Controller {
     uint8_t chopTrimFocus = 0;   // TRIM: zoom on 0 start / 1 end
     int8_t chopTarget = -1;      // PADS: the PAD knob's pad
     uint16_t chopFitTempo = 0;   // tempo the take was last fitted to
+    char chopMsg[72] = "";     // PADS: a message line (replace? / did not fit)
+    bool chop_padFree(uint8_t pad_);
+    void chop_padName(uint8_t pad_, char* out_, size_t n_);
+    void chop_unplace(uint8_t k_);
     void sampling_restart();       // custom: CLEAR while recording - throw it away, armed again
     void chop_discardTake();       // custom: ADD + COPY on the Chop page - delete the take, drum as before, armed again
     int16_t sampPrevInst = -1, sampPrevSample = -1, sampRecInst = -1, sampRecIdx = -1;
