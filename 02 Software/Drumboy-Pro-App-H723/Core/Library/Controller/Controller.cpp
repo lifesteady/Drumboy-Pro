@@ -7909,7 +7909,7 @@ void Controller::page_drawChop() {
         const float loopSec = (float)loop / 44100.0f;
         const uint8_t beats = chop_beats(loop);
         const unsigned bpm10 = (unsigned)((float)beats * 600.0f / loopSec + 0.5f);
-        snprintf(text, sizeof(text), "%u CHOPS     %u.%03u S     %u BEATS = %u.%u BPM", chopN, keepMs / 1000, keepMs % 1000, beats, bpm10 / 10, bpm10 % 10);
+        snprintf(text, sizeof(text), "%u %s     %u.%03u S     %u %s = %u.%u BPM", chopN, (chopN == 1) ? "CHOP" : "CHOPS", keepMs / 1000, keepMs % 1000, beats, (beats == 1) ? "BEAT" : "BEATS", bpm10 / 10, bpm10 % 10);
     }
     if (chopZoom) snprintf(text + strlen(text), sizeof(text) - strlen(text), "     ZOOM %uX", 1u << chopZoom);
     lcd.setFont(FONT_07x09);
