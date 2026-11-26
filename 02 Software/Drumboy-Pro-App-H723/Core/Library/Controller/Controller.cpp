@@ -1821,6 +1821,7 @@ void Controller::keyboard_action() {
                 switch (keyboard.keyLeft.changeState[i]) {
                     case KEYSTATE_PRESS:
                         if ((page == PAGE_CHOP) && !alertFlag && chop_key(i)) break;   // custom: Chop page keys
+                        if ((page == PAGE_SAMPLE) && (sampState == 2) && (i == KEY_CLEAR) && !alertFlag) { sampling_restart(); break; }   // custom
                         switch (i) {
                             case KEY_RESET:
                                 if (!alertFlag) {
@@ -6346,6 +6347,77 @@ void Controller::sampling_put(float x_) {
     if ((sampState == 1) && (a >= kSampThreshold)) { sampCount = 0; sampState = 2; }
 }
 
+void Controller::sampling_arm() {
+    if (mixer.liMute) mixer_setLiMute(false);   // you want to hear and record Line In now
+    undo_reset();
+    memset((void*)sampBuf(), 0, kSampPreRoll * sizeof(int16_t));
+    sampLayer = (uint8_t)selectedLayerNum;
+    sampRing = 0;
+    sampCount = 0;
+    sampPeak = 0.0f;
+    sampMessage[0] = 0;
+    sampFrac = 0.0f; sampPrev = 0; sampHeld = 0; sampHalf = 0;   // SPEED state
+    sampState = 1;
+}
+
+void Controller::sampling_restart() {
+    /// @brief CLEAR while recording: the take so far is thrown away and it waits for the sound again.
+    __disable_irq();
+    sampState = 0;
+    __enable_irq();
+    memset((void*)sampBuf(), 0, kSampPreRoll * sizeof(int16_t));
+    sampRing = 0; sampCount = 0; sampPeak = 0.0f;
+    sampFrac = 0.0f; sampPrev = 0; sampHeld = 0; sampHalf = 0;
+    sampState = 1;
+    sampShown = 0xFF;
+    undo_showText("AGAIN");
+}
+
+void Controller::chop_discardTake() {
+    /// @brief ADD + COPY on the Chop page right after sampling: the take's file and library entry go,
+    /// the drum gets back the sound it had, and the Sample page is armed for another go.
+    if (!chopFromTake) { undo_showText("NO   "); return; }
+    chopPlay = false; chopTap = false;
+    const uint8_t l = chopTakeLayer;
+    keyboard_disable();
+    // the drum as it was
+    if ((sampPrevInst >= 0) && (sampPrevSample >= 0)) {
+        layerInst_setInstSelected(l, sampPrevInst);
+        layerInst_setSampleSelected(l, sampPrevSample);
+        layerInst_setInstLoaded(l);
+        layerInst_setSampleLoaded(l);
+    } else {
+        layerInst_setInstSelected(l, -1);
+        layerInst_setInstLoaded(l);
+        layerInst_setSampleSelected(l, -1);
+        layerInst_setSampleLoaded(l);
+    }
+    layerInst_setStart(l, sampPrevStart);
+    layerInst_setEnd(l, sampPrevEnd);
+    // the library entry (only when it is still the last one in RECORDED)
+    if ((sampRecInst >= 0) && (sampRecIdx >= 0) && (sampleLibrarySize[sampRecInst] == (uint16_t)(sampRecIdx + 1))) {
+        f_close(&sd.file);
+        if (f_open(&sd.file, "System/Data/RECORDED.ins", FA_WRITE | FA_READ) == FR_OK) {
+            UINT bw = 0;
+            if ((f_lseek(&sd.file, 25 + (uint32_t)sampRecIdx * kFileNameSize) == FR_OK) && (f_write(&sd.file, "EOF", 3, &bw) == FR_OK)) {
+                f_truncate(&sd.file);
+                sampleLibrarySize[sampRecInst] = (uint16_t)sampRecIdx;
+            }
+            f_close(&sd.file);
+        }
+    }
+    f_unlink(chopTakePath);
+    keyboard_enable();
+    sampRecInst = -1; sampRecIdx = -1;
+    chopFromTake = false;
+    chopActive = false;
+    selectedLayerNum = l;
+    page_open(PAGE_SAMPLE);
+    sampling_arm();
+    sampShown = 0xFF;
+    undo_showText("GONE ");
+}
+
 void Controller::sampling_speedKnob(int8_t step_) {
     /// @brief Custom: knob 1 while armed - NORMAL / 45 RECORD AT 33 / HALF RATE.
     int8_t s = (int8_t)sampSpeed + step_;
@@ -6368,18 +6440,7 @@ void Controller::sampling_key() {
         return;
     }
     switch (sampState) {
-        case 0:   // arm
-            if (mixer.liMute) mixer_setLiMute(false);   // you want to hear and record Line In now
-            undo_reset();
-            memset((void*)sampBuf(), 0, kSampPreRoll * sizeof(int16_t));
-            sampLayer = (uint8_t)selectedLayerNum;
-            sampRing = 0;
-            sampCount = 0;
-            sampPeak = 0.0f;
-            sampMessage[0] = 0;
-            sampFrac = 0.0f; sampPrev = 0; sampHeld = 0; sampHalf = 0;   // custom: SPEED state
-            sampState = 1;
-            break;
+        case 0: sampling_arm(); break;
         case 1: sampState = 0; break;   // cancel
         case 2: sampState = 3; break;   // stop
         default: break;                 // saving: wait
@@ -6460,7 +6521,7 @@ void Controller::sampling_drawPanel(bool full_) {
         lcd.drawText("INPUT", 5, x0, 200);
         lcd.drawText("TAKE", 4, x0, 290);
         const char* hint = (sampState == 1) ? "REC: CANCEL    MIXER LINE IN LEVEL: INPUT LEVEL    THE WHITE LINE: WHERE IT STARTS"
-                         : (sampState == 2) ? "REC: STOP    THEN CHOP IT ONTO THE PADS"
+                         : (sampState == 2) ? "REC: STOP    CLEAR: START OVER    THEN CHOP IT ONTO THE PADS"
                                             : "";
         lcd.clearRect(30, 380, 905, 12);
         lcd.drawText(hint, strlen(hint), x0, 380);
@@ -6688,6 +6749,12 @@ bool Controller::sampling_save() {
     keyboard_enable();
     if (!ok) { undo_showText("ERROR"); return false; }
 
+    {   // custom: what the drum had, so ADD + COPY on the Chop page can put it back
+        const Layer& pl = layerLibrary[sampLayer];
+        sampPrevInst = pl.instLoaded; sampPrevSample = pl.sampleLoaded;
+        sampPrevStart = pl.start; sampPrevEnd = pl.end;
+        sampRecInst = inst; sampRecIdx = (inst >= 0) ? (int16_t)(sampleLibrarySize[inst] - 1) : -1;
+    }
     if (inst >= 0) {   // load it onto the drum (a pad plays the first 5.4 s)
         layerInst_setInstSelected(sampLayer, inst);
         layerInst_setSampleSelected(sampLayer, (int16_t)(sampleLibrarySize[inst] - 1));
@@ -6908,7 +6975,7 @@ bool Controller::chop_key(uint8_t key_) {
             chopPlayPos = chopMark[0];
             chopPlay = true;
             break;
-        case KEY_COPY: return true;
+        case KEY_COPY: if (keyboard.shiftKeyPress) chop_discardTake(); return true;   // custom: ADD + COPY: throw the take away
         default: return false;
     }
     page_markDirty(PAGE_CHOP);
@@ -7558,7 +7625,7 @@ void Controller::page_drawChop() {
     {   // paste keys, right end of the same row
         lcd.setAlignment(RIGHT);
         lcd.setForeColor(kThemeAmber);
-        const char hp[] = "PASTE: ON PADS   ADD + PASTE: LOOP";
+        const char* hp = chopFromTake ? "ADD + COPY: DELETE   PASTE: ON PADS   ADD + PASTE: LOOP" : "PASTE: ON PADS   ADD + PASTE: LOOP";
         lcd.drawText(hp, strlen(hp), 930, 396);
         lcd.setAlignment(LEFT);
     }

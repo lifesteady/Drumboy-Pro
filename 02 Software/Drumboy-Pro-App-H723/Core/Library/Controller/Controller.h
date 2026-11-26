@@ -662,6 +662,11 @@ class Controller {
     int16_t sampPrev = 0, sampHeld = 0;
     uint8_t sampHalf = 0;
     void sampling_speedKnob(int8_t step_);
+    void sampling_arm();
+    void sampling_restart();       // custom: CLEAR while recording - throw it away, armed again
+    void chop_discardTake();       // custom: ADD + COPY on the Chop page - delete the take, drum as before, armed again
+    int16_t sampPrevInst = -1, sampPrevSample = -1, sampRecInst = -1, sampRecIdx = -1;
+    uint8_t sampPrevStart = 0, sampPrevEnd = 0;
     volatile uint8_t sampState = 0;                                     // 0 idle, 1 armed, 2 recording, 3 done (to save), 4 saving
     uint8_t sampLayer = 0;
     volatile uint32_t sampCount = 0;                                    // samples recorded after the trigger
