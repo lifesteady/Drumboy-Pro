@@ -362,7 +362,7 @@ const float kSampThreshold                          = 0.03f;                    
 static_assert((kSampPreRoll + kSampMaxLength) * 2 <= 3 * 240000 * 4, "sampling take must fit the undo region");
 #define RAM_UNDO_ADDRESS                            (RAM_SAMPLE_ADDRESS + (12 * kSampleByteSize))
 const uint32_t kUndoRegionBytes                     = 3 * kSampleByteSize;     // ends at RAM_DELAY_ADDRESS
-const uint8_t kUndoSlots                            = 16;                      // 15 undo steps
+const uint8_t kUndoSlots                            = 15;                      // 14 undo steps (custom: hits got bigger for stacked sounds)
 const uint32_t kUndoMergeFillMs                     = 1200;                    // knob turns closer than this = one undo step
 const uint32_t kUndoMergeNudgeMs                    = 700;                     // quick nudge taps = one undo step
 enum UndoKind : uint8_t { UNDO_NONE = 0, UNDO_SINGLE, UNDO_RECORD, UNDO_FILL, UNDO_NUDGE };
@@ -2423,7 +2423,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.43 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.44 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -7523,6 +7523,15 @@ struct Beat {
     uint16_t endInterval                            = 0;
     uint16_t gate                                   = 0;   // custom: [11:0] Notes gate length in ticks (0 = ring out),
                                                            //         [15:12] 16 - velocity (0 = full, so old songs play full)
+    uint8_t stack                                   = 0;   // custom: a second sound on this hit (second voice):
+                                                           //         [7] on, [5:4] its pad bank, [3:0] its velocity - 1
+    uint8_t stackSpare                              = 0;
+
+    bool hasStack() const noexcept { return (stack & 0x80) != 0; }
+    uint8_t getStackBank() const noexcept { return (uint8_t)((stack >> 4) & 0x03); }
+    uint8_t getStackVel() const noexcept { return (uint8_t)((stack & 0x0F) + 1); }
+    void setStack(uint8_t bank_, uint8_t vel_) noexcept { if (vel_ < 1) vel_ = 1; if (vel_ > 16) vel_ = 16; stack = (uint8_t)(0x80 | ((bank_ & 0x03) << 4) | (vel_ - 1)); }
+    void clearStack() noexcept { stack = 0; }
 
     // custom: velocity 1..16 and gate length share the gate field (no extra memory)
     uint16_t getGate() const noexcept { return gate & 0x0FFF; }
@@ -7553,6 +7562,7 @@ struct Beat {
         fillTarget = NULL_FILL_TARGET;
         note = 0;
         gate = 0;
+        stack = 0;   // custom
     }
 
     // Active bit logic

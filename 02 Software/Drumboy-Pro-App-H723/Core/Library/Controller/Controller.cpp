@@ -7949,6 +7949,7 @@ uint32_t Controller::project_hash() {
                 mix(((uint32_t)beat.startInterval << 16) | beat.endInterval);
                 mix((uint8_t)beat.note);
                 mix(beat.gate);
+                mix(beat.stack);   // custom
             }
         }
     }
@@ -8257,6 +8258,7 @@ uint32_t Controller::main_laneKey(uint8_t lane_) {
         mix(bank.beatLibrary[j].data);
         mix(((uint32_t)bank.beatLibrary[j].startInterval << 16) | bank.beatLibrary[j].endInterval);
         mix(bank.beatLibrary[j].fillTarget);
+        mix(bank.beatLibrary[j].stack);   // custom: second sound
         mix(bank.beatLibrary[j].gate);   // custom: velocity / gate changes redraw the lane
     }
     mix(L.mute | (L.fill << 1) | (L.style << 2) | (L.samplePlay << 3));
@@ -8318,7 +8320,9 @@ void Controller::main_buildLane(uint8_t lane_) {
         } else {
             hT[n] = b.getStartInterval(); hV[n] = 255; hBeat[n] = (int8_t)j; n++;
         }
-        for (uint16_t k = n0; k < n; k++) hB[k] = b.getBank();
+        // custom: bits 1:0 the hit's bank, bit 2 a second sound, bits 4:3 its bank
+        const uint8_t hb = (uint8_t)(b.getBank() | (b.hasStack() ? (0x04 | (b.getStackBank() << 3)) : 0));
+        for (uint16_t k = n0; k < n; k++) hB[k] = hb;
     }
     for (uint16_t i = 0; i < n; i++) {
         const uint32_t t = hT[i];
@@ -8335,11 +8339,13 @@ void Controller::main_buildLane(uint8_t lane_) {
         for (int32_t c = (c0 < 0 ? 0 : c0); (c <= c1) && (c < kMainGridW); c++) {
             const float f = 1.0f - (float)(c - c0) / (float)len;
             const uint8_t th = (uint8_t)(hV[i] * f * f);
-            if (th > mainTail[lane_][c]) { mainTail[lane_][c] = th; mainBk[lane_][c] = (uint8_t)((mainBk[lane_][c] & 0xF0) | hB[i]); }
+            if (th > mainTail[lane_][c]) { mainTail[lane_][c] = th; mainBk[lane_][c] = (uint8_t)((mainBk[lane_][c] & 0xFC) | (hB[i] & 0x03)); }
         }
         if ((c0 >= 0) && (c0 < kMainGridW)) {
-            if (hV[i] > mainAtt[lane_][c0]) { mainAtt[lane_][c0] = hV[i]; mainBk[lane_][c0] = (uint8_t)((mainBk[lane_][c0] & 0x0F) | (hB[i] << 4)); }
-            if ((c0 + 1 < kMainGridW) && (hV[i] > mainAtt[lane_][c0 + 1])) { mainAtt[lane_][c0 + 1] = hV[i]; mainBk[lane_][c0 + 1] = (uint8_t)((mainBk[lane_][c0 + 1] & 0x0F) | (hB[i] << 4)); }
+            // custom: mainBk - bits 5:4 attack bank, bit 6 stacked, bits 3:2 stacked bank, bits 1:0 tail bank
+            auto attBk = [&](uint8_t old_) -> uint8_t { return (uint8_t)((old_ & 0x03) | ((hB[i] & 0x03) << 4) | ((hB[i] & 0x04) ? (0x40 | (((hB[i] >> 3) & 0x03) << 2)) : 0)); };
+            if (hV[i] > mainAtt[lane_][c0]) { mainAtt[lane_][c0] = hV[i]; mainBk[lane_][c0] = attBk(mainBk[lane_][c0]); }
+            if ((c0 + 1 < kMainGridW) && (hV[i] > mainAtt[lane_][c0 + 1])) { mainAtt[lane_][c0 + 1] = hV[i]; mainBk[lane_][c0 + 1] = attBk(mainBk[lane_][c0 + 1]); }
             if (((int8_t)lane_ == mainExpanded) && (menu == LAYER_SONG_MENU) && (hBeat[i] >= 0) && (hBeat[i] == selectedBeatNum)) mainSelCol = (int16_t)c0;
         }
     }
@@ -8403,8 +8409,12 @@ void Controller::main_renderColumn(uint16_t col_, uint16_t row0_, uint16_t rows_
         if (av) {
             const uint16_t ah = (uint16_t)((uint32_t)room * av / 255);
             RGB16Color ac = mix565(cBlack, bankBase((bkv >> 4) & 0x03), 0.6f + 0.4f * (av / 255.0f));
-            if (sel && (mainSelCol >= 0) && ((col_ == (uint16_t)mainSelCol) || (col_ == (uint16_t)mainSelCol + 1))) ac = kBankText;   // custom: selected hit in white (violet was too close to bank D)
-            for (uint16_t r = 0; r <= ah; r++) buf[floor - r] = ac;
+            const bool selHit = sel && (mainSelCol >= 0) && ((col_ == (uint16_t)mainSelCol) || (col_ == (uint16_t)mainSelCol + 1));
+            if (selHit) ac = kBankText;   // custom: selected hit in white (violet was too close to bank D)
+            // custom: a hit with a second sound - the lower half of its bar in that sound's bank colour
+            const bool stacked = (bkv & 0x40) != 0;
+            const RGB16Color sc = selHit ? kBankText : mix565(cBlack, bankBase((bkv >> 2) & 0x03), 0.6f + 0.4f * (av / 255.0f));
+            for (uint16_t r = 0; r <= ah; r++) buf[floor - r] = (stacked && (r < ah / 2)) ? sc : ac;
         }
         buf[y0 + h - 1] = cSep;   // lane separator
     }
@@ -8839,7 +8849,7 @@ static_assert(RAM_VERB_FAST_ADDRESS + rvp::fastFloats() * 4 <= 0x20020000, "reve
 static_assert(RAM_VERB_ENGINE_ADDRESS + sizeof(rvp::Engine) <= RAM_VERB_FAST_ADDRESS, "reverb engine object overlaps its tank");
 static_assert(Reverb::kSharedFloats <= rvp::fastFloats(), "STANDARD reverb buffers must fit inside the shared DTCM block");
 static_assert(kFileBeatsPerBank * 4 + 1 == 257, "song file bank block is 257 bytes");
-static_assert(sizeof(Beat) == 10, "Beat layout changed: check undo / RAM budget");
+static_assert(sizeof(Beat) == 12, "Beat layout changed: check undo / RAM budget");
 
 int8_t Controller::pitch_padNote(uint8_t pad_) {
     /// @brief Note of a pad: the ROOT sits on pitchRootPad, pads to the right climb the scale,
@@ -8993,13 +9003,15 @@ void Controller::pitch_pad(uint8_t pad_) {
 void Controller::voice_release(uint8_t layer_) {
     /// @brief Fades out whatever this drum is playing (note-off). Safe against the audio interrupt.
     if (layer_ >= kLayerLibrarySize) return;
-    LayerPlayData& lD = layerPlayData[layer_];
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
-    if (lD.tempBeatTimingFlag) { lD.tempBeatTimingFlag = false; memset(&lD.tempBeatPlayData, 0x00, sizeof(BeatPlayData)); }
-    if (lD.activeBeatPlayData.active && !lD.activeBeatPlayData.newBeatFlag && !lD.activeBeatPlayData.fadeAction) {
-        lD.activeBeatPlayData.fadeAction = true;
-        lD.activeBeatPlayData.counterFade = 0;
+    for (uint8_t v = 0; v < 2; v++) {   // custom: the second voice too
+        LayerPlayData& lD = layerPlayData[layer_ + v * kLayerLibrarySize];
+        if (lD.tempBeatTimingFlag) { lD.tempBeatTimingFlag = false; memset(&lD.tempBeatPlayData, 0x00, sizeof(BeatPlayData)); }
+        if (lD.activeBeatPlayData.active && !lD.activeBeatPlayData.newBeatFlag && !lD.activeBeatPlayData.fadeAction) {
+            lD.activeBeatPlayData.fadeAction = true;
+            lD.activeBeatPlayData.counterFade = 0;
+        }
     }
     __set_PRIMASK(primask);
 }
@@ -9647,7 +9659,7 @@ void Controller::pitch_saveNotes(uint8_t fileNum_) {
     // RWN3: every hit with a note or gate, plus every hit past the 64 the song file can hold.
     auto wantedAt = [](const Bank& bank_, int16_t j_) {
         const Beat& b = bank_.beatLibrary[j_];
-        return b.getActive() && ((b.note != 0) || (b.gate != 0) || (j_ >= (int16_t)kFileBeatsPerBank));
+        return b.getActive() && ((b.note != 0) || (b.gate != 0) || b.hasStack() || (j_ >= (int16_t)kFileBeatsPerBank));   // custom: + stacked sound (RWN4)
     };
     uint16_t n = 0;
     for (uint8_t l = 0; l < kLayerLibrarySize; l++)
@@ -9660,7 +9672,7 @@ void Controller::pitch_saveNotes(uint8_t fileNum_) {
     if (f_open(&sd.file, fileName, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK) return;
     uint8_t buf[168];
     uint16_t pos = 0;
-    buf[pos++] = 'R'; buf[pos++] = 'W'; buf[pos++] = 'N'; buf[pos++] = '3';
+    buf[pos++] = 'R'; buf[pos++] = 'W'; buf[pos++] = 'N'; buf[pos++] = '4';
     buf[pos++] = (uint8_t)(n >> 8); buf[pos++] = (uint8_t)(n & 0xFF);
     for (uint8_t l = 0; l < kLayerLibrarySize; l++)
         for (uint8_t b = 0; b < kBankLibrarySize; b++) {
@@ -9674,7 +9686,8 @@ void Controller::pitch_saveNotes(uint8_t fileNum_) {
                 buf[pos++] = (uint8_t)(beat.gate >> 8); buf[pos++] = (uint8_t)(beat.gate & 0xFF);
                 const uint16_t d = beat.getData();   // active bit + fill settings (needed for extra hits)
                 buf[pos++] = (uint8_t)(d >> 8); buf[pos++] = (uint8_t)(d & 0xFF);
-                if (pos > sizeof(buf) - 9) { f_write(&sd.file, buf, pos, &sd.byteswritten); pos = 0; }
+                buf[pos++] = beat.stack;   // RWN4: the hit's second sound
+                if (pos > sizeof(buf) - 10) { f_write(&sd.file, buf, pos, &sd.byteswritten); pos = 0; }
             }
         }
     if (pos) f_write(&sd.file, buf, pos, &sd.byteswritten);
@@ -9689,10 +9702,10 @@ void Controller::pitch_loadNotes(uint8_t fileNum_) {
     if (f_open(&sd.file, fileName, FA_READ) != FR_OK) return;
     uint8_t head[6];
     UINT got = 0;
-    if ((f_read(&sd.file, head, 6, &got) == FR_OK) && (got == 6) && (head[0] == 'R') && (head[1] == 'W') && (head[2] == 'N') && (head[3] >= '1') && (head[3] <= '3')) {
+    if ((f_read(&sd.file, head, 6, &got) == FR_OK) && (got == 6) && (head[0] == 'R') && (head[1] == 'W') && (head[2] == 'N') && (head[3] >= '1') && (head[3] <= '4')) {
         uint16_t n = ((uint16_t)head[4] << 8) | head[5];
-        const UINT esz = (head[3] == '3') ? 9 : ((head[3] == '2') ? 7 : 5);
-        uint8_t e[9] = {0};
+        const UINT esz = (head[3] == '4') ? 10 : ((head[3] == '3') ? 9 : ((head[3] == '2') ? 7 : 5));
+        uint8_t e[10] = {0};
         uint16_t touched[kLayerLibrarySize] = {0};   // banks that got extra hits (bit per bank)
         const uint8_t quantizeWas = rhythm.quantize;
         rhythm.quantize = kQuantizeOff;              // extra hits go back exactly where they were
@@ -9704,7 +9717,7 @@ void Controller::pitch_loadNotes(uint8_t fileNum_) {
             int16_t found = -1;
             for (int16_t j = 0; j <= bank.lastActiveBeatNum; j++)
                 if (bank.beatLibrary[j].getActive() && (bank.beatLibrary[j].startInterval == st)) { found = j; break; }
-            if ((found < 0) && (esz == 9)) {   // a hit past the song file's 64: add it back
+            if ((found < 0) && (esz >= 9)) {   // a hit past the song file's 64: add it back
                 const uint16_t d = ((uint16_t)e[7] << 8) | e[8];
                 if ((d >> 15) && (st < songInterval)) {
                     loadBank = (int8_t)((d & Beat::BANK_MASK) >> 6);
@@ -9720,7 +9733,8 @@ void Controller::pitch_loadNotes(uint8_t fileNum_) {
             if (found >= 0) {
                 bank.beatLibrary[found].note = (int8_t)e[4];
                 if (esz >= 7) bank.beatLibrary[found].gate = ((uint16_t)e[5] << 8) | e[6];
-                if (esz == 9) bank.beatLibrary[found].setBank((uint8_t)((e[8] >> 6) & 0x03));   // custom: pad bank
+                if (esz >= 9) bank.beatLibrary[found].setBank((uint8_t)((e[8] >> 6) & 0x03));   // custom: pad bank
+                if (esz >= 10) bank.beatLibrary[found].stack = e[9];                            // custom: second sound
             }
         }
         rhythm.quantize = quantizeWas;
@@ -9770,7 +9784,7 @@ void Controller::preview_stopVoices() {
 
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
-    for (uint8_t i = 0; i < kLayerLibrarySize; i++) {
+    for (uint8_t i = 0; i < 2 * kLayerLibrarySize; i++) {   // custom: second voices too
         BeatPlayData& a = layerPlayData[i].activeBeatPlayData;
         BeatPlayData& t = layerPlayData[i].tempBeatPlayData;
         if (a.ramAddress == RAM_PREVIEW_ADDRESS) { a.active = false; a.counter = 0; a.newBeatFlag = false; }
@@ -25393,7 +25407,7 @@ void Controller::bank_freeSound(uint8_t l_, uint8_t b_) {
             const uint32_t a = sectorAddr(i);
             uint32_t primask = __get_PRIMASK();
             __disable_irq();
-            for (uint8_t v = 0; v < kLayerLibrarySize; v++) {
+            for (uint8_t v = 0; v < 2 * kLayerLibrarySize; v++) {   // custom: second voices too
                 BeatPlayData& x = layerPlayData[v].activeBeatPlayData;
                 BeatPlayData& y = layerPlayData[v].tempBeatPlayData;
                 if (x.active && (x.ramAddress == a)) { x.active = false; x.counter = 0; }
@@ -25600,8 +25614,10 @@ void Controller::choke(uint8_t layerNum_) {
     if (g == 0) return;
     for (uint8_t l = 0; l < kLayerLibrarySize; l++) {
         if ((l == layerNum_) || (layerLibrary[l].muteGroup != g)) continue;
-        BeatPlayData& a = layerPlayData[l].activeBeatPlayData;
-        if (a.active && !a.fadeAction) { a.fadeAction = true; a.counterFade = 0; a.newBeatFlag = false; }
+        for (uint8_t v = 0; v < 2; v++) {   // custom: and its second voice
+            BeatPlayData& a = layerPlayData[l + v * kLayerLibrarySize].activeBeatPlayData;
+            if (a.active && !a.fadeAction) { a.fadeAction = true; a.counterFade = 0; a.newBeatFlag = false; }
+        }
     }
 }
 
@@ -25611,7 +25627,7 @@ void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
     // 1. CONTEXT LOAD
     // Resolve layer, play-state buffers, and temporary beat structures.
     Layer& layer = layerLibrary[layerNum_];
-    LayerPlayData& lD = layerPlayData[layerNum_];
+    LayerPlayData& lD = layerPlayData[layerNum_ + (playVoice ? kLayerLibrarySize : 0)];   // custom: second voice for stacked hits
     BeatPlayData& tBD = lD.tempBeatPlayData;
     BeatPlayData& aBD = lD.activeBeatPlayData;
 
@@ -26741,7 +26757,7 @@ void Controller::layerInst_setSampleLoaded(uint8_t layerNum_) {
                 for (uint8_t i = 0; i < kSampleSectorLibrarySize; i++) {
                     if (!(sampleSectorLibrary[i].active && (sampleSectorLibrary[i].layer == layer.number) && (sampleSectorLibrary[i].bank == layerLive[layer.number]))) continue;
                     const uint32_t a = sectorAddr(i);
-                    for (uint8_t v = 0; v < kLayerLibrarySize; v++) {
+                    for (uint8_t v = 0; v < 2 * kLayerLibrarySize; v++) {   // custom: second voices too
                         BeatPlayData& x = layerPlayData[v].activeBeatPlayData;
                         BeatPlayData& y = layerPlayData[v].tempBeatPlayData;
                         if (x.active && (x.ramAddress == a)) { x.active = false; x.counter = 0; }
@@ -26764,7 +26780,7 @@ void Controller::layerInst_setSampleLoaded(uint8_t layerNum_) {
                 uint32_t primaskSector = __get_PRIMASK();
                 __disable_irq();
                 uint32_t targetSectorAddress = sectorAddr(targetSector);
-                for (uint8_t i = 0; i < kLayerLibrarySize; i++) {
+                for (uint8_t i = 0; i < 2 * kLayerLibrarySize; i++) {   // custom: second voices too
                     BeatPlayData& sectorABD = layerPlayData[i].activeBeatPlayData;
                     BeatPlayData& sectorTBD = layerPlayData[i].tempBeatPlayData;
                     if (sectorABD.active && sectorABD.ramAddress == targetSectorAddress) {
@@ -27861,16 +27877,21 @@ void Controller::layerSong_beatLeft() {
 
 void Controller::layerSong_recordBeat(uint8_t layerNum_, uint8_t bankTab_, uint16_t interval_, uint8_t fillType_, uint8_t fillPattern_, uint8_t fillTime_, uint8_t fillLevel_, bool selected_) {
     /// @brief Custom: a hit played in live (pads, Notes, MIDI). Where the lane already has a hit at that
-    /// spot, the new one replaces it: its pad bank, velocity and note (the old hit's roll / fill stays).
+    /// spot: the same bank replaces it (velocity, note); another bank stacks on it as its second sound.
     Bank& bank = layerLibrary[layerNum_].bankLibrary[bankTab_];
     uint16_t st = rhythm_snapToGrid(interval_);
     if (st == songInterval) st = 0;
     for (int16_t i = 0; i <= bank.lastActiveBeatNum; i++) {
         Beat& b = bank.beatLibrary[i];
         if (!b.getActive() || (b.getStartInterval() != st)) continue;
-        b.setBank(liveBank);
-        b.setVel(recordVel);
-        b.note = recordNote;
+        // custom: same bank = replace that sound; another bank = it stacks as the hit's second
+        // sound (second voice); a third bank replaces the stacked one
+        if (b.getBank() == liveBank) {
+            b.setVel(recordVel);
+            b.note = recordNote;
+        } else {
+            b.setStack(liveBank, recordVel);
+        }
         if ((menu == LAYER_SONG_MENU) && (selectedLayerNum == layerNum_) && (activeSongBank == bankTab_)) lcd_drawLayerSong_NoteGateData(layerNum_);
         return;
     }
@@ -27960,6 +27981,7 @@ void Controller::layerSong_setBeat(uint8_t layerNum_, uint8_t bankTab_, uint16_t
             bank.setBeat(beatNum, startInterval, endInterval);
             bank.beatLibrary[beatNum].note = recordNote;   // custom: Pitch mode note (0 = normal hit)
             bank.beatLibrary[beatNum].gate = 0;
+            bank.beatLibrary[beatNum].stack = 0;   // custom: no second sound yet
             bank.beatLibrary[beatNum].setVel(recordVel);   // custom: velocity
             bank.beatLibrary[beatNum].setBank((loadBank >= 0) ? (uint8_t)loadBank : liveBank);   // custom: pad bank (a file load gives its own)
             bank.setBeatFill(beatNum, fillType_, fillPattern_, fillTime_, fillLevel_);
@@ -28158,8 +28180,9 @@ void Controller::lcd_drawLayerSong_NoteGateData(uint8_t layerNum_) {
         // custom: the hit's pad bank, in the bank's colour; EMPTY when that bank has no sound on this pad
         const uint8_t bk = b.getBank();
         const bool has = bank_samplePlay(layerNum_, bk);
-        char bt[10];
-        snprintf(bt, sizeof(bt), has ? "%c" : "%c EMPTY", (char)('A' + bk));
+        char bt[12];
+        if (b.hasStack()) snprintf(bt, sizeof(bt), "%c + %c", (char)('A' + bk), (char)('A' + b.getStackBank()));   // custom: second sound
+        else snprintf(bt, sizeof(bt), has ? "%c" : "%c EMPTY", (char)('A' + bk));
         snprintf(t, sizeof(t), "%10s", bt);
         lcd_setMenuDataState(has ? kBankColor[bk] : kThemeMid);
         lcd.drawText(t, kMenuDataTextSize, kMenuDataX[2], kMenuDataY[2]);
@@ -28211,6 +28234,26 @@ void Controller::layerSong_bankKnob(int8_t step_) {
     Bank& bank = layerLibrary[selectedLayerNum].bankLibrary[activeSongBank];
     if ((selectedBeatNum < 0) || (selectedBeatNum > bank.lastActiveBeatNum)) return;
     Beat& b = bank.beatLibrary[selectedBeatNum];
+    if (keyboard.shiftKeyPress) {   // custom: ADD + knob 3 - the hit's second sound: none, A, B, C, D
+        undo_cancelShiftActions();
+        int8_t sv = b.hasStack() ? (int8_t)(b.getStackBank() + 1) : 0;
+        sv += step_;
+        if (sv < 0) sv = 0;
+        if (sv > (int8_t)kPadBankCount) sv = kPadBankCount;
+        if (sv == (b.hasStack() ? (int8_t)(b.getStackBank() + 1) : 0)) return;
+        undo_checkpoint(UNDO_FILL);
+        if (sv == 0) b.clearStack();
+        else b.setStack((uint8_t)(sv - 1), b.hasStack() ? b.getStackVel() : b.getVel());
+        if (!playActive && (sv > 0) && !layerLibrary[selectedLayerNum].mute) {
+            __disable_irq();
+            playVoice = 1;
+            layer_playBank(selectedLayerNum, vel_gain(b.getStackVel()), (uint8_t)(sv - 1));
+            playVoice = 0;
+            __enable_irq();
+        }
+        lcd_drawLayerSong_NoteGateData(selectedLayerNum);
+        return;
+    }
     int8_t nb = (int8_t)b.getBank() + step_;
     if (nb < 0) nb = 0;
     if (nb > (int8_t)(kPadBankCount - 1)) nb = kPadBankCount - 1;
@@ -29359,6 +29402,234 @@ static inline float env_next(BeatPlayData& b, bool& ended) {
     return 0.0f;
 }
 
+void Controller::processVoice(uint8_t i, LayerPlayData& lD, float* targetBuffer) {
+    /// @brief One voice of drum i into targetBuffer (custom: split out of processAudioLayer so each
+    /// lane can have a second voice). Body unchanged from the stock per-layer loop.
+    const float kScale24 = 16777215.0f;
+    const float kInvScale24 = 1.0f / 16777215.0f;
+    BeatPlayData& tBD = lD.tempBeatPlayData;
+    BeatPlayData& aBD = lD.activeBeatPlayData;
+    (void)tBD;
+
+    // --- Handle Sample Retriggering ---
+    if (aBD.newBeatFlag) {
+        if (aBD.counterFade >= 49 || !aBD.active) {
+            aBD.newBeatFlag = false;
+            lD.beatStartFlag = true;
+            lD.beatEndFlag = false;
+
+            // Transfer temporary beat data to the active state
+            memcpy(&aBD, &lD.tempBeatPlayData, sizeof(BeatPlayData));
+            memset(&lD.tempBeatPlayData, 0x00, sizeof(BeatPlayData));
+
+            // Deactivate layer if necessary and trigger MIDI Note Off
+            if (!aBD.active) {
+                io.midi.txTriggerNoteOff[i] = true;
+                return;
+            }
+        }
+    }
+
+    // Skip processing if the layer is inactive
+    if (!aBD.active) return;
+    spOn[i] = spOn[i] || aBD.sp1200;   // custom: SP-1200 character after this block is read
+
+    // (targetBuffer is the voice's own buffer)
+
+    // 3. PROCESSING PATH RESOLUTION
+    // Use fast path for unity pitch + forward direction; else use interpolated slow path.
+    bool isFastPath = (aBD.increment == 1.0f) && (aBD.directionMode == 0);   // (SP-1200 at unity pitch reads every sample anyway)
+
+    if (isFastPath) {
+        // --- Optimized Fast Path Processing ---
+        uint32_t remainder = (uint32_t)(aBD.counterEnd - aBD.counter);
+        uint16_t copySize = (remainder > I2S_BLOCK_SIZE) ? I2S_BLOCK_SIZE : (uint16_t)remainder;
+        // Cache RAM data into local stack buffer for processing (custom: 16-bit pad sectors or float audition buffer)
+        float localCache[I2S_BLOCK_SIZE];
+        if (copySize > 0) {
+            if (aBD.pcm16) {
+                int16_t raw16[I2S_BLOCK_SIZE];
+                memcpy(raw16, (const void*)(aBD.ramAddress + ((uint32_t)aBD.counter * 2)), copySize * sizeof(int16_t));
+                for (uint16_t q = 0; q < copySize; q++) localCache[q] = (float)raw16[q] * (1.0f / 32768.0f);
+            } else {
+                memcpy(localCache, (const void*)(aBD.ramAddress + ((uint32_t)aBD.counter * 4)), copySize * sizeof(float));
+            }
+        }
+
+        if (aBD.counter == aBD.counterStart) io.midi.txTriggerNoteOn[i] = true;
+
+        bool bitCrushActive = (aBD.resolutionCoef != 0x00FFFFFF);
+        bool envEnded = false;
+
+        for (uint16_t j = 0; j < copySize; j++) {
+            float sample = localCache[j];
+            if (!(sample > -4.0f && sample < 4.0f)) sample = 0.0f;   // custom: NaN / garbage guard
+
+            // Apply Bitcrush effect if the resolution coefficient is modified
+            if (bitCrushActive) {
+                float valShifted = (sample + 1.0f) * 0.5f;
+                uint32_t tempUnsigned = (uint32_t)(valShifted * kScale24);
+                tempUnsigned &= aBD.resolutionCoef;
+                float valBack = (float)tempUnsigned * kInvScale24;
+                sample = (valBack * 2.0f) - 1.0f;
+            }
+
+            // Handle fade-in/fade-out logic
+            if ((aBD.newBeatFlag) && (!aBD.fadeAction)) aBD.fadeAction = true;
+            if ((!aBD.fadeAction) && (aBD.fadeFlag) && ((aBD.counter + j) >= aBD.counterFadeStart)) {
+                aBD.fadeAction = true;
+            }
+
+            if (aBD.fadeAction) {
+                sample *= kFadeVolumeMultiplier[aBD.counterFade];
+                if (aBD.counterFade < 49) aBD.counterFade++;
+            }
+
+            // Custom envelope
+            if (aBD.envActive) sample *= env_next(aBD, envEnded);
+
+            // Apply final volume and store in output buffer
+            targetBuffer[j] = sample * aBD.volumeMultiplier;
+        }
+
+        // Update sample counter and check for playback end
+        aBD.counter += (float)copySize;
+        if ((copySize < I2S_BLOCK_SIZE) || (envEnded && !aBD.newBeatFlag)) {
+            lD.beatStartFlag = false;
+            lD.beatEndFlag = true;
+            aBD.active = false;
+            aBD.counter = 0.0f;
+            io.midi.txTriggerNoteOff[i] = true;
+        }
+    } else {
+        // 4. SLOW PATH PROCESSING
+        // Handle interpolated read and multi-direction playback modes.
+        for (uint16_t k = 0; k < I2S_BLOCK_SIZE; k++) {
+            bool endFlag = false;
+            bool envEnded = false;
+
+            // Perform Linear Interpolation for pitch shifting
+            float counterFloat = aBD.counter;
+            uint32_t counterInt = (uint32_t)counterFloat;
+            float counterDiff = counterFloat - (float)counterInt;
+            const uint32_t stride = aBD.pcm16 ? 2 : 4;   // custom: 16-bit pad sectors
+            uint32_t ramAddress = aBD.ramAddress + (counterInt * stride);
+
+            // Helper lambda for reading RAM with integrated bitcrushing
+            auto getSample = [&](uint32_t addr) -> float {
+                float val = aBD.pcm16 ? ((float)*(volatile int16_t*)addr * (1.0f / 32768.0f)) : *(volatile float*)addr;
+                if (aBD.resolutionCoef != 0x00FFFFFF) {
+                    float valShifted = (val + 1.0f) * 0.5f;
+                    uint32_t tempUnsigned = (uint32_t)(valShifted * kScale24);
+                    tempUnsigned &= aBD.resolutionCoef;
+                    float valBack = (float)tempUnsigned * kInvScale24;
+                    val = (valBack * 2.0f) - 1.0f;
+                }
+                return val;
+            };
+
+            float currentSample;
+            if ((counterDiff == 0.0f) || ((counterInt + 1) >= aBD.counterMax) || aBD.sp1200) {   // custom: SP-1200 drops samples, no interpolation
+                // custom: never read past the last sample of the sound (that memory can hold
+                // leftovers or garbage, and one bad value can silence the whole effect chain)
+                currentSample = getSample(ramAddress);
+            } else {
+                // Linear interpolation between two samples
+                currentSample = getSample(ramAddress) + ((getSample(ramAddress + stride) - getSample(ramAddress)) * counterDiff);
+            }
+            if (!(currentSample > -4.0f && currentSample < 4.0f)) currentSample = 0.0f;   // custom: NaN / garbage guard
+
+            // Handle Fading Triggers
+            if ((aBD.newBeatFlag) && (!aBD.fadeAction)) aBD.fadeAction = true;
+            if (!aBD.fadeAction) {
+                bool fadeTrigger = (aBD.directionMode == 0) ? (aBD.fadeFlag && aBD.counter >= aBD.counterFadeStart) : (aBD.fadeFlag && aBD.counter <= aBD.counterFadeStart);
+                if (fadeTrigger) aBD.fadeAction = true;
+            }
+
+            if (aBD.fadeAction) {
+                currentSample *= kFadeVolumeMultiplier[aBD.counterFade];
+                if (aBD.counterFade < 49)
+                    aBD.counterFade++;
+                else if (!aBD.newBeatFlag)
+                    endFlag = true;
+            }
+
+            // Custom envelope
+            if (aBD.envActive) {
+                currentSample *= env_next(aBD, envEnded);
+                if (envEnded && !aBD.newBeatFlag) endFlag = true;
+            }
+
+            // Store sample with volume scaling
+            targetBuffer[k] = currentSample * aBD.volumeMultiplier;
+
+            // --- Direction and Counter Management ---
+            switch (aBD.directionMode) {
+                case 0:  // Forward playback
+                    if (aBD.counter == aBD.counterStart) io.midi.txTriggerNoteOn[i] = true;
+                    aBD.counter += aBD.increment;
+                    if (aBD.counter > (aBD.counterEnd - 1.0f)) endFlag = true;
+                    break;
+
+                case 1:  // Backward playback
+                    if (aBD.counter == aBD.counterEnd - 1.0f) io.midi.txTriggerNoteOn[i] = true;
+                    aBD.counter -= aBD.increment;
+                    if (aBD.counter < aBD.counterStart) endFlag = true;
+                    break;
+
+                case 2:  // Ping (Forward then Backward)
+                    switch (aBD.directionPhase) {
+                        case 0:  // Forward phase
+                            if (aBD.counter == 0.0f) io.midi.txTriggerNoteOn[i] = true;
+                            aBD.counter += aBD.increment;
+                            if (aBD.counter > (aBD.counterEnd - 1.0f)) {
+                                aBD.counter = aBD.counterEnd - 1.0f;
+                                aBD.directionPhase = 1;
+                                aBD.fadeFlag = true;
+                            }
+                            break;
+
+                        case 1:  // Backward phase
+                            aBD.counter -= aBD.increment;
+                            if (aBD.counter < aBD.counterStart) endFlag = true;
+                            break;
+                    }
+                    break;
+
+                case 3:  // Pong (Backward then Forward)
+                    switch (aBD.directionPhase) {
+                        case 0:  // Backward phase
+                            if (aBD.counter == aBD.counterEnd - 1.0f) io.midi.txTriggerNoteOn[i] = true;
+                            aBD.counter -= aBD.increment;
+                            if (aBD.counter < aBD.counterStart) {
+                                aBD.counter = 0.0f;
+                                aBD.directionPhase = 1;
+                                aBD.fadeFlag = true;
+                            }
+                            break;
+
+                        case 1:  // Forward phase
+                            aBD.counter += aBD.increment;
+                            if (aBD.counter > (aBD.counterEnd - 1.0f)) endFlag = true;
+                            break;
+                    }
+                    break;
+            }
+
+            // 5. END-OF-SAMPLE HANDLING
+            // Finalize beat state and emit MIDI Note Off on playback end.
+            if (endFlag) {
+                lD.beatStartFlag = false;
+                lD.beatEndFlag = true;
+                aBD.active = false;
+                aBD.counter = 0.0f;
+                io.midi.txTriggerNoteOff[i] = true;
+                break;
+            }
+        }
+    }
+}
+
 void Controller::processAudioLayer() {
     /// @brief Manages real-time audio playback for all layers, featuring sample retriggering, bitcrushing, linear interpolation, and multiple playback direction modes.
 
@@ -29370,230 +29641,20 @@ void Controller::processAudioLayer() {
     // 2. LAYER ITERATION
     // Process playback pipeline for each layer independently.
     for (uint8_t i = 0; i < kLayerLibrarySize; i++) {
-        LayerPlayData& lD = layerPlayData[i];
-        BeatPlayData& tBD = lD.tempBeatPlayData;
-        BeatPlayData& aBD = lD.activeBeatPlayData;
-
         // Reset the audio buffer for the current layer
         memset(audioLayer[i], 0, I2S_BLOCK_SIZE * sizeof(float));
         spOn[i] = false;   // custom
-
-        // --- Handle Sample Retriggering ---
-        if (aBD.newBeatFlag) {
-            if (aBD.counterFade >= 49 || !aBD.active) {
-                aBD.newBeatFlag = false;
-                lD.beatStartFlag = true;
-                lD.beatEndFlag = false;
-
-                // Transfer temporary beat data to the active state
-                memcpy(&aBD, &lD.tempBeatPlayData, sizeof(BeatPlayData));
-                memset(&lD.tempBeatPlayData, 0x00, sizeof(BeatPlayData));
-
-                // Deactivate layer if necessary and trigger MIDI Note Off
-                if (!aBD.active) {
-                    io.midi.txTriggerNoteOff[i] = true;
-                    continue;
-                }
-            }
-        }
-
-        // Skip processing if the layer is inactive
-        if (!aBD.active) continue;
-        spOn[i] = aBD.sp1200;   // custom: SP-1200 character after this block is read
-
-        float* targetBuffer = audioLayer[i];
-
-        // 3. PROCESSING PATH RESOLUTION
-        // Use fast path for unity pitch + forward direction; else use interpolated slow path.
-        bool isFastPath = (aBD.increment == 1.0f) && (aBD.directionMode == 0);   // (SP-1200 at unity pitch reads every sample anyway)
-
-        if (isFastPath) {
-            // --- Optimized Fast Path Processing ---
-            uint32_t remainder = (uint32_t)(aBD.counterEnd - aBD.counter);
-            uint16_t copySize = (remainder > I2S_BLOCK_SIZE) ? I2S_BLOCK_SIZE : (uint16_t)remainder;
-            // Cache RAM data into local stack buffer for processing (custom: 16-bit pad sectors or float audition buffer)
-            float localCache[I2S_BLOCK_SIZE];
-            if (copySize > 0) {
-                if (aBD.pcm16) {
-                    int16_t raw16[I2S_BLOCK_SIZE];
-                    memcpy(raw16, (const void*)(aBD.ramAddress + ((uint32_t)aBD.counter * 2)), copySize * sizeof(int16_t));
-                    for (uint16_t q = 0; q < copySize; q++) localCache[q] = (float)raw16[q] * (1.0f / 32768.0f);
-                } else {
-                    memcpy(localCache, (const void*)(aBD.ramAddress + ((uint32_t)aBD.counter * 4)), copySize * sizeof(float));
-                }
-            }
-
-            if (aBD.counter == aBD.counterStart) io.midi.txTriggerNoteOn[i] = true;
-
-            bool bitCrushActive = (aBD.resolutionCoef != 0x00FFFFFF);
-            bool envEnded = false;
-
-            for (uint16_t j = 0; j < copySize; j++) {
-                float sample = localCache[j];
-                if (!(sample > -4.0f && sample < 4.0f)) sample = 0.0f;   // custom: NaN / garbage guard
-
-                // Apply Bitcrush effect if the resolution coefficient is modified
-                if (bitCrushActive) {
-                    float valShifted = (sample + 1.0f) * 0.5f;
-                    uint32_t tempUnsigned = (uint32_t)(valShifted * kScale24);
-                    tempUnsigned &= aBD.resolutionCoef;
-                    float valBack = (float)tempUnsigned * kInvScale24;
-                    sample = (valBack * 2.0f) - 1.0f;
-                }
-
-                // Handle fade-in/fade-out logic
-                if ((aBD.newBeatFlag) && (!aBD.fadeAction)) aBD.fadeAction = true;
-                if ((!aBD.fadeAction) && (aBD.fadeFlag) && ((aBD.counter + j) >= aBD.counterFadeStart)) {
-                    aBD.fadeAction = true;
-                }
-
-                if (aBD.fadeAction) {
-                    sample *= kFadeVolumeMultiplier[aBD.counterFade];
-                    if (aBD.counterFade < 49) aBD.counterFade++;
-                }
-
-                // Custom envelope
-                if (aBD.envActive) sample *= env_next(aBD, envEnded);
-
-                // Apply final volume and store in output buffer
-                targetBuffer[j] = sample * aBD.volumeMultiplier;
-            }
-
-            // Update sample counter and check for playback end
-            aBD.counter += (float)copySize;
-            if ((copySize < I2S_BLOCK_SIZE) || (envEnded && !aBD.newBeatFlag)) {
-                lD.beatStartFlag = false;
-                lD.beatEndFlag = true;
-                aBD.active = false;
-                aBD.counter = 0.0f;
-                io.midi.txTriggerNoteOff[i] = true;
-            }
-        } else {
-            // 4. SLOW PATH PROCESSING
-            // Handle interpolated read and multi-direction playback modes.
-            for (uint16_t k = 0; k < I2S_BLOCK_SIZE; k++) {
-                bool endFlag = false;
-                bool envEnded = false;
-
-                // Perform Linear Interpolation for pitch shifting
-                float counterFloat = aBD.counter;
-                uint32_t counterInt = (uint32_t)counterFloat;
-                float counterDiff = counterFloat - (float)counterInt;
-                const uint32_t stride = aBD.pcm16 ? 2 : 4;   // custom: 16-bit pad sectors
-                uint32_t ramAddress = aBD.ramAddress + (counterInt * stride);
-
-                // Helper lambda for reading RAM with integrated bitcrushing
-                auto getSample = [&](uint32_t addr) -> float {
-                    float val = aBD.pcm16 ? ((float)*(volatile int16_t*)addr * (1.0f / 32768.0f)) : *(volatile float*)addr;
-                    if (aBD.resolutionCoef != 0x00FFFFFF) {
-                        float valShifted = (val + 1.0f) * 0.5f;
-                        uint32_t tempUnsigned = (uint32_t)(valShifted * kScale24);
-                        tempUnsigned &= aBD.resolutionCoef;
-                        float valBack = (float)tempUnsigned * kInvScale24;
-                        val = (valBack * 2.0f) - 1.0f;
-                    }
-                    return val;
-                };
-
-                float currentSample;
-                if ((counterDiff == 0.0f) || ((counterInt + 1) >= aBD.counterMax) || aBD.sp1200) {   // custom: SP-1200 drops samples, no interpolation
-                    // custom: never read past the last sample of the sound (that memory can hold
-                    // leftovers or garbage, and one bad value can silence the whole effect chain)
-                    currentSample = getSample(ramAddress);
-                } else {
-                    // Linear interpolation between two samples
-                    currentSample = getSample(ramAddress) + ((getSample(ramAddress + stride) - getSample(ramAddress)) * counterDiff);
-                }
-                if (!(currentSample > -4.0f && currentSample < 4.0f)) currentSample = 0.0f;   // custom: NaN / garbage guard
-
-                // Handle Fading Triggers
-                if ((aBD.newBeatFlag) && (!aBD.fadeAction)) aBD.fadeAction = true;
-                if (!aBD.fadeAction) {
-                    bool fadeTrigger = (aBD.directionMode == 0) ? (aBD.fadeFlag && aBD.counter >= aBD.counterFadeStart) : (aBD.fadeFlag && aBD.counter <= aBD.counterFadeStart);
-                    if (fadeTrigger) aBD.fadeAction = true;
-                }
-
-                if (aBD.fadeAction) {
-                    currentSample *= kFadeVolumeMultiplier[aBD.counterFade];
-                    if (aBD.counterFade < 49)
-                        aBD.counterFade++;
-                    else if (!aBD.newBeatFlag)
-                        endFlag = true;
-                }
-
-                // Custom envelope
-                if (aBD.envActive) {
-                    currentSample *= env_next(aBD, envEnded);
-                    if (envEnded && !aBD.newBeatFlag) endFlag = true;
-                }
-
-                // Store sample with volume scaling
-                targetBuffer[k] = currentSample * aBD.volumeMultiplier;
-
-                // --- Direction and Counter Management ---
-                switch (aBD.directionMode) {
-                    case 0:  // Forward playback
-                        if (aBD.counter == aBD.counterStart) io.midi.txTriggerNoteOn[i] = true;
-                        aBD.counter += aBD.increment;
-                        if (aBD.counter > (aBD.counterEnd - 1.0f)) endFlag = true;
-                        break;
-
-                    case 1:  // Backward playback
-                        if (aBD.counter == aBD.counterEnd - 1.0f) io.midi.txTriggerNoteOn[i] = true;
-                        aBD.counter -= aBD.increment;
-                        if (aBD.counter < aBD.counterStart) endFlag = true;
-                        break;
-
-                    case 2:  // Ping (Forward then Backward)
-                        switch (aBD.directionPhase) {
-                            case 0:  // Forward phase
-                                if (aBD.counter == 0.0f) io.midi.txTriggerNoteOn[i] = true;
-                                aBD.counter += aBD.increment;
-                                if (aBD.counter > (aBD.counterEnd - 1.0f)) {
-                                    aBD.counter = aBD.counterEnd - 1.0f;
-                                    aBD.directionPhase = 1;
-                                    aBD.fadeFlag = true;
-                                }
-                                break;
-
-                            case 1:  // Backward phase
-                                aBD.counter -= aBD.increment;
-                                if (aBD.counter < aBD.counterStart) endFlag = true;
-                                break;
-                        }
-                        break;
-
-                    case 3:  // Pong (Backward then Forward)
-                        switch (aBD.directionPhase) {
-                            case 0:  // Backward phase
-                                if (aBD.counter == aBD.counterEnd - 1.0f) io.midi.txTriggerNoteOn[i] = true;
-                                aBD.counter -= aBD.increment;
-                                if (aBD.counter < aBD.counterStart) {
-                                    aBD.counter = 0.0f;
-                                    aBD.directionPhase = 1;
-                                    aBD.fadeFlag = true;
-                                }
-                                break;
-
-                            case 1:  // Forward phase
-                                aBD.counter += aBD.increment;
-                                if (aBD.counter > (aBD.counterEnd - 1.0f)) endFlag = true;
-                                break;
-                        }
-                        break;
-                }
-
-                // 5. END-OF-SAMPLE HANDLING
-                // Finalize beat state and emit MIDI Note Off on playback end.
-                if (endFlag) {
-                    lD.beatStartFlag = false;
-                    lD.beatEndFlag = true;
-                    aBD.active = false;
-                    aBD.counter = 0.0f;
-                    io.midi.txTriggerNoteOff[i] = true;
-                    break;
-                }
-            }
+        processVoice(i, layerPlayData[i], audioLayer[i]);
+        // custom: the lane's second voice (the stacked sound of a hit). Its MIDI flags are left out.
+        LayerPlayData& v2 = layerPlayData[i + kLayerLibrarySize];
+        if (v2.activeBeatPlayData.active || v2.activeBeatPlayData.newBeatFlag) {
+            float buf2[I2S_BLOCK_SIZE];
+            memset(buf2, 0, sizeof(buf2));
+            const bool mOn = io.midi.txTriggerNoteOn[i], mOff = io.midi.txTriggerNoteOff[i];
+            processVoice(i, v2, buf2);
+            io.midi.txTriggerNoteOn[i] = mOn; io.midi.txTriggerNoteOff[i] = mOff;
+            for (uint16_t k = 0; k < I2S_BLOCK_SIZE; k++) audioLayer[i][k] += buf2[k];
+            if (!layerPlayData[i].activeBeatPlayData.active) layerPlayData[i].activeBeatPlayData.mixerInMode = v2.activeBeatPlayData.mixerInMode;
         }
     }
 
@@ -31165,6 +31226,12 @@ void Controller::interruptPlay() {
                             if (beat.getGate() && songInterval) { gateOff[i] = (uint16_t)((playInterval + beat.getGate()) % songInterval); gateArmed[i] = true; }
                             else gateArmed[i] = false;
                             if (fillVolMultiplier > 0.0f) layer_playBank(layer.number, fillVolMultiplier * vel_gain(beat.getVel()), beat.getBank());   // custom: velocity, pad bank
+                            if (beat.hasStack() && !layer.mute && bank_samplePlay(i, beat.getStackBank()) && (beat.getFillPattern() < 2)) {   // custom: second voice
+                                const float sm = kNumberDataLibrary[(beat.getFillPattern() == 1) ? 50 : 100].powMultiplier;
+                                playVoice = 1;
+                                layer_playBank(layer.number, sm * vel_gain(beat.getStackVel()), beat.getStackBank());
+                                playVoice = 0;
+                            }
                             swingDelayTicks[i] = 0;
                             pendingNote[i] = 0;
                             pendingStep[i] = -1;
@@ -31186,6 +31253,11 @@ void Controller::interruptPlay() {
                                 pendingNote[i] = beat.note;   // custom: rolls keep their note
                                 pendingStep[i] = (int16_t)(beat.getStartInterval() / (kMeasureInterval / 4));   // and their slice
                                 if (fillVolMultiplier > 0.0f) layer_playBank(layer.number, fillVolMultiplier * vel_gain(beat.getVel()), beat.getBank());
+                                if (beat.hasStack() && bank_samplePlay(i, beat.getStackBank()) && (fillVolMultiplier > 0.0f)) {   // custom: second voice
+                                    playVoice = 1;
+                                    layer_playBank(layer.number, fillVolMultiplier * vel_gain(beat.getStackVel()), beat.getStackBank());
+                                    playVoice = 0;
+                                }
                                 pendingNote[i] = 0;
                                 pendingStep[i] = -1;
                             }
@@ -31286,7 +31358,7 @@ void Controller::interruptPlay() {
 
     // 5. MICRO-TIMING & MODULATION UPDATES
     // Update temporary timing delays and LFO counters after transport operations.
-    for (uint8_t i = 0; i < kLayerLibrarySize; i++) {
+    for (uint8_t i = 0; i < 2 * kLayerLibrarySize; i++) {   // custom: second voices too
         LayerPlayData& lD = layerPlayData[i];
         if (lD.tempBeatTimingFlag) {
             if (lD.tempBeatTimingCounter < lD.tempBeatTimingCounterMax) {
@@ -31295,7 +31367,7 @@ void Controller::interruptPlay() {
                 lD.tempBeatTimingFlag = false;
                 uint32_t primaskTiming = __get_PRIMASK();
                 __disable_irq();
-                choke(i);   // custom: mute groups (a delayed hit cuts its group when it starts)
+                choke(i % kLayerLibrarySize);   // custom: mute groups (a delayed hit cuts its group when it starts)
                 memcpy(&lD.activeBeatPlayData, &lD.tempBeatPlayData, sizeof(BeatPlayData));
                 __set_PRIMASK(primaskTiming);
             }

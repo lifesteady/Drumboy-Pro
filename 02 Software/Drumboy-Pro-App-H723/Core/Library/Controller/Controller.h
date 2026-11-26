@@ -88,7 +88,9 @@ class Controller {
 
     MetroPlayData metroPlayData;                                        // Current state of metronome playback
     LfoPlayData lfoPlayData[10];                                        // Real-time phase/value for active LFOs
-    LayerPlayData layerPlayData[10];                                    // Sample playback state for instrument layers
+    LayerPlayData layerPlayData[20];   // custom: 0-9 each lane's voice, 10-19 its second voice (stacked hits)
+    uint8_t playVoice = 0;             // custom: 1 = the next trigger goes to the lane's second voice
+                                    // Sample playback state for instrument layers
 
     SampleSector sampleSectorLibrary[kSampleSectorLibrarySize];         // SD Card sample indexing
     uint8_t sdReadFailCount = 0;                                        // Consecutive sample-load read failures; triggers SD remount at 3
@@ -1359,6 +1361,7 @@ class Controller {
     void processAudioReceive(uint32_t* inputtBuffer);
     void processAudioMetronome();
     void processAudioLayer();
+    void processVoice(uint8_t i, LayerPlayData& lD, float* targetBuffer);   // custom: one voice of a lane
     void processAudioEq();
     void processAudioFilter();
     void processAudioEffect();
