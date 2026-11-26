@@ -7387,6 +7387,7 @@ void Controller::chop_knob(uint8_t which_, int8_t step_) {
         switch (which_) {
             case 0: { int16_t v = (int16_t)chopSel + step_; if (v < 0) v = 0; if (v >= chopN) v = chopN - 1; chopSel = (uint8_t)v; chopTarget = -1; } break;
             case 1: if (pad >= 0) { int16_t v = (int16_t)layerLibrary[pad].pitch + step_; if (v < kMinLayerPitch) v = kMinLayerPitch; if (v > kMaxLayerPitch) v = kMaxLayerPitch; layerInst_setPitch((uint8_t)pad, (uint8_t)v); } break;
+            case 3: if (pad >= 0) { int16_t v = (int16_t)layerLibrary[pad].level + step_; if (v < kMinLayerLevel) v = kMinLayerLevel; if (v > kMaxLayerLevel) v = kMaxLayerLevel; layerInst_setLevel((uint8_t)pad, (uint8_t)v); } break;   // LEVEL
             case 2: if (pad >= 0) { int16_t v = (int16_t)layerLibrary[pad].muteGroup + step_; if (v < 0) v = 0; if (v > 4) v = 4; layerLibrary[pad].muteGroup = (uint8_t)v; } break;
             case 4: case 5: case 6:
                 if (pad >= 0) {
@@ -7671,8 +7672,16 @@ bool Controller::chop_putSlice(uint8_t i_, uint8_t pad_) {
     if (n > kSampleSize - 64) n = kSampleSize - 64;
     snprintf(name, sizeof(name), "%s_%02u.wav", chopStem, i_ + 1);
     snprintf(path, sizeof(path), "Sample/RECORDED/%s", name);
+    float sliceGain = chopGain;   // custom: every chop peaks at the same level (about -1 dB), so pads match
+    {
+        const int16_t* sb = sampBuf() + s;
+        int32_t pk = 1;
+        for (uint32_t q = 0; q < n; q++) { const int32_t a = (sb[q] < 0) ? -sb[q] : sb[q]; if (a > pk) pk = a; }
+        sliceGain = (0.89f * 32767.0f) / (float)pk;
+        if (sliceGain > 16.0f) sliceGain = 16.0f;
+    }
     writeCut = true;   // custom: LOW / HIGH CUT baked into what goes on pads
-    const bool ok = sampling_writeWav(path, sampBuf() + s, n, chopGain);
+    const bool ok = sampling_writeWav(path, sampBuf() + s, n, sliceGain);
     writeCut = false;
     keyboard_enable();
     if (!ok) return false;
@@ -7765,7 +7774,7 @@ void Controller::lcd_drawChopKnobs(bool full_) {
     static const char* const kHdr[3][8] = {
         {"START       ", "START FINE  ", "END         ", "END FINE    ", "TRIM ENDS   ", "LOW CUT     ", "HIGH CUT    ", "STEP        "},
         {"MARKER      ", "MOVE MARKER ", "FINE        ", "            ", "FIND HITS   ", "EQUAL PARTS ", "            ", "STEP        "},
-        {"CHOP        ", "PITCH       ", "MUTE GROUP  ", "            ", "ATTACK      ", "HOLD        ", "DECAY       ", "STEP        "}};
+        {"CHOP        ", "PITCH       ", "MUTE GROUP  ", "LEVEL       ", "ATTACK      ", "HOLD        ", "DECAY       ", "STEP        "}};
     static const uint8_t counts[7] = {1, 2, 3, 4, 6, 8, 10};
     const uint8_t st = chopStep % 3;
     char t[16];
@@ -7814,9 +7823,9 @@ void Controller::lcd_drawChopKnobs(bool full_) {
     } else {
         const int8_t pad = chopPadOf[chopSel];
         snprintf(t, sizeof(t), "%4u OF %2u", chopSel + 1, chopN); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[0], kMenuDataY[0]);
-        put(3, "");
         if (pad >= 0) {
             const Layer& L = layerLibrary[pad];
+            snprintf(t, sizeof(t), "%10u", L.level); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[3], kMenuDataY[3]);   // LEVEL
             lcd.drawText(kLayerPitchDataLibrary[L.pitch].nameLongR, kMenuDataTextSize, kMenuDataX[1], kMenuDataY[1]);
             if (L.muteGroup) { snprintf(t, sizeof(t), "%10u", L.muteGroup); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[2], kMenuDataY[2]); } else put(2, "OFF");
             snprintf(t, sizeof(t), "%7u MS", (unsigned)(sample_envMs(L.envAttack, kEnvAttackMaxMs) + 0.5f)); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[4], kMenuDataY[4]);
@@ -7825,7 +7834,7 @@ void Controller::lcd_drawChopKnobs(bool full_) {
             if (L.envHold >= 100) put(6, "-");
             else { snprintf(t, sizeof(t), "%7u MS", (unsigned)(sample_envMs(L.envDecay, kEnvDecayMaxMs) + 0.5f)); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[6], kMenuDataY[6]); }
         } else {
-            for (uint8_t k = 1; k <= 6; k++) if (k != 3) put(k, "-");
+            for (uint8_t k = 1; k <= 6; k++) put(k, "-");
         }
     }
     put(7, kStepName[st]);
