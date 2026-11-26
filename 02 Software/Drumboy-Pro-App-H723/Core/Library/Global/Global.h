@@ -858,13 +858,13 @@ const RGB16Color kEncoderLocalInactiveColor         = GRAY_50;
 
 /*----------------------------------------------------------------------------*/
 
-const uint16_t kBeatGraphStartX                     = 516;
-const uint16_t kBeatGraphEndX                       = 796;
+const uint16_t kBeatGraphStartX                     = 688;   // custom: knob 4's box only (was 516-796 over knobs 3+4; knob 3 is BANK now)
+const uint16_t kBeatGraphEndX                       = 800;
 
 const uint16_t kBeatGraphStartY                     = 32;
 const uint16_t kBeatGraphEndY                       = 87;
 
-const uint16_t kBeatGraphWidth                      = 280;
+const uint16_t kBeatGraphWidth                      = 112;
 const uint8_t kBeatGraphHeight                      = 55;
 
 const uint8_t kBeatGraphBeatWidth[]                 = {2, 5, 10, 15, 20};
@@ -2423,7 +2423,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.38 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.39 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;

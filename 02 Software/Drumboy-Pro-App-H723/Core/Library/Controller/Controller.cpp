@@ -18161,6 +18161,10 @@ void Controller::lcd_drawLayerSongMenu(uint8_t layerNum_) {
     lcd_setMenuHeaderState(CYAN);
     lcd_drawMenuLabel(LAYER_SONG_MENU, layerNum_ + 1);
 
+    // custom: knob 3 (BANK) and knob 4 (graph) boxes start clean
+    lcd.setBackColor(BLACK);
+    lcd.clearRect(kMenuLineX[2] + 2, kMenuLineY[2], (kMenuDataX[3] + 20) - (kMenuLineX[2] + 2), kMenuLineHeight);
+
     // 3. HEADER DRAW
     // Draw headers for type/pattern/timing/velocity fields.
     lcd_setMenuHeaderState(CYAN);
@@ -18193,6 +18197,8 @@ void Controller::lcd_drawLayerSongMenu(uint8_t layerNum_) {
 
     // 6. GRAPH BACKGROUND DRAW
     // Draw graph axes and boundary markers.
+    lcd.setForeColor(GRAY_50);   // custom: the line between knob 3 (BANK) and the graph
+    lcd.drawVLine(kMenuLineX[3], kMenuLineY[3], kMenuLineHeight);
     lcd_setMenuHeaderState(WHITE);
     lcd.setFont(FONT_05x07);
     lcd.drawText("S", 1, kBeatGraphStartX - 15, kBeatGraphStartY);
