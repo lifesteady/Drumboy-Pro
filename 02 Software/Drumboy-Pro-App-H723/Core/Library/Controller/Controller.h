@@ -100,6 +100,7 @@ class Controller {
 
     float audioReceive[I2S_BLOCK_SIZE];                                 // Incoming audio from Line-In
     float audioMetronome[I2S_BLOCK_SIZE];                               // Metronome click buffer
+    bool spOn[kLayerLibrarySize] = {false};                             // custom: SP-1200 character this block
     float audioLayer[kLayerLibrarySize][I2S_BLOCK_SIZE];                // Individual layer audio buffers
 
     float audioEq[I2S_BLOCK_SIZE];                                      // Post-EQ audio buffer
@@ -656,6 +657,11 @@ class Controller {
     uint32_t chopPlayTick = 0;
     void chop_ensureStem();
     volatile int16_t pendingStep[kLayerLibrarySize] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1};   // sequencer step of the hit being triggered
+    uint8_t sampSpeed = 0;                                              // custom: 0 normal, 1 45 played at 33, 2 half rate
+    float sampFrac = 0.0f;
+    int16_t sampPrev = 0, sampHeld = 0;
+    uint8_t sampHalf = 0;
+    void sampling_speedKnob(int8_t step_);
     volatile uint8_t sampState = 0;                                     // 0 idle, 1 armed, 2 recording, 3 done (to save), 4 saving
     uint8_t sampLayer = 0;
     volatile uint32_t sampCount = 0;                                    // samples recorded after the trigger

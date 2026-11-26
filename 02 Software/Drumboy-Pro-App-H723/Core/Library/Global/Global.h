@@ -2423,7 +2423,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.40 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.41 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;
@@ -6844,7 +6844,9 @@ const LayerResolutionData kLayerResolutionDataLibrary[] = {
     {"        21", 0x00FFFFF8u}, 
     {"        22", 0x00FFFFFCu}, 
     {"        23", 0x00FFFFFEu}, 
-    {"        24", 0x00FFFFFFu}};
+    {"        24", 0x00FFFFFFu},
+    {"   SP-1200", 0x00FFF000u}};   // custom: 12-bit, 26 kHz sample-and-hold, no interpolation, dull top
+const uint8_t kLayerResolutionSp1200 = 21;   // the last RESOLUTION setting (kMaxLayerResolution stays 24-bit)
 
 const uint8_t kLayerDirectionProbability[][5] = {
     {2, 3, 0, 1, 2},
@@ -7956,6 +7958,7 @@ struct BeatPlayData {
 
     float volumeMultiplier;
     uint32_t resolutionCoef;
+    bool sp1200;         // custom: SP-1200 character on this hit
 
     float counter;
     uint32_t counterMax;

@@ -3699,6 +3699,7 @@ void Controller::encoder_setGlobalFunction(uint8_t bankNum_, uint8_t encoderNum_
 }
 
 void Controller::encoder_incValue(uint8_t encoderNum_) {
+    if ((page == PAGE_SAMPLE) && (sampState == 1) && (encoder[encoderNum_].function == ENC_INST_0_INST)) { sampling_speedKnob(1); return; }   // custom: SPEED while armed
     /// @brief Increments parameter mapped to selected encoder function.
     /// Applies bounds checks and target-selection guards before dispatch.
 
@@ -4284,7 +4285,7 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
             if (keyboard.shiftKeyPress || keyboard.lfoKeyPress) {  // custom: hold LFO + turn = assign LFO
                 (layerLibrary[selectedLayerNum].lfoResolution < kMaxLfo) ? layerInst_setLfoResolution(selectedLayerNum, layerLibrary[selectedLayerNum].lfoResolution + 1) : layerInst_setLfoResolution(selectedLayerNum, kMinLfo);
                 layerInst_lfoGesture(selectedLayerNum, layerLibrary[selectedLayerNum].lfoResolution);
-            } else if (layerLibrary[selectedLayerNum].resolution < kMaxLayerResolution)
+            } else if (layerLibrary[selectedLayerNum].resolution < kLayerResolutionSp1200)   // custom: past 24 bit = SP-1200
                 layerInst_setResolution(selectedLayerNum, layerLibrary[selectedLayerNum].resolution + 1);
             break;
 
@@ -4360,6 +4361,7 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
 }
 
 void Controller::encoder_decValue(uint8_t encoderNum_) {
+    if ((page == PAGE_SAMPLE) && (sampState == 1) && (encoder[encoderNum_].function == ENC_INST_0_INST)) { sampling_speedKnob(-1); return; }   // custom: SPEED while armed
     /// @brief Decrements parameter mapped to selected encoder function.
     /// Applies lower-bound checks and target-selection guards before dispatch.
 
@@ -6318,15 +6320,43 @@ void Controller::sampling_put(float x_) {
     if (x_ > 1.0f) x_ = 1.0f;
     if (x_ < -1.0f) x_ = -1.0f;
     const int16_t v = (int16_t)(x_ * 32767.0f);
-    int16_t* b = sampBuf();
-    if (sampState == 1) {
-        b[sampRing] = v;
-        sampRing = (uint16_t)((sampRing + 1) & (kSampPreRoll - 1));
-        if (a >= kSampThreshold) { sampCount = 0; sampState = 2; }
-    } else if (sampState == 2) {
-        b[kSampPreRoll + sampCount] = v;
-        if (++sampCount >= kSampMaxLength) sampState = 3;
+    // custom SPEED: what goes into the take for this input sample (0, 1 or 2 samples)
+    int16_t out[2];
+    uint8_t no = 0;
+    if (sampSpeed == 1) {   // record played at 45, kept at 33: about 1.35 samples out per sample in (pitched down)
+        while ((sampFrac < 1.0f) && (no < 2)) { out[no++] = (int16_t)((float)sampPrev + (float)(v - sampPrev) * sampFrac); sampFrac += 33.3333f / 45.0f; }
+        sampFrac -= 1.0f;
+        sampPrev = v;
+    } else if (sampSpeed == 2) {   // half rate: every other sample held twice, no filter (lo-fi, aliasing)
+        if ((sampHalf ^= 1) != 0) sampHeld = v;
+        out[no++] = sampHeld;
+    } else {
+        out[no++] = v;
     }
+    int16_t* b = sampBuf();
+    for (uint8_t q = 0; q < no; q++) {
+        if (sampState == 1) {
+            b[sampRing] = out[q];
+            sampRing = (uint16_t)((sampRing + 1) & (kSampPreRoll - 1));
+        } else if (sampState == 2) {
+            b[kSampPreRoll + sampCount] = out[q];
+            if (++sampCount >= kSampMaxLength) { sampState = 3; break; }
+        }
+    }
+    if ((sampState == 1) && (a >= kSampThreshold)) { sampCount = 0; sampState = 2; }
+}
+
+void Controller::sampling_speedKnob(int8_t step_) {
+    /// @brief Custom: knob 1 while armed - NORMAL / 45 RECORD AT 33 / HALF RATE.
+    int8_t s = (int8_t)sampSpeed + step_;
+    if (s < 0) s = 0;
+    if (s > 2) s = 2;
+    if (s == (int8_t)sampSpeed) return;
+    __disable_irq();
+    sampSpeed = (uint8_t)s;
+    sampFrac = 0.0f; sampHalf = 0;
+    __enable_irq();
+    sampShown = 0xFF;   // the panel redraws in full
 }
 
 void Controller::sampling_key() {
@@ -6347,6 +6377,7 @@ void Controller::sampling_key() {
             sampCount = 0;
             sampPeak = 0.0f;
             sampMessage[0] = 0;
+            sampFrac = 0.0f; sampPrev = 0; sampHeld = 0; sampHalf = 0;   // custom: SPEED state
             sampState = 1;
             break;
         case 1: sampState = 0; break;   // cancel
@@ -6411,6 +6442,20 @@ void Controller::sampling_drawPanel(bool full_) {
         snprintf(text, sizeof(text), "%s", st);
         page_drawSummary(text, (uint8_t)((sampState == 2) ? 9 : ((sampState == 1) ? 5 : 6)), (sampState == 2) ? RED : kThemeAmber);
         lcd.setFont(FONT_07x09);
+        {   // custom: SPEED
+            static const char* const kSpeedText[3] = {"SPEED: NORMAL", "SPEED: 45 RECORD PLAYED BACK AT 33 (PITCHED DOWN)",
+                                                      "SPEED: HALF RATE (LO-FI, ALIASING)"};
+            lcd.clearRect(30, 183, 905, 10);
+            lcd.setForeColor(kThemeAmber);
+            const char* sp = kSpeedText[sampSpeed % 3];
+            lcd.drawText(sp, strlen(sp), x0, 183);
+            if (sampState == 1) {
+                lcd.setForeColor(kThemeHeader);
+                lcd.setAlignment(RIGHT);
+                lcd.drawText("KNOB 1: SPEED", 13, x0 + w, 183);
+                lcd.setAlignment(LEFT);
+            }
+        }
         lcd.setForeColor(kThemeHeader);
         lcd.drawText("INPUT", 5, x0, 200);
         lcd.drawText("TAKE", 4, x0, 290);
@@ -17902,7 +17947,7 @@ void Controller::lcd_drawLayerInst_GraphData(uint8_t layerNum_) {
         fileBits = 32;
 
     // layer.resolution index 0 corresponds to 4-bit
-    uint8_t layerBits = layer.resolution + 4;
+    uint8_t layerBits = (layer.resolution == kLayerResolutionSp1200) ? 12 : (layer.resolution + 4);   // custom: SP-1200 is 12-bit
 
     // Use layer resolution if it is lower than the sample bit depth
     uint8_t effectiveBits = (fileBits > 0 && layerBits < fileBits) ? layerBits : fileBits;
@@ -25578,7 +25623,9 @@ void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
                     tBD.increment = kLayerPitchDataLibrary[nPitch].data;
 
                     // calculate resolution with lfo
-                    if ((layer.lfoResolution) && (lfoLibrary[(layer.lfoResolution - 1)].active)) {
+                    if (layer.resolution == kLayerResolutionSp1200) {   // custom: SP-1200 (the LFO leaves it alone)
+                        nResolution = kLayerResolutionSp1200;
+                    } else if ((layer.lfoResolution) && (lfoLibrary[(layer.lfoResolution - 1)].active)) {
                         Lfo& lfo = lfoLibrary[(layer.lfoResolution - 1)];
                         float lfoData = lfo.value();
                         float lfoDepth = kNumberDataLibrary[lfo.depth].stdMultiplier;
@@ -25588,6 +25635,7 @@ void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
                         nResolution = layer.resolution;
                     }
                     tBD.resolutionCoef = kLayerResolutionDataLibrary[nResolution].data;
+                    tBD.sp1200 = (nResolution == kLayerResolutionSp1200);
 
                     // calculate start point with lfo
                     if ((layer.lfoStart) && (lfoLibrary[(layer.lfoStart - 1)].active)) {
@@ -25659,7 +25707,8 @@ void Controller::layer_playBeat(uint8_t layerNum_, float fillVolMultiplier_) {
                     tBD.directionMode = 0;
                     tBD.directionPhase = 0;
                     tBD.counter = 0;
-                    tBD.resolutionCoef = kLayerResolutionDataLibrary[kMaxLayerResolution].data;
+                    tBD.sp1200 = (layer.resolution == kLayerResolutionSp1200);   // custom: the drum's character stays on
+                    tBD.resolutionCoef = kLayerResolutionDataLibrary[tBD.sp1200 ? kLayerResolutionSp1200 : kMaxLayerResolution].data;
                     tBD.counterStart = 0;
                     tBD.counterEnd = tBD.counterMax;
                 }
@@ -26042,7 +26091,7 @@ void Controller::layerInst_menuUp() {
                 case LAYER_INST_0_MENU:
                     if (keyboard.shiftKeyPress) {
                         (layer.lfoResolution < kMaxLfo) ? layerInst_setLfoResolution(selectedLayerNum, layer.lfoResolution + 1) : layerInst_setLfoResolution(selectedLayerNum, kMinLfo);
-                    } else if (layer.resolution < kMaxLayerResolution)
+                    } else if (layer.resolution < kLayerResolutionSp1200)   // custom: past 24 bit = SP-1200
                         layerInst_setResolution(selectedLayerNum, layer.resolution + 1);
                     break;
 
@@ -26969,7 +27018,7 @@ void Controller::layerInst_setResolution(uint8_t layerNum_, uint8_t resolution_)
 
     // 1. INPUT VALIDATION
     // Accept values only inside configured resolution range.
-    if ((resolution_ >= kMinLayerResolution) && (resolution_ <= kMaxLayerResolution)) {
+    if ((resolution_ >= kMinLayerResolution) && (resolution_ <= kLayerResolutionSp1200)) {   // custom: + SP-1200
         // 2. DATA UPDATE
         // Apply resolution to target layer.
         Layer& layer = layerLibrary[layerNum_];
@@ -29258,6 +29307,7 @@ void Controller::processAudioLayer() {
 
         // Reset the audio buffer for the current layer
         memset(audioLayer[i], 0, I2S_BLOCK_SIZE * sizeof(float));
+        spOn[i] = false;   // custom
 
         // --- Handle Sample Retriggering ---
         if (aBD.newBeatFlag) {
@@ -29280,12 +29330,13 @@ void Controller::processAudioLayer() {
 
         // Skip processing if the layer is inactive
         if (!aBD.active) continue;
+        spOn[i] = aBD.sp1200;   // custom: SP-1200 character after this block is read
 
         float* targetBuffer = audioLayer[i];
 
         // 3. PROCESSING PATH RESOLUTION
         // Use fast path for unity pitch + forward direction; else use interpolated slow path.
-        bool isFastPath = (aBD.increment == 1.0f) && (aBD.directionMode == 0);
+        bool isFastPath = (aBD.increment == 1.0f) && (aBD.directionMode == 0);   // (SP-1200 at unity pitch reads every sample anyway)
 
         if (isFastPath) {
             // --- Optimized Fast Path Processing ---
@@ -29376,7 +29427,7 @@ void Controller::processAudioLayer() {
                 };
 
                 float currentSample;
-                if ((counterDiff == 0.0f) || ((counterInt + 1) >= aBD.counterMax)) {
+                if ((counterDiff == 0.0f) || ((counterInt + 1) >= aBD.counterMax) || aBD.sp1200) {   // custom: SP-1200 drops samples, no interpolation
                     // custom: never read past the last sample of the sound (that memory can hold
                     // leftovers or garbage, and one bad value can silence the whole effect chain)
                     currentSample = getSample(ramAddress);
@@ -29475,6 +29526,24 @@ void Controller::processAudioLayer() {
                 }
             }
         }
+    }
+
+    // custom: SP-1200 character - 26.04 kHz sample-and-hold with no anti-alias filter (the grit),
+    // then a gentle low-pass for its darker top end. 12-bit is done as the sample is read.
+    static float spPh[kLayerLibrarySize], spHeld[kLayerLibrarySize], spLp[kLayerLibrarySize];
+    const float kSpStep = 26040.0f / (float)AUDIO_SAMPLE_RATE;
+    const float kSpLp = 0.72f;   // one-pole, about 9 kHz
+    for (uint8_t i = 0; i < kLayerLibrarySize; i++) {
+        if (!spOn[i]) { spLp[i] = 0.0f; continue; }
+        float* b = audioLayer[i];
+        float ph = spPh[i], held = spHeld[i], lp = spLp[i];
+        for (uint16_t k = 0; k < I2S_BLOCK_SIZE; k++) {
+            ph += kSpStep;
+            if (ph >= 1.0f) { ph -= 1.0f; held = b[k]; }
+            lp += kSpLp * (held - lp);
+            b[k] = lp;
+        }
+        spPh[i] = ph; spHeld[i] = held; spLp[i] = lp;
     }
 }
 
