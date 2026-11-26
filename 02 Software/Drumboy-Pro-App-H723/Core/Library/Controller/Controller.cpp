@@ -7031,7 +7031,6 @@ bool Controller::chop_key(uint8_t key_) {
         case KEY_UP: if (chopZoom < 10) chopZoom++; break;
         case KEY_DOWN: if (chopZoom > 0) chopZoom--; break;
         case KEY_CENTER:
-            if (add) { chop_stretch(); break; }   // ADD + CENTER: fit to the tempo
             if (chopStep == 1) {
                 if (chopN >= kChopMaxSlices) { undo_showText("FULL "); return true; }
                 if (chopPlay) {   // while it plays: a marker right where you hear it
@@ -7096,8 +7095,8 @@ void Controller::chop_drawHints() {
     const bool sh = keyboard.shiftKeyPress;
     chopHintShift = sh;
     static const char* const kTips[3][2][4] = {
-        {{"REC: PLAY", "LEFT / RIGHT: START OR END", "+ / -: ZOOM", "HOLD ADD: MORE"},
-         {"ADD + CLEAR: CUT OFF THE GREY PARTS", "ADD + COPY: DELETE THE TAKE", nullptr, nullptr}},
+        {{"REC: PLAY", "LEFT / RIGHT: START OR END", "+ / -: ZOOM", "TRIM ENDS: CUTS OFF THE GREY PARTS"},
+         {"ADD + COPY: DELETE THE TAKE", nullptr, nullptr, nullptr}},
         {{"REC: PLAY + TAP PADS TO MARK", "CENTER: MARK HERE", "CLEAR: REMOVE MARKER", "+ / -: ZOOM ON MARKER"},
          {"ADD + LEFT: REMOVE ALL MARKERS", "ADD + REC: JUST PLAY", "PADS: LISTEN", nullptr}},
         {{"PADS: LISTEN", "ADD + PAD: PUT THIS CHOP THERE", "CENTER: PUT IT ON THE PAD KNOB'S PAD", "HOLD ADD: MORE"},
@@ -7254,6 +7253,7 @@ void Controller::chop_knob(uint8_t which_, int8_t step_) {
             case 1: chopTrimFocus = 0; moveMark(0, step_ * fine); break;
             case 2: chopTrimFocus = 1; moveEnd(step_ * coarse); break;
             case 3: chopTrimFocus = 1; moveEnd(step_ * fine); break;
+            case 4: if ((step_ > 0) && ((chopMark[0] > 0) || (chopEnd < chopLen))) chop_truncate(); break;   // TRIM ENDS: turn right to cut the grey parts off
             default: return;
         }
     } else if (chopStep == 1) {   // CHOP
@@ -7263,7 +7263,6 @@ void Controller::chop_knob(uint8_t which_, int8_t step_) {
             case 2: moveMark(chopSel, step_ * fine); break;
             case 4: { int16_t v = (int16_t)chopAutoSens + step_; if (v < 1) v = 1; if (v > 10) v = 10; chopAutoSens = (uint8_t)v; chop_auto(); } break;
             case 5: { int16_t v = (int16_t)chopEqualIdx + step_; if (v < 1) v = 1; if (v > 6) v = 6; chopEqualIdx = (uint8_t)v; chop_equal(); } break;
-            case 6: if ((step_ > 0) && (chopFitTempo != rhythm.tempo)) { chop_stretch(); chopFitTempo = rhythm.tempo; } break;   // turn right: fit once
             default: return;
         }
     } else {   // PADS
@@ -7631,8 +7630,8 @@ void Controller::lcd_drawChopKnobs(bool full_) {
         }
     }
     static const char* const kHdr[3][8] = {
-        {"START       ", "START FINE  ", "END         ", "END FINE    ", "            ", "            ", "            ", "STEP        "},
-        {"MARKER      ", "MOVE MARKER ", "FINE        ", "            ", "FIND HITS   ", "EQUAL PARTS ", "FIT TO TEMPO", "STEP        "},
+        {"START       ", "START FINE  ", "END         ", "END FINE    ", "TRIM ENDS   ", "            ", "            ", "STEP        "},
+        {"MARKER      ", "MOVE MARKER ", "FINE        ", "            ", "FIND HITS   ", "EQUAL PARTS ", "            ", "STEP        "},
         {"CHOP        ", "PAD         ", "PITCH       ", "MUTE GROUP  ", "ATTACK      ", "HOLD        ", "DECAY       ", "STEP        "}};
     static const uint8_t counts[7] = {1, 2, 3, 4, 6, 8, 10};
     const uint8_t st = chopStep % 3;
@@ -7660,7 +7659,7 @@ void Controller::lcd_drawChopKnobs(bool full_) {
         secs4(chopMark[0], t, sizeof(t)); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[1], kMenuDataY[1]);
         secs(chopEnd, t, sizeof(t)); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[2], kMenuDataY[2]);
         secs4(chopEnd, t, sizeof(t)); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[3], kMenuDataY[3]);
-        put(4, ""); put(5, ""); put(6, "");
+        put(4, ((chopMark[0] > 0) || (chopEnd < chopLen)) ? "TURN RIGHT" : "DONE"); put(5, ""); put(6, "");
     } else if (st == 1) {
         snprintf(t, sizeof(t), "%4u OF %2u", chopSel + 1, chopN); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[0], kMenuDataY[0]);
         secs(chopMark[chopSel], t, sizeof(t)); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[1], kMenuDataY[1]);
@@ -7668,7 +7667,7 @@ void Controller::lcd_drawChopKnobs(bool full_) {
         put(3, "");
         if (chopAutoSens) { snprintf(t, sizeof(t), "%10u", chopAutoSens); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[4], kMenuDataY[4]); } else put(4, "TURN");
         if (chopEqualIdx) { snprintf(t, sizeof(t), "%10u", counts[chopEqualIdx]); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[5], kMenuDataY[5]); } else put(5, "TURN");
-        put(6, (chopFitTempo == rhythm.tempo) ? "DONE" : "TURN RIGHT");
+        put(6, "");
     } else {
         const int8_t pad = chopPadOf[chopSel];
         snprintf(t, sizeof(t), "%4u OF %2u", chopSel + 1, chopN); lcd.drawText(t, kMenuDataTextSize, kMenuDataX[0], kMenuDataY[0]);
