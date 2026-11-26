@@ -7793,6 +7793,7 @@ void Controller::chop_drawColumn(uint16_t c_, uint32_t vs_, uint32_t vl_) {
     int16_t mx = -32767, mn = 32767;
     const uint32_t stepK = ((a1 - a0) > 48) ? ((a1 - a0) / 48) : 1;   // sampled: it's a picture
     for (uint32_t k = a0; (k < a1) && (k < chopLen); k += stepK) { const int16_t v = b[k]; if (v > mx) mx = v; if (v < mn) mn = v; }
+    if (a1 < chopLen) { const int16_t v = b[a1]; if (v > mx) mx = v; if (v < mn) mn = v; }   // custom: joined to the next column (zoomed in: a line, not dots)
     if (mx < mn) { mx = 0; mn = 0; }
     const float sc = 1.0f / (chopPeak * 32767.0f + 1.0f);
     int16_t yMax = (int16_t)(mid - (float)mx * sc * half);
@@ -7803,7 +7804,7 @@ void Controller::chop_drawColumn(uint16_t c_, uint32_t vs_, uint32_t vl_) {
     const RGB16Color wave = !inTake ? page_mix(BLACK, kThemeLine, 0.6f) : (sel ? kThemeInk : page_mix(BLACK, kThemeInk, 0.55f));
     for (uint16_t r = 0; r < h; r++) col[r] = bg;
     if ((c_ % 3) == 0) col[mid] = kThemeLine;
-    if (yMin > yMax) { for (int16_t r = yMax; r <= yMin; r++) col[r] = wave; } else col[mid] = wave;
+    if (yMin >= yMax) { for (int16_t r = yMax; r <= yMin; r++) col[r] = wave; } else col[mid] = wave;   // custom: a single sample shows where it is
     if (cut || endCut) { const RGB16Color k = (endCut && !cut) ? kThemeAmber : kThemeAccent; for (uint16_t r = 0; r < h; r++) col[r] = k; }
     if (head) for (uint16_t r = 0; r < h; r++) col[r] = kThemeInk;
     lcd.drawColumn(gx + c_, gTop, h, col);
