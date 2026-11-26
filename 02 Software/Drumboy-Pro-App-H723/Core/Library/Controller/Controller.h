@@ -664,6 +664,9 @@ class Controller {
     int16_t sampPrev = 0, sampHeld = 0;
     uint8_t sampHalf = 0;
     void sampling_speedKnob(int8_t step_);
+    void sampling_knob(uint8_t function_, int8_t step_);
+    void sampling_drawKnobs();
+    bool sampKnobsShown = false;
     void sampling_arm();
     void chop_drawHints();
     void page_drawTips(const char* const* tips_, uint8_t n_);

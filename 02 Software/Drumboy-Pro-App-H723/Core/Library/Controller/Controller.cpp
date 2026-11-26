@@ -3704,7 +3704,7 @@ void Controller::encoder_setGlobalFunction(uint8_t bankNum_, uint8_t encoderNum_
 }
 
 void Controller::encoder_incValue(uint8_t encoderNum_) {
-    if ((page == PAGE_SAMPLE) && (sampState == 1) && (encoder[encoderNum_].function == ENC_INST_0_INST)) { sampling_speedKnob(1); return; }   // custom: SPEED while armed
+    if ((page == PAGE_SAMPLE) && (sampState != 0)) { sampling_knob(encoder[encoderNum_].function, 1); return; }   // custom: while sampling, the knobs are SPEED / INPUT LEVEL
     /// @brief Increments parameter mapped to selected encoder function.
     /// Applies bounds checks and target-selection guards before dispatch.
 
@@ -4366,7 +4366,7 @@ void Controller::encoder_incValue(uint8_t encoderNum_) {
 }
 
 void Controller::encoder_decValue(uint8_t encoderNum_) {
-    if ((page == PAGE_SAMPLE) && (sampState == 1) && (encoder[encoderNum_].function == ENC_INST_0_INST)) { sampling_speedKnob(-1); return; }   // custom: SPEED while armed
+    if ((page == PAGE_SAMPLE) && (sampState != 0)) { sampling_knob(encoder[encoderNum_].function, -1); return; }   // custom: while sampling, the knobs are SPEED / INPUT LEVEL
     /// @brief Decrements parameter mapped to selected encoder function.
     /// Applies lower-bound checks and target-selection guards before dispatch.
 
@@ -6422,6 +6422,49 @@ void Controller::chop_discardTake() {
     undo_showText("GONE ");
 }
 
+void Controller::sampling_knob(uint8_t function_, int8_t step_) {
+    /// @brief Custom: knobs while READY / recording - knob 1 SPEED (READY only), knob 2 INPUT LEVEL; the rest do nothing.
+    if (function_ == kSamplePageFunctions[0]) { if (sampState == 1) sampling_speedKnob(step_); return; }
+    if (function_ == kSamplePageFunctions[1]) {
+        int16_t v = (int16_t)mixer.liVolume + step_;
+        if (v < kMinMixerLiVolume) v = kMinMixerLiVolume;
+        if (v > kMaxMixerLiVolume) v = kMaxMixerLiVolume;
+        if (v != mixer.liVolume) { mixer_setLiVolume((uint8_t)v); sampling_drawKnobs(); }
+    }
+}
+
+void Controller::sampling_drawKnobs() {
+    /// @brief Custom: knob boxes while READY / recording. Only what works is labelled.
+    static const char* const kSpeed[3] = {"    NORMAL", "  45 AT 33", " HALF RATE"};
+    const LcdFont f = lcd.getFont();
+    const LcdAlign al = lcd.getAlignment();
+    lcd.setProtect(false);
+    lcd.setBackColor(BLACK);
+    lcd.clearRect(kMenuLineX[2] + 2, kMenuLineY[2], (kMenuDataX[3] + 20) - (kMenuLineX[2] + 2), kMenuLineHeight);
+    lcd.setForeColor(kThemeLine);
+    lcd.drawVLine(kMenuLineX[3], kMenuLineY[3], kMenuLineHeight);
+    for (uint8_t k = 0; k < 8; k++) {
+        const uint16_t y0 = kMenuHeaderY[k] + kMenuHeaderHeight + 1;
+        lcd.clearRect(kMenuLineX[k] + 2, y0, 170, kMenuDataY[k] - 1 - y0);
+    }
+    lcd_setMenuHeaderState(CYAN);
+    for (uint8_t k = 0; k < 8; k++) lcd.drawText((k == 0) ? "SPEED       " : ((k == 1) ? "INPUT LEVEL " : "            "), 12, kMenuHeaderX[k], kMenuHeaderY[k]);
+    lcd_setMenuSignState(CYAN);
+    for (uint8_t k = 0; k < 8; k++) lcd.drawText("   ", kMenuSignTextSize, kMenuSignBoxX[k], kMenuSignBoxY[k]);
+    lcd_setMenuTextState(WHITE);
+    lcd.setAlignment(LEFT);
+    for (uint8_t k = 0; k < 8; k++) lcd.drawText("      ", 6, kMenuHeaderX[k], kMenuSignBoxY[k]);
+    lcd_setMenuDataState((sampState == 1) ? WHITE : kThemeMid);   // SPEED is set before recording
+    lcd.drawText(kSpeed[sampSpeed % 3], kMenuDataTextSize, kMenuDataX[0], kMenuDataY[0]);
+    lcd_setMenuDataState(WHITE);
+    lcd.drawText(kMixerLiVolumeDataLibrary[mixer.liVolume].nameLongR, kMenuDataTextSize, kMenuDataX[1], kMenuDataY[1]);
+    for (uint8_t k = 2; k < 8; k++) lcd.drawText("          ", kMenuDataTextSize, kMenuDataX[k], kMenuDataY[k]);
+    sampKnobsShown = true;
+    lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
+    lcd.setFont(f);
+    lcd.setAlignment(al);
+}
+
 void Controller::sampling_speedKnob(int8_t step_) {
     /// @brief Custom: knob 1 while armed - NORMAL / 45 RECORD AT 33 / HALF RATE.
     int8_t s = (int8_t)sampSpeed + step_;
@@ -6456,6 +6499,14 @@ void Controller::sampling_key() {
 void Controller::sampling_update() {
     /// @brief Main loop: live meter about 30 times a second, and saving once a take is done.
     if ((page == PAGE_CHOP) && (keyboard.shiftKeyPress != chopHintShift)) chop_drawHints();   // custom: ADD held / let go
+    if ((page == PAGE_SAMPLE) && (sampState == 0) && sampKnobsShown) {   // custom: sampling over - the Sample page knobs come back
+        sampKnobsShown = false;
+        lcd.setProtect(false);
+        page_restoreInstMenu();
+        page_drawSampleKnobs();
+        lcd.setProtect(true, kPageX, kPageY, kPageWidth, kPageHeight);
+    }
+    if (page != PAGE_SAMPLE) sampKnobsShown = false;
     if (page == PAGE_CHOP) {   // custom: Chop page playhead while the take plays (two columns at a time)
         if ((chopPlay || (chopHeadCol >= 0)) && ((HAL_GetTick() - chopPlayTick) >= 25)) {
             chopPlayTick = HAL_GetTick();
@@ -6508,25 +6559,15 @@ void Controller::sampling_drawPanel(bool full_) {
         snprintf(text, sizeof(text), "%s", st);
         page_drawSummary(text, (uint8_t)((sampState == 2) ? 9 : ((sampState == 1) ? 5 : 6)), (sampState == 2) ? RED : kThemeAmber);
         lcd.setFont(FONT_07x09);
-        {   // custom: SPEED
-            static const char* const kSpeedText[3] = {"SPEED: NORMAL", "SPEED: 45 RECORD PLAYED BACK AT 33 (PITCHED DOWN)",
-                                                      "SPEED: HALF RATE (LO-FI, ALIASING)"};
-            lcd.clearRect(30, 183, 905, 10);
-            lcd.setForeColor(kThemeAmber);
-            const char* sp = kSpeedText[sampSpeed % 3];
-            lcd.drawText(sp, strlen(sp), x0, 183);
-            if (sampState == 1) {
-                lcd.setForeColor(kThemeHeader);
-                lcd.setAlignment(RIGHT);
-                lcd.drawText("KNOB 1: SPEED", 13, x0 + w, 183);
-                lcd.setAlignment(LEFT);
-            }
-        }
+        sampling_drawKnobs();   // custom: SPEED and INPUT LEVEL live in the knob boxes now
+        lcd.setFont(FONT_07x09);
+        lcd.setAlignment(LEFT);
+        lcd.setBackColor(BLACK);
         lcd.setForeColor(kThemeHeader);
         lcd.drawText("INPUT", 5, x0, 200);
         lcd.drawText("TAKE", 4, x0, 290);
-        const char* hint = (sampState == 1) ? "REC: RECORD    CLEAR: CANCEL    MIXER LINE IN LEVEL: INPUT LEVEL"
-                         : (sampState == 2) ? "REC: STOP    CLEAR: START OVER    THEN CHOP IT ONTO THE PADS"
+        const char* hint = (sampState == 1) ? "REC: RECORD        CLEAR: CANCEL"
+                         : (sampState == 2) ? "REC: STOP        CLEAR: START OVER"
                                             : "";
         lcd.clearRect(30, 380, 905, 12);
         lcd.drawText(hint, strlen(hint), x0, 380);
