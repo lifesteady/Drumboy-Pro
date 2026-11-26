@@ -7790,7 +7790,7 @@ void Controller::page_drawChop() {
         lcd.setFont(FONT_07x09);
         lcd.setForeColor(kThemeHeader);
         lcd.setAlignment(RIGHT);
-        const char h3[] = "LAYER INST: CLOSE";
+        const char h3[] = "LAYER INST: CLOSE THE EDITOR";
         lcd.drawText(h3, strlen(h3), 930, 137);
         pageFullRedraw = false;
         lcd_drawChopKnobs(true);
