@@ -1501,7 +1501,7 @@ const EncoderFuncData kEncoderFuncDataLibrary[] = {
     {ENC_REVERB_DECAY,        ENC_RES_F, "DECAY     ", "REVERB", "  %", true},
     {ENC_REVERB_PREDELAY,     ENC_RES_F, "PREDELAY  ", "REVERB", "  %", true},
     {ENC_REVERB_DAMPING,      ENC_RES_F, "DAMPING   ", "REVERB", " MS", true},
-    {ENC_REVERB_SURROUND,     ENC_RES_M, "SURROUND  ", "REVERB", "  %", true},
+    {ENC_REVERB_SURROUND,     ENC_RES_F, "SURROUND  ", "REVERB", "  %", true},
     {ENC_REVERB_DRY,          ENC_RES_F, "DRY       ", "REVERB", "  %", true},
     {ENC_REVERB_WET,          ENC_RES_F, "WET       ", "REVERB", "  %", true},
 
@@ -1581,14 +1581,14 @@ const EncoderFuncData kEncoderFuncDataLibrary[] = {
     {ENC_SM_MODE,             ENC_RES_S, "SONG MODE ", "SONG  ", "   ", false},
     {ENC_SM_ADDDEL,           ENC_RES_S, "ADD / DEL ", "SONG  ", "   ", false},
     {ENC_SM_END,              ENC_RES_S, "AT END    ", "SONG  ", "   ", false},
-    {ENC_CH_SLICE,            ENC_RES_S, "SLICE     ", "CHOP  ", "   ", false},
+    {ENC_CH_SLICE,            ENC_RES_F, "SLICE     ", "CHOP  ", "   ", false},
     {ENC_CH_MOVE,             ENC_RES_F, "MOVE      ", "CHOP  ", "   ", false},
     {ENC_CH_FINE,             ENC_RES_F, "FINE      ", "CHOP  ", "   ", false},
-    {ENC_CH_PITCH,            ENC_RES_S, "PITCH     ", "CHOP  ", "   ", false},
+    {ENC_CH_PITCH,            ENC_RES_F, "PITCH     ", "CHOP  ", "   ", false},
     {ENC_CH_AUTO,             ENC_RES_S, "AUTO CHOP ", "CHOP  ", "   ", false},
     {ENC_CH_EQUAL,            ENC_RES_S, "EQUAL     ", "CHOP  ", "   ", false},
     {ENC_CH_PAD,              ENC_RES_S, "FIRST PAD ", "CHOP  ", "   ", false},
-    {ENC_CH_END,              ENC_RES_F, "TAKE END  ", "CHOP  ", "   ", false},
+    {ENC_CH_END,              ENC_RES_S, "TAKE END  ", "CHOP  ", "   ", false},
     {ENC_SMP_GROUP,           ENC_RES_S, "MUTE GROUP", "LAYER ", "   ", false},
     {ENC_SONG_BANK,           ENC_RES_S, "BANK      ", "SONG  ", "   ", false}
 };
@@ -2423,7 +2423,7 @@ const uint16_t kPageMfpWidth                        = 61;
 const uint16_t kPageMfpHeight                       = 11;
 
 // Shown on the boot screen so it's always clear which build is running.
-const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.45 | ANALYZING SDCARD ]";
+const char kFirmwareBootText[]                      = "[ CUSTOM FW V3.46 | ANALYZING SDCARD ]";
 
 const uint8_t kMinSwing                             = 50;
 const uint8_t kMaxSwing                             = 75;

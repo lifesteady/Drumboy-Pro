@@ -666,8 +666,13 @@ class Controller {
     void sampling_speedKnob(int8_t step_);
     void sampling_arm();
     void chop_drawHints();
+    void page_drawTips(const char* const* tips_, uint8_t n_);
     void chop_cutAt(uint32_t at_);
     bool chopHintShift = false;
+    uint8_t chopStep = 0;        // custom editor: 0 TRIM, 1 CHOP, 2 PADS
+    uint8_t chopTrimFocus = 0;   // TRIM: zoom on 0 start / 1 end
+    int8_t chopTarget = -1;      // PADS: the PAD knob's pad
+    uint16_t chopFitTempo = 0;   // tempo the take was last fitted to
     void sampling_restart();       // custom: CLEAR while recording - throw it away, armed again
     void chop_discardTake();       // custom: ADD + COPY on the Chop page - delete the take, drum as before, armed again
     int16_t sampPrevInst = -1, sampPrevSample = -1, sampRecInst = -1, sampRecIdx = -1;
