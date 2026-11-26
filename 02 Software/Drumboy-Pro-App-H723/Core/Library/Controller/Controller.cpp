@@ -6566,7 +6566,7 @@ void Controller::sampling_drawPanel(bool full_) {
         lcd.drawText(text, strlen(text), 30, 133);
         const char* st = (sampState == 1) ? "READY: PRESS REC TO RECORD"
                        : (sampState == 2) ? "RECORDING"
-                       : (sampState == 5) ? "RECORDED: KEEP IT OR DISCARD IT?"
+                       : (sampState == 5) ? "RECORDED: CENTER KEEPS IT, CLEAR DISCARDS IT"
                                           : "SAVING TO THE SD CARD";
         snprintf(text, sizeof(text), "%s", st);
         page_drawSummary(text, (uint8_t)((sampState == 2) ? 9 : ((sampState == 1) ? 5 : ((sampState == 5) ? 9 : 6))), (sampState == 2) ? RED : kThemeAmber);
@@ -6578,12 +6578,17 @@ void Controller::sampling_drawPanel(bool full_) {
         lcd.setForeColor(kThemeHeader);
         lcd.drawText("INPUT", 5, x0, 200);
         lcd.drawText("TAKE", 4, x0, 290);
-        const char* hint = (sampState == 1) ? "REC: RECORD        CLEAR: CANCEL"
-                         : (sampState == 2) ? "REC: STOP        CLEAR: START OVER"
-                         : (sampState == 5) ? "CENTER: KEEP        CLEAR: DISCARD        REC: LISTEN AGAIN"
-                                            : "";
-        lcd.clearRect(30, 380, 905, 12);
-        lcd.drawText(hint, strlen(hint), x0, 380);
+        {   // custom: the page's tips row says what the keys do right now
+            static const char* const kReady[] = {"REC: RECORD", "CLEAR: CANCEL", "KNOB 1: SPEED", "KNOB 2: INPUT LEVEL"};
+            static const char* const kRec[] = {"REC: STOP", "CLEAR: START OVER"};
+            static const char* const kReview[] = {"CENTER: KEEP IT", "CLEAR: DISCARD IT", "REC: LISTEN AGAIN"};
+            static const char* const kSave[] = {"SAVING..."};
+            if (sampState == 1) page_drawTips(kReady, 4);
+            else if (sampState == 2) page_drawTips(kRec, 2);
+            else if (sampState == 5) page_drawTips(kReview, 3);
+            else page_drawTips(kSave, 1);
+            lcd.clearRect(30, 380, 905, 12);
+        }
         if (mixer.liMute) {
             lcd.setForeColor(RED);
             lcd.drawText("LINE IN IS MUTED: UNMUTE IT IN THE MIXER", 40, x0, 360);
