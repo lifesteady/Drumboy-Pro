@@ -7105,7 +7105,7 @@ void Controller::chop_drawHints() {
          {"ADD + COPY: DELETE THE TAKE", nullptr, nullptr, nullptr}},
         {{"REC: PLAY + TAP PADS TO MARK", "CENTER: MARK HERE", "CLEAR: REMOVE MARKER", "+ / -: ZOOM ON MARKER"},
          {"ADD + LEFT: REMOVE ALL MARKERS", "ADD + REC: JUST PLAY", "PADS: LISTEN", nullptr}},
-        {{"PRESS A PAD: PUT THE CHOP THERE", "ADD + PAD: LISTEN", "CLEAR: TAKE IT OFF ITS PAD", "PASTE: ALL INTO EMPTY PADS"},
+        {{"EMPTY PAD: PUT THE CHOP THERE", "PAD WITH A CHOP: LISTEN", "CLEAR: TAKE IT OFF ITS PAD", "PASTE: ALL INTO EMPTY PADS"},
          {"ADD + PASTE: ONE PAD THAT PLAYS THEM ALL", "ADD + COPY: DELETE THE TAKE", nullptr, nullptr}}};
     lcd.setBackColor(BLACK);
     lcd.clearRect(30, 416, 905, 32);
@@ -7163,8 +7163,16 @@ void Controller::chop_pad(uint8_t pad_) {
     /// slice on this pad. While tapping (REC), any pad drops a slice start where the take is.
     if (chopStep == 2) {   // custom PADS step
         chopMsg[0] = 0;
-        if (keyboard.shiftKeyPress) {   // ADD + pad: listen, as it plays now (envelope and all)
-            for (uint8_t k = 0; k < chopN; k++) if (chopPadOf[k] == (int8_t)pad_) chopSel = k;
+        int8_t onPad = -1;   // custom: the chop of this take already on that pad
+        for (uint8_t k = 0; k < chopN; k++) if (chopPadOf[k] == (int8_t)pad_) onPad = (int8_t)k;
+        // the selected chop is already placed: an empty pad gets the first chop that isn't
+        if (!keyboard.shiftKeyPress && (onPad < 0) && (chopPadOf[chopSel] >= 0))
+            for (uint8_t k = 0; k < chopN; k++) if (chopPadOf[k] < 0) { chopSel = k; break; }
+        // ADD + pad, a pad that already has one of these chops, or nothing left to place: just listen
+        if (keyboard.shiftKeyPress || (onPad >= 0) || (chopPadOf[chopSel] >= 0)) {
+            if (onPad >= 0) chopSel = (uint8_t)onPad;
+            if (!keyboard.shiftKeyPress && (onPad < 0))
+                snprintf(chopMsg, sizeof(chopMsg), "ALL CHOPS ARE ON PADS. TO MOVE ONE: PRESS ITS PAD, CLEAR, THEN THE NEW PAD");
             const Layer& pl = layerLibrary[pad_];
             if ((!pl.mute) && (pl.samplePlay)) layer_playBeat(pad_, 1.0f);
             chopTarget = -1;
